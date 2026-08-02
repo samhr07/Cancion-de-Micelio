@@ -4,8 +4,30 @@ Repositorio: samhr07/Cancion-de-Micelio
 Módulo: main.py (Orquestador Principal)
 
 Descripción:
-Inicializa la topología de procesos aislados (Red, Hilo Rápido, Hilo Lento),
-asigna la memoria compartida a nivel de SO y gestiona el apagado seguro.
+Inicializa la topología de procesos aislados, asigna la memoria compartida a nivel de SO,
+configura el vector de hiperparámetros dinámicos (Hot-Reloading) y gestiona el apagado seguro.
+
+==============================================================================
+VARIABLES DINÁMICAS DE MODIFICACIÓN (HOT-RELOADING)
+Buscar con Ctrl+F usando los siguientes identificadores numéricos:
+
+[Filtro de Kalman]
+0: PARAM_R_S_BASE      -> Varianza mínima del tick size
+1: PARAM_R_EMD         -> Varianza histórica de Hilbert
+2: PARAM_BETA_JITTER   -> Factor de sensibilidad al retardo de red
+
+[NMPC - Optimizador CasADi]
+3: PARAM_Q_DELTA       -> Rigidez de seguimiento de cobertura (Delta)
+4: PARAM_Q_BASE_INV    -> Costo asintótico por mantenimiento de inventario
+5: PARAM_MU_INV        -> Hiperparámetro de sensibilidad al riesgo de exposición
+6: PARAM_R_BASE        -> Costo estático base por comisiones (Taker fee)
+7: PARAM_KAPPA_RISK    -> Aversión a la inestabilidad de volumen del Micelio
+
+[Micelio - Simulación y Loeper]
+8: PARAM_ETA_IMPACT    -> Sensibilidad estructural al impacto
+9: PARAM_THETA_OU      -> Tasa de reversión a la media (Ornstein-Uhlenbeck)
+10: PARAM_SIGMA_OU     -> Volatilidad intrínseca del spread simulado
+==============================================================================
 """
 
 import multiprocessing as mp
@@ -14,57 +36,44 @@ import signal
 import sys
 import time
 import numpy as np
-from dataclasses import dataclass, field
 
 # ==============================================================================
-# 1. ESTRUCTURAS DE CONFIGURACIÓN (DATACLASSES)
+# 1. CONFIGURACIÓN BASE Y MAPA DE PARÁMETROS DINÁMICOS
 # ==============================================================================
 
+# Variables estáticas del sistema (No se alteran en caliente)
+SYMBOL = "BTCUSDT"
+IS_TESTNET = True
+N_HORIZON = 20
+W_MIN_EMD = 100
+W_MAX_EMD = 1000
 
-@dataclass
-class KalmanConfig:
-    """Parámetros de inicialización del EAKF."""
-
-    r_S_base: float = 0.5  # Varianza mínima del tick size
-    r_EMD: float = 1.0  # Varianza histórica de Hilbert
-    q_base: list = field(
-        default_factory=lambda: [0.01, 0.05, 0.1]
-    )  # Varianzas térmicas base
-    beta_jitter: float = 0.02  # Factor de sensibilidad al retardo de red
+# Tamaño del vector de hiperparámetros dinámicos
+TOTAL_PARAMS = 11
 
 
-@dataclass
-class NMPCConfig:
-    """Matrices de ponderación cuadrática del optimizador CasADi/acados."""
+def initialize_default_parameters() -> np.ndarray:
+    """Genera el vector inicial con los hiperparámetros de control por defecto."""
+    params = np.zeros(TOTAL_PARAMS, dtype=np.float64)
 
-    N_horizon: int = 20  # Nodos de predicción
-    q_delta: float = 10.0  # Rigidez de seguimiento de cobertura
-    q_base_inv: float = 2.0  # Costo asintótico por mantenimiento de inventario
-    mu_inv: float = 5.0  # Hiperparámetro de sensibilidad al riesgo (Inventario)
-    r_base: float = 0.05  # Costo estático por comisiones (Taker fee)
-    kappa_risk: float = 8.0  # Aversión a la inestabilidad del Micelio
+    # [Filtro de Kalman]
+    params[0] = 0.5  # PARAM_R_S_BASE
+    params[1] = 1.0  # PARAM_R_EMD
+    params[2] = 0.02  # PARAM_BETA_JITTER
 
+    # [NMPC]
+    params[3] = 10.0  # PARAM_Q_DELTA
+    params[4] = 2.0  # PARAM_Q_BASE_INV
+    params[5] = 5.0  # PARAM_MU_INV
+    params[6] = 0.05  # PARAM_R_BASE
+    params[7] = 8.0  # PARAM_KAPPA_RISK
 
-@dataclass
-class MicelioConfig:
-    """Parámetros para la EDP de Loeper y EMD."""
+    # [Micelio]
+    params[8] = 0.15  # PARAM_ETA_IMPACT
+    params[9] = 0.5  # PARAM_THETA_OU
+    params[10] = 0.2  # PARAM_SIGMA_OU
 
-    eta_impact: float = 0.15  # Sensibilidad estructural al impacto
-    theta_ou: float = 0.5  # Tasa de reversión a la media (Ornstein-Uhlenbeck)
-    sigma_ou: float = 0.2  # Volatilidad del spread simulado
-    w_min: int = 100  # Ventana mínima EMD
-    w_max: int = 1000  # Ventana máxima EMD
-
-
-@dataclass
-class BotConfig:
-    """Agrupación maestra de configuración."""
-
-    symbol: str = "BTCUSDT"
-    is_testnet: bool = True
-    kalman: KalmanConfig = field(default_factory=KalmanConfig)
-    nmpc: NMPCConfig = field(default_factory=NMPCConfig)
-    micelio: MicelioConfig = field(default_factory=MicelioConfig)
+    return params
 
 
 # ==============================================================================
@@ -74,14 +83,14 @@ class BotConfig:
 
 def allocate_shared_memory(name: str, size: int) -> shared_memory.SharedMemory:
     """
-    Crea un bloque de memoria compartida. Si ya existe (por un cierre abrupto previo),
-    lo vincula y lo sobreescribe para evitar el error 'File exists'.
+    Crea un bloque de memoria compartida. Si ya existe (cierre abrupto previo),
+    lo vincula y lo sobreescribe para evitar errores.
     """
     try:
         shm = shared_memory.SharedMemory(name=name, create=True, size=size)
         print(f"[OK] Memoria asignada: {name} ({size} bytes)")
     except FileExistsError:
-        print(f"[WARN] Memoria {name} ya existía. Reasignando (limpiando zombis)...")
+        print(f"[WARN] Memoria {name} ya existía. Reasignando y purgando zombis...")
         shm = shared_memory.SharedMemory(name=name, create=False)
         shm.unlink()  # Purga inmediata
         shm = shared_memory.SharedMemory(name=name, create=True, size=size)
@@ -105,57 +114,59 @@ def cleanup_shared_memory(shm_list: list):
 
 
 def network_engine_process(
-    config: BotConfig, shm_env_name: str, shm_actuator_name: str
+    shm_env_name: str, shm_actuator_name: str, shm_params_name: str
 ):
     """
-    PROCESO 1: I/O Bound.
-    Responsable del WebSocket, Token Bucket, Cuantización y Watchdog.
-    NO contiene cálculos matemáticos pesados.
+    PROCESO 1: I/O Bound. WebSocket, Token Bucket, Cuantización y Watchdog.
     """
     print("[INIT] Motor de Red iniciado.")
-    # TODO: Conectar a shared_memory mediante shm_env_name
-    # TODO: Iniciar Event Loop de asyncio
-    # TODO: Implementar WebSocket con Binance y Rate Limiter
-
+    # TODO: Lógica de reconexión infinita asíncrona y bypass de Hot-Reloading
     try:
         while True:
-            time.sleep(1)  # Simulación de loop asíncrono
+            time.sleep(1)
     except KeyboardInterrupt:
-        print("[SHUTDOWN] Motor de Red detenido.")
+        pass
 
 
 def fast_thread_process(
-    config: BotConfig, shm_env_name: str, shm_micelio_name: str, shm_actuator_name: str
+    shm_env_name: str,
+    shm_micelio_name: str,
+    shm_actuator_name: str,
+    shm_params_name: str,
 ):
     """
-    PROCESO 2: CPU/GPU Bound.
-    Núcleo táctico. Ejecuta EAKF, interrumpe a la GPU (Loeper) y resuelve NMPC (CasADi).
+    PROCESO 2: CPU/GPU Bound. EAKF, Loeper (GPU) y NMPC (CasADi).
     """
     print("[INIT] Hilo Rápido iniciado (NMPC + EAKF).")
-    # TODO: Conectar a todas las memorias compartidas
-    # TODO: Configurar JAX/XLA para las matrices de Kalman
-    # TODO: Inicializar solver acados/CasADi
+    # Conexión al vector de parámetros en caliente
+    existing_shm = shared_memory.SharedMemory(name=shm_params_name)
+    params = np.ndarray((TOTAL_PARAMS,), dtype=np.float64, buffer=existing_shm.buf)
 
     try:
         while True:
-            time.sleep(0.01)  # Simulación de interrupción de microsegundos
+            # Ejemplo de lectura dinámica: q_delta_actual = params[3]
+            time.sleep(0.01)
     except KeyboardInterrupt:
-        print("[SHUTDOWN] Hilo Rápido detenido.")
+        pass
+    finally:
+        existing_shm.close()
 
 
-def slow_thread_process(config: BotConfig, shm_env_name: str, shm_micelio_name: str):
+def slow_thread_process(shm_env_name: str, shm_micelio_name: str, shm_params_name: str):
     """
-    PROCESO 3: CPU Bound.
-    Análisis microestructural. Ejecuta EMD, Hilbert y simulación OU para testnet.
+    PROCESO 3: CPU Bound. EMD, Hilbert y simulación OU.
     """
     print("[INIT] Hilo Lento iniciado (Micelio + HHT).")
-    # TODO: Inicializar buffers para EMD
+    existing_shm = shared_memory.SharedMemory(name=shm_params_name)
+    params = np.ndarray((TOTAL_PARAMS,), dtype=np.float64, buffer=existing_shm.buf)
 
     try:
         while True:
-            time.sleep(0.1)  # Simulación de cálculo denso
+            time.sleep(0.1)
     except KeyboardInterrupt:
-        print("[SHUTDOWN] Hilo Lento detenido.")
+        pass
+    finally:
+        existing_shm.close()
 
 
 # ==============================================================================
@@ -164,66 +175,70 @@ def slow_thread_process(config: BotConfig, shm_env_name: str, shm_micelio_name: 
 
 
 def main():
-    # 4.1. Configuración maestra
-    config = BotConfig()
-
-    # 4.2. Asignación de tamaños de memoria (Bytes)
-    # (En producción, calcular con np.dtype.itemsize * dimensiones)
+    # 4.1. Cálculo dimensional de memoria (Bytes)
     BYTES_ENV = 128  # [P_spot, V, Dropout_Flag]
     BYTES_MICELIO = 256  # [Omega, w_m, lambda_sim, R_n]
     BYTES_ACTUATOR = 64  # [u_compra, u_venta]
+    BYTES_PARAMS = TOTAL_PARAMS * np.dtype(np.float64).itemsize  # Bloque Hot-Reloading
 
     shm_env = None
     shm_micelio = None
     shm_actuator = None
+    shm_params = None
     processes = []
 
     def signal_handler(sig, frame):
         """Atrapa Ctrl+C o comandos del SO para matar el bot suavemente."""
         print("\n[ALERTA] Señal de apagado recibida. Iniciando Graceful Shutdown...")
 
-        # 1. Terminar procesos hijos
         for p in processes:
             if p.is_alive():
                 p.terminate()
                 p.join()
 
-        # 2. Purgar memoria compartida
         shm_list = [
-            shm for shm in [shm_env, shm_micelio, shm_actuator] if shm is not None
+            shm
+            for shm in [shm_env, shm_micelio, shm_actuator, shm_params]
+            if shm is not None
         ]
         cleanup_shared_memory(shm_list)
 
         print("[EXIT] Sistema apagado correctamente. Natura Recusat Silentium.")
         sys.exit(0)
 
-    # Enganchar el handler
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
     try:
-        # 4.3. Reserva de Memoria Compartida
         print("=== INICIALIZANDO CANCIÓN DEL MICELIO ===")
+        # 4.2. Reserva de Memoria Compartida
         shm_env = allocate_shared_memory("shm_entorno", BYTES_ENV)
         shm_micelio = allocate_shared_memory("shm_estructural", BYTES_MICELIO)
         shm_actuator = allocate_shared_memory("shm_control", BYTES_ACTUATOR)
+        shm_params = allocate_shared_memory("shm_parametros", BYTES_PARAMS)
 
-        # 4.4. Instanciación de Procesos
+        # 4.3. Inicialización del vector de hiperparámetros
+        params_array = np.ndarray(
+            (TOTAL_PARAMS,), dtype=np.float64, buffer=shm_params.buf
+        )
+        params_array[:] = initialize_default_parameters()[:]
+
+        # 4.4. Instanciación y arranque de Procesos
         p_net = mp.Process(
             target=network_engine_process,
-            args=(config, shm_env.name, shm_actuator.name),
+            args=(shm_env.name, shm_actuator.name, shm_params.name),
         )
         p_fast = mp.Process(
             target=fast_thread_process,
-            args=(config, shm_env.name, shm_micelio.name, shm_actuator.name),
+            args=(shm_env.name, shm_micelio.name, shm_actuator.name, shm_params.name),
         )
         p_slow = mp.Process(
-            target=slow_thread_process, args=(config, shm_env.name, shm_micelio.name)
+            target=slow_thread_process,
+            args=(shm_env.name, shm_micelio.name, shm_params.name),
         )
 
         processes = [p_net, p_fast, p_slow]
 
-        # 4.5. Arranque concurrente
         for p in processes:
             p.start()
 
@@ -237,9 +252,8 @@ def main():
 
 
 # ==============================================================================
-# PUNTO DE ENTRADA (MÉTODO SPAWN OBLIGATORIO)
+# PUNTO DE ENTRADA (MÉTODO SPAWN OBLIGATORIO PARA CUDA)
 # ==============================================================================
 if __name__ == "__main__":
-    # Blindaje contra colapso del contexto de CUDA al bifurcar procesos
     mp.set_start_method("spawn", force=True)
     main()
