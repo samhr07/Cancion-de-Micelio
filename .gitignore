@@ -1,0 +1,25 @@
+# Bytecode de Python
+__pycache__/
+*.py[cod]
+
+# Volcados de telemetría del Hilo Rápido (Sec. 8.6.2).
+# Cada bloque son 10 000 registros; se regeneran en cada corrida.
+telemetria/
+*.parquet
+*.h5
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+
+# Artefactos de compilación de los núcleos acelerados (Numba / CUDA / acados)
+*.so
+*.pyd
+c_generated_code/
+
+# Sistema operativo / editor
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
