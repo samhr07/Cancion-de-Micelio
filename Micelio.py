@@ -73,6 +73,9 @@ import numpy as np
 # trabajo: "El resto del código importa desde ahí; nadie más las define").
 import constantes_micelio as CTE
 
+# Cadena EMD -> Hilbert (Sección 2 del PDF). Prioridad 1 de la v1.2.
+import hht
+
 # La consola de Windows usa cp1252 y no puede codificar letras griegas. Un print
 # fallido lanzaría UnicodeEncodeError dentro del lazo de control y tumbaría el
 # proceso, así que se degrada a reemplazo en vez de excepción.
@@ -202,9 +205,9 @@ P_LAMBDA_MIN = 8  # λ_min         suelo de fricción                (8.1.2)
 
 # --- Límites estructurales (Sec. 0.2) — de aquí se deriva todo lo demás ---
 P_I_MAX = 9  # I_max         exposición máx. de inventario  [BTC]
-P_C_MAX_USD = 10  # C_max         capital operativo total        [USD]
+P_K_USD = 10  # C_max         capital operativo total        [USD]
 P_OMEGA_M_MAX = 11  # ω_m,max       mayor frecuencia modal HHT [1/Ticks]
-P_DELTA_S_MAX = 12  # ΔS_max        desplazamiento máx. vs nodo [USD/BTC]
+P_DELTA_S_REF = 12  # ΔS_max        desplazamiento máx. vs nodo [USD/BTC]
 P_OMEGA_CRIT = 13  # Ω_crit        umbral de crisis        [BTC/Ticks²]
 P_SUMA_Q_MAX = 14  # max(ΣQ_T̄)     máximo histórico de volumen    [USD]
 P_C_ESCALA = 15  # c             factor de escala de κ    [adimensional]
@@ -244,7 +247,10 @@ P_W_MAX = 34  # W_max         ventana máxima del EMD           (2.2.1)
 # Sustituido por el criterio NIS (Fase 1.2). Se conserva para contrastarlos.
 P_EPS_BURN = 35  # ε_burn        banda muerta de la traza         (7.1)
 P_N_BURN = 36  # N             ticks continuos de convergencia  (7.1)
-TOTAL_PARAMS = 37
+
+# --- Seccion C de la v1.2: varianza de proceso relativa al precio ---
+P_SIGMA_REL = 37  # σ_rel         q_S = (σ_rel·S_k)²   [adimensional]
+TOTAL_PARAMS = 38
 
 # Discretización de la malla de Loeper (Sec. 7.4.1).
 N_S_MALLA = 61  # Impar: garantiza que S_k caiga exactamente en un nodo
@@ -255,6 +261,25 @@ T_MAX_SOLVER = 0.020  # t_max: fallback determinista U_t = 0 (Sec. 4.5)
 
 PERIODO_HILO_RAPIDO = 0.010  # Cadencia nominal del ciclo de control (s)
 PERIODO_HILO_LENTO = 0.500  # Cadencia del análisis estructural (s)
+
+# Período de muestreo del buffer que alimenta la EMD (Sec. 2.2). Se declara
+# aparte de la cadencia del Hilo Lento para que ambas puedan divergir.
+#
+# DIMENSIONAMIENTO MEDIDO. La ventana del EMD está sujeta a DOS restricciones que
+# tiran en direcciones opuestas:
+#   (a) ciclos por ventana — con menos de ~2 períodos dentro, el tamizado no
+#       aísla el modo y se lo traga el residuo (ω_m ≡ 0, ningún nodo detectado);
+#   (b) muestras por ciclo — los splines cúbicos de la Sec. 2.1 necesitan
+#       resolución para construir las envolventes.
+# Se barrieron dt ∈ {0.25, 0.5, 1.0} s y W ∈ {128..512} sobre el ciclo de 40 s del
+# generador, 12 semillas de ruido cada punto. Resultado: manda (b) con diferencia.
+#     40 muestras/ciclo (dt=1.0 s)  -> error mediano 30-58 %
+#     80 muestras/ciclo (dt=0.5 s)  -> error mediano  5-17 %   <- óptimo
+#    160 muestras/ciclo (dt=0.25 s) -> error mediano  9-48 %   (pierde ciclos)
+# Un intento previo de muestrear a 2 s "para abarcar más ciclos" degradó el error
+# al 61 %: la intuición de más-ciclos-es-mejor era incorrecta.
+# TODO(calibración demo): T_muestreo ≈ T_ciclo/80 contra el período real medido.
+PERIODO_MUESTREO_EMD = 0.5  # [s]  -> 80 muestras por ciclo estructural de 40 s
 
 # Parámetros del generador sintético de Testnet (solo mock; ver Sec. 8.1).
 PRECIO_BASE_MOCK = 45000.0  # [USD/BTC]
@@ -293,9 +318,9 @@ def initialize_default_parameters() -> np.ndarray:
     # --- Límites estructurales (Sec. 0.2) — únicos valores libres que quedan ---
     # Se leen del módulo de constantes para que exista UNA sola definición.
     params[P_I_MAX] = CTE.I_MAX
-    params[P_C_MAX_USD] = CTE.C_MAX
+    params[P_K_USD] = CTE.K_USD
     params[P_OMEGA_M_MAX] = CTE.OMEGA_M_MAX
-    params[P_DELTA_S_MAX] = CTE.DELTA_S_MAX
+    params[P_DELTA_S_REF] = CTE.DELTA_S_REF
     params[P_OMEGA_CRIT] = CTE.OMEGA_CRIT  # TODO(Fase 3): búsqueda de orden cero
     params[P_SUMA_Q_MAX] = CTE.SUMA_Q_MAX
     params[P_C_ESCALA] = CTE.C_ESCALA_KAPPA
@@ -332,8 +357,12 @@ def initialize_default_parameters() -> np.ndarray:
     # γ = 0.35 deja α ≈ e^(-0.7) ≈ 0.50: la ventana se sitúa a mitad de rango
     # cuando el filtro está sano, con margen para expandirse y contraerse.
     params[P_GAMMA_NIS] = 0.35
-    params[P_W_MIN] = 64.0  # Ventanas de 64-256 muestras: 7-12 ms por llamada
-    params[P_W_MAX] = 256.0  # de EMD (medido, ver CLAUDE.md).
+    # W_min y W_max fijados por el barrido documentado en PERIODO_MUESTREO_EMD:
+    # a 0.5 s de muestreo, W=192 abarca 2.4 ciclos estructurales (error mediano
+    # 4.9 %) y W=384 abarca 4.8 (p90 del 20 %, el mejor de la tabla). Latencia
+    # medida 6-10 ms por llamada, contra los 500 ms del Hilo Lento.
+    params[P_W_MIN] = 192.0
+    params[P_W_MAX] = 384.0
 
     # --- Burn-in por derivada de la traza: criterio SECUNDARIO ---
     # DIVERGE DEL PDF (Sec. 7.1): el criterio primario pasa a ser el NIS; ver la
@@ -342,6 +371,9 @@ def initialize_default_parameters() -> np.ndarray:
     # contrastar ambos durante un tiempo, como pide la Fase 1.2.
     params[P_EPS_BURN] = 1.0
     params[P_N_BURN] = 100.0
+
+    # --- Seccion C de la v1.2: varianza de proceso relativa ---
+    params[P_SIGMA_REL] = CTE.SIGMA_REL
     return params
 
 
@@ -357,11 +389,30 @@ def allocate_shared_memory(nombre: str, n_bytes: int) -> shared_memory.SharedMem
     try:
         shm = shared_memory.SharedMemory(name=nombre, create=True, size=n_bytes)
     except FileExistsError:
-        # Residuo de una ejecución anterior mal terminada: se recicla y se limpia.
+        # Residuo de una ejecución anterior mal terminada.
+        #
+        # ⚠ DIFERENCIA DE PLATAFORMA. En POSIX `unlink()` borra la entrada de
+        # /dev/shm y un `create=True` posterior funciona. En Windows NO existe
+        # unlink real: el bloque vive mientras algún proceso lo tenga mapeado, así
+        # que si quedó un huérfano vivo, destruir y recrear falla otra vez con
+        # WinError 183. La ruta anterior hacía exactamente eso y reventaba el
+        # arranque tras una caída sucia.
+        #
+        # Estrategia robusta en ambos: ADJUNTARSE al bloque existente y reutilizarlo
+        # si tiene tamaño suficiente. Se pone a cero igual, así que el estado previo
+        # no se hereda.
         previo = shared_memory.SharedMemory(name=nombre)
-        previo.close()
-        previo.unlink()
-        shm = shared_memory.SharedMemory(name=nombre, create=True, size=n_bytes)
+        if previo.size >= n_bytes:
+            log(
+                f"[SHM] Reciclando bloque huerfano '{nombre}' "
+                f"({previo.size} bytes disponibles, se necesitan {n_bytes})."
+            )
+            shm = previo
+        else:
+            # Demasiado pequeño para reutilizarlo: no queda más que destruirlo.
+            previo.close()
+            previo.unlink()
+            shm = shared_memory.SharedMemory(name=nombre, create=True, size=n_bytes)
     shm.buf[:n_bytes] = b"\x00" * n_bytes
     return shm
 
@@ -539,7 +590,7 @@ def resolver_malla_loeper(S_k, tr_P, c2_vol, lam, S_ref, par):
     # depende de S, así que se reevalúa cada ciclo con el precio filtrado. Fijarla
     # como literal es precisamente el error que la fórmula elimina — la versión con
     # unidades de Delta daba λS²Γ ≈ 25 y singularidad permanente desde el arranque.
-    gamma_0 = CTE.gamma_0(S_k, par[P_I_MAX], par[P_DELTA_S_MAX])
+    gamma_0 = CTE.gamma_0(S_k, par[P_I_MAX], par[P_DELTA_S_REF])
 
     # --- Eje de precio (Sec. 7.4.1) -----------------------------------------
     S_min = S_k * (1.0 - margen_rel)
@@ -1027,9 +1078,9 @@ def fast_thread_process(shm_env_name, shm_mic_name, shm_act_name, shm_par_name):
     # Dos asserts baratos que delatan un error dimensional en el primer ciclo en
     # vez de a los veinte minutos.
     S_guarda = float(x_k[0, 0])
-    g0_guarda = CTE.gamma_0(S_guarda, par_arr[P_I_MAX], par_arr[P_DELTA_S_MAX])
+    g0_guarda = CTE.gamma_0(S_guarda, par_arr[P_I_MAX], par_arr[P_DELTA_S_REF])
     CTE.verificar_cobertura_acotada(
-        S_guarda, g0_guarda, par_arr[P_DELTA_S_MAX], par_arr[P_I_MAX]
+        S_guarda, g0_guarda, par_arr[P_DELTA_S_REF], par_arr[P_I_MAX]
     )
     CTE.verificar_friccion_subcritica(S_guarda, par_arr[P_MU_OU], g0_guarda)
     log(
@@ -1082,14 +1133,19 @@ def fast_thread_process(shm_env_name, shm_mic_name, shm_act_name, shm_par_name):
             # literales: γ_ω = 1/ω_m,max acota el primer término a ≤1, y
             # γ_Q = 1/max(ΣQ_max, C_max) acota el segundo — con max, no min, porque
             # ΣQ es volumen de mercado y tomar el mínimo maximizaría γ_Q.
+            # SECCIÓN C de la v1.2: q_S pasa a ser una varianza RELATIVA al nivel
+            # de precio, q_S = (σ_rel·S_k)², con las mismas unidades (USD/BTC)²
+            # que ya tenía — el álgebra del filtro no cambia. Con q_S absoluto, un
+            # movimiento de BTC de 45k a 90k lo dejaba mal escalado por 4×.
             q_base = par_arr[P_Q_BASE]
+            q_S = CTE.q_S_relativa(float(x_k[0, 0]), par_arr[P_SIGMA_REL])
             rho_k = (
                 1.0
                 + CTE.gamma_omega(par_arr[P_OMEGA_M_MAX]) * abs(w_m)
-                + CTE.gamma_Q(par_arr[P_SUMA_Q_MAX], par_arr[P_C_MAX_USD])
+                + CTE.gamma_Q(par_arr[P_SUMA_Q_MAX], par_arr[P_K_USD])
                 * abs(vol_sum_Q)
             )
-            Q_k = rho_k * np.diag([q_base, q_base * 1e-2, q_base])
+            Q_k = rho_k * np.diag([q_S, q_base * 1e-2, q_base])
             P_pred = A @ P_k @ A.T + Q_k
 
             innov = np.zeros((2, 1))
@@ -1336,8 +1392,17 @@ def slow_thread_process(shm_env_name, shm_mic_name, shm_par_name):
     # Estado del ciclo estructural vigente (Sec. 2.6 / 6.3)
     S_ref = 0.0
     Q_ref = 0.0  # Q_transado en el último nodo de fase
-    ticks_ref = 0  # n_ticks en el último nodo de fase
-    signo_prev = 0
+    t_ultimo_nodo = 0.0  # Para el período refractario del detector de nodos
+    n_nodos = 0
+    signo_imf_prev = 0  # Signo de la IMF dominante en t0, iteración anterior
+
+    # Ventana deslizante de precios que alimenta la EMD (Sec. 2.2).
+    buffer_precios = []
+    t_ultima_muestra = 0.0
+    dt_muestreo = 0.0  # Intervalo real de muestreo, suavizado por EMA
+    w_m = 0.0  # [1/Ticks] hasta que el HHT produzca la primera estimación
+    R_n = 0.0  # [USD/BTC] residuo macro de la EMD
+    f_hz_actual = 0.0  # Frecuencia dominante en Hz, para el refractario
 
     # Historia para las derivadas respecto a T̄ de la Sec. 1.4
     T_prev = 0.0
@@ -1380,35 +1445,94 @@ def slow_thread_process(shm_env_name, shm_mic_name, shm_par_name):
                 eps_nis, par_arr[P_GAMMA_NIS], par_arr[P_W_MIN], par_arr[P_W_MAX]
             )
 
-            # --- ω_m: frecuencia de mercado ---------------------------------
-            # PENDIENTE: la cadena EMD -> Hilbert -> colapso espectral (Sec. 2.5)
-            # está validada aparte (7-12 ms por llamada) pero no vive en este
-            # archivo. Cuando se integre debe:
-            #   1. Tamizar sobre las últimas W_k muestras (ya calculado arriba).
-            #   2. Devolver f en Hz y convertirla con CTE.omega_m_desde_hz(f, ν),
-            #      porque el modelo exige 1/Ticks y no Hz (Sec. 0.4). Sin esa
-            #      conversión γ_ω·ω_m no es adimensional en ejecución.
-            # Mientras tanto, en Testnet se inyecta un oscilador de prueba en las
-            # unidades finales. NO USAR EN MAINNET.
-            w_m = 2.0e-3 * (1.0 + 0.5 * math.sin(t_now * 0.17))  # [1/Ticks]
+            # --- CADENA EMD -> HILBERT (Secs. 2.1 a 2.6) --------------------
+            # PRIORIDAD 1 de la v1.2: sustituye los mocks de ω_m y R_n. Mientras
+            # R_n fuera un coseno puro, el NIS y el Ljung-Box estaban midiendo el
+            # generador de mocks y no el filtro, porque R_n entra directamente en
+            # el vector de medición z_k (Sec. 7.3.1).
+            # El buffer se muestrea a PERIODO_MUESTREO_EMD, no a la cadencia del
+            # Hilo Lento: la ventana tiene que cubrir varios ciclos estructurales.
+            # Tolerancia del 10 %: el Hilo Lento corre a PERIODO_HILO_LENTO y el
+            # objetivo de muestreo es del mismo orden, así que exigir el período
+            # exacto hace que el jitter del scheduler descarte ~la mitad de las
+            # muestras de forma IRREGULAR. Un buffer con espaciado irregular
+            # rompe la EMD (los splines asumen malla uniforme) y era la causa de
+            # que no se detectara ningún nodo de fase en ejecución.
+            if (t_now - t_ultima_muestra) >= 0.9 * PERIODO_MUESTREO_EMD:
+                if t_ultima_muestra > 0.0:
+                    intervalo = t_now - t_ultima_muestra
+                    # Intervalo real, no el nominal (EMA para absorber el jitter).
+                    dt_muestreo = (
+                        0.9 * dt_muestreo + 0.1 * intervalo
+                        if dt_muestreo > 0
+                        else intervalo
+                    )
+                t_ultima_muestra = t_now
+                buffer_precios.append(S_actual)
+                if len(buffer_precios) > int(par_arr[P_W_MAX]):
+                    buffer_precios.pop(0)
+
+            hht_ok = False
+            if len(buffer_precios) >= max(32, min(W_k, int(par_arr[P_W_MAX]))):
+                ventana = np.asarray(buffer_precios[-W_k:], dtype=np.float64)
+                res_hht = hht.analizar_ventana(ventana, dt_muestreo)
+                if res_hht["valido"]:
+                    hht_ok = True
+                    # Sec. 0.4: el HHT entrega f en Hz (tiempo físico) y el modelo
+                    # exige ω_m en 1/Ticks. La conversión pasa por ν. Sin esto,
+                    # γ_ω·ω_m no es adimensional en ejecución aunque lo sea en el
+                    # papel. Ojo: ν se almacena en Ticks/AÑOS.
+                    if nu > 0.0:
+                        w_m_bruto = CTE.omega_m_desde_hz(res_hht["f_hz"], nu)
+                        # NOTA DE INTERPRETACION: la Sec. 2.5 define ω_m como una
+                        # cantidad instantánea, pero el estimador conserva un p90
+                        # de ~20 % de error incluso con el promediado terminal del
+                        # colapso espectral. Como ω_m alimenta ρ_k (Sec. 7.3.3) y
+                        # c²_vol (Sec. 4.5), ese ruido se propagaría al filtro y a
+                        # la malla de Loeper. Se suaviza con una EMA ligera: el
+                        # ciclo estructural cambia en decenas de segundos, así que
+                        # la constante de tiempo del filtro es muy inferior a la
+                        # escala de la señal que sigue.
+                        w_m = 0.7 * w_m + 0.3 * w_m_bruto if w_m > 0.0 else w_m_bruto
+                    R_n = res_hht["R_n"]  # Residuo REAL de la EMD, no un coseno
+                    f_hz_actual = res_hht["f_hz"]
 
             # --- Nodo de fase y ΔS (Sec. 2.6) -------------------------------
-            # NOTA DE INTERPRETACION: el nodo real es el cruce por cero de la fase
-            # desenrollada (θ ≡ 0 mód π). Sin la Transformada de Hilbert se
-            # aproxima por el cambio de signo de S - S_ref.
             if S_ref <= 0.0:
                 S_ref = S_actual
                 Q_ref = Q_bruto
-                ticks_ref = n_ticks
-            delta_S = S_actual - S_ref
-            signo = 1 if delta_S > 0 else (-1 if delta_S < 0 else 0)
-            if signo != 0 and signo_prev != 0 and signo != signo_prev:
-                S_ref = S_actual  # Nuevo nodo estructural
+
+            nodo = False
+            if hht_ok:
+                # Nodo = cruce por cero de la IMF dominante (Sec. 2.6). Se detecta
+                # por CAMBIO DE SIGNO EN t0 ENTRE ITERACIONES, no comparando las
+                # dos últimas muestras de una misma ventana: el borde de la EMD se
+                # recalcula en cada llamada y esa comparación intra-ventana
+                # resultaba demasiado inestable para disparar de forma fiable.
+                imf_t0 = res_hht["imf_dom_t0"]
+                signo_imf = 1 if imf_t0 > 0 else (-1 if imf_t0 < 0 else 0)
+                if signo_imf != 0 and signo_imf_prev != 0 and signo_imf != signo_imf_prev:
+                    # Período refractario derivado de la frecuencia estimada: el
+                    # modelo dice que los nodos ocurren cada medio ciclo, así que
+                    # se exige al menos 0.8 medios ciclos entre dos nodos. Sin
+                    # esto, el ruido alrededor del cruce reinicia S_ref y ΣQ
+                    # varias veces seguidas.
+                    if f_hz_actual > 0.0:
+                        refractario = 0.8 * (0.5 / f_hz_actual)
+                    else:
+                        refractario = 5.0 * PERIODO_HILO_LENTO
+                    if (t_now - t_ultimo_nodo) >= refractario:
+                        nodo = True
+                if signo_imf != 0:
+                    signo_imf_prev = signo_imf
+
+            if nodo:
+                S_ref = S_actual  # Sec. 2.6: S_ref = S(T̄_nodo)
                 Q_ref = Q_bruto  # ΣQ se reinicia a cero (Sec. 6.3)
-                ticks_ref = n_ticks
-                delta_S = 0.0
-            if signo != 0:
-                signo_prev = signo
+                t_ultimo_nodo = t_now
+                n_nodos += 1
+
+            delta_S = S_actual - S_ref
 
             # ΣQ del ciclo vigente: integral por tramos reiniciada en cada nodo.
             sum_Q = Q_bruto - Q_ref
@@ -1456,8 +1580,13 @@ def slow_thread_process(shm_env_name, shm_mic_name, shm_par_name):
                 )
 
             # --- R_n: residuo macro de la EMD -------------------------------
-            # PENDIENTE: proviene del residuo de la EMD (Sec. 2.1). Mock de Testnet.
-            R_n = S_actual + math.cos(t_now * 0.1) * 50.0
+            # R_n ya no es un mock: sale del residuo real de la EMD unas líneas
+            # más arriba (`res_hht["R_n"]`). Hasta que el buffer se llene lo
+            # suficiente para el primer tamizado, se usa el precio actual como
+            # mejor estimación de la tendencia — es lo que el residuo converge a
+            # ser cuando no hay historia que descomponer.
+            if not hht_ok and R_n <= 0.0:
+                R_n = S_actual
 
             # --- Publicación atómica por seqlock (Sec. 7.6.2) ---------------
             escribir_micelio_seqlock(

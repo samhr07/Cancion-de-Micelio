@@ -18,6 +18,20 @@ env/
 *.pyd
 c_generated_code/
 
+# Credenciales y secretos.
+# NUNCA commitear: el repositorio es publico y un secreto commiteado sobrevive
+# en el historial de git aunque se borre el archivo despues.
+*Credenciales*
+*credenciales*
+*.key
+*.pem
+.env
+.env.*
+secrets.*
+
+# Volcados sueltos de telemetria fuera de telemetria/ (Sec. 8.6.2)
+telem_*.npy
+
 # Sistema operativo / editor
 .vscode/
 .idea/

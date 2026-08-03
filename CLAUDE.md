@@ -9,7 +9,7 @@ IPOPT y qpOASES). No se han validado contra CUDA ni acados.**
 
 ---
 
-## ESTADO ACTUAL (2026-08-02)
+## ESTADO ACTUAL (2026-08-03)
 
 Dos tandas de trabajo aplicadas, en este orden:
 
@@ -22,11 +22,33 @@ Dos tandas de trabajo aplicadas, en este orden:
 Las secciones intermedias se conservan como registro del diagnóstico original — describen
 el estado *anterior* del código.
 
+3. **Calibración v1.2** — Secciones A, B, C y la medición de la D de
+   `ORDEN_TRABAJO_CALIBRACION_1.2.md`. Detalle en "Sesión 2026-08-03". Integra la cadena
+   EMD → Hilbert, que era la precondición que bloqueaba las Fases 2 y 3.
+
+**Las Fases 2 y 3 siguen sin ejecutar**, cada una por su compuerta: la 2 porque Ljung-Box
+sigue rechazando blancura (ρ₁ = 0.87 en `y1`), la 3 porque necesita datos de Testnet.
+Ninguna de las dos está bloqueada ya por la ausencia del HHT.
+
 ### Archivos
 
 - `Micelio.py` — orquestador (3 procesos).
 - `constantes_micelio.py` — **única** definición de las constantes de acoplamiento.
+- `hht.py` — cadena EMD → Hilbert (Sección 2 del PDF).
 - `diagnostico.py` — reporte offline de consistencia del filtro (`python diagnostico.py`).
+
+### Nomenclatura (v1.2 Sec. A.1) — dos símbolos renombrados
+
+El orden de trabajo v1.1 introdujo dos colisiones con el PDF. El PDF llegó primero y es la
+fuente, así que se renombró en el orden de trabajo:
+
+| v1.1 | Choca con | Nombre definitivo |
+|---|---|---|
+| `C_max` (USD) | `C_max` de la Sec. 6.2, que está en **BTC** | **`K_USD`** |
+| `ΔS_max` (USD/BTC) | `ΔS_max` de la Sec. 7.4.1, que es un **margen %** | **`ΔS_ref`** |
+
+`C_max` y `ΔS_max` quedan **reservados** para su significado del PDF. La guarda
+`verificar_dominio_malla` sigue vigilando que el margen de malla cubra a `ΔS_ref`.
 
 El entorno de esta sesión solo tenía NumPy: **numba, CasADi y pyarrow no están instalados**.
 Los núcleos que el PDF asigna a CUDA (Sec. 7.4) y a acados (Sec. 7.5) están implementados
@@ -417,6 +439,156 @@ dan falsos positivos sin él.
 - Fase 3 (Ω_crit por búsqueda de orden cero) — necesita datos de Testnet.
 - Marcar en el PDF las Secs. 3.5 y 8.6.1 como superadas por ALS (la telemetría de `ỹ_k` sigue
   siendo correcta; cambia el método que la consume, no el dato).
+
+---
+
+## Sesión 2026-08-03 — Integración de la cadena EMD → Hilbert (v1.2 A, B, C)
+
+### `hht.py` — la Sección 2 del PDF, por fin dentro del sistema
+
+`ω_m` y `R_n` dejan de ser mocks. El Hilo Lento mantiene una ventana deslizante de precios,
+ejecuta EMD → Hilbert y consume el resultado completo: frecuencia consolidada por colapso
+espectral (Sec. 2.5), residuo real como `R_n`, y nodos de fase (Sec. 2.6) que actualizan
+`S_ref` y reinician ΣQ.
+
+Cuatro cosas que hubo que descubrir midiendo, porque el PDF no las cubre:
+
+1. **La Transformada de Hilbert va sobre el vector EXTENDIDO, no sobre las IMFs truncadas.**
+   El paso 2 de la Sec. 2.3 lo dice, pero es fácil truncar primero. Hacerlo mal reintroduce un
+   borde duro exactamente en t0 —el único instante que el control usa— y daba errores de
+   frecuencia del **200-600 %**. Corregido: 2.1 % sobre el ciclo de 40 s.
+
+2. **ω_m no se puede evaluar en una sola muestra.** La Sec. 2.5 la define como instantánea,
+   pero `f` sale de derivar numéricamente la fase desenrollada y una muestra suelta es puro
+   ruido: cambiar la semilla movía el error del 2 % al 45 %. Se toma la **mediana** sobre las
+   últimas 12 muestras (mediana y no media: los saltos del desenrollado son atípicos aislados).
+   Encima, EMA temporal en el Hilo Lento, porque ω_m alimenta ρ_k y c²_vol.
+
+3. **Dimensionado de la ventana: manda muestras/ciclo, NO ciclos/ventana.** Barrido de
+   dt ∈ {0.25, 0.5, 1.0} s × W ∈ {128…512}, 12 semillas por punto:
+
+   | muestras/ciclo | error mediano |
+   |---|---|
+   | 40 (dt=1.0 s) | 30–58 % |
+   | **80 (dt=0.5 s)** | **5–17 %** |
+   | 160 (dt=0.25 s) | 9–48 % (pierde ciclos) |
+
+   Un intento previo de muestrear a 2 s "para abarcar más ciclos" degradó el error al 61 %.
+   Config final: muestreo 0.5 s, `W_min=192`, `W_max=384`. Latencia 6–10 ms contra 500 ms.
+   **Warm-up de ~96 s** antes del primer tamizado: es real, la EMD necesita esa historia.
+
+4. **El nodo de fase se detecta por el signo de la IMF dominante en t0 ENTRE iteraciones**,
+   no comparando `imf[-2]` contra `imf[-1]` dentro de una misma ventana. El borde se recalcula
+   en cada llamada y la comparación intra-ventana no disparaba casi nunca. Con el cambio:
+   **13 nodos detectados contra 14 reales**, desviación mediana 1.0 s. Más período refractario
+   de 0.8 medios ciclos para matar el chatter.
+
+### ⚠ Otra inconsistencia del PDF: la Sec. 2.6 se contradice
+
+La prosa define el nodo como "cruza el eje horizontal (**amplitud cero**)" y lo refuerza con
+"El retorno del precio exactamente al nodo fuerza a ΔS → 0". Pero lo formaliza como
+`θ_unwrap ≡ 0 (mód π)`, y con la convención estándar `Re(Z) = IMF = A·cos θ`:
+
+```
+θ ≡ 0   (mód π)  ⟺  IMF = ±A   -> EXTREMO de la oscilación
+θ ≡ π/2 (mód π)  ⟺  IMF = 0    -> CRUCE POR CERO
+```
+
+La fórmula detecta los picos, justo lo contrario de lo que pide la prosa. Se implementó el
+cruce por cero (lo que exige la física del modelo). **Corregir en el PDF**: la condición debe
+ser `θ ≡ π/2 (mód π)`, o reescribirse directamente como cruce por cero de la IMF dominante.
+
+### Sección C — `q_S` relativa
+
+`q_S = (σ_rel·S_k)²`, mismas unidades (USD/BTC)² que ya tenía, así que el álgebra del filtro
+no cambia; lo que cambia es que deja de depender del nivel de precio (con `q_S` fijo, BTC de
+45k a 90k lo desescala por 4×). `σ_rel = 2.22e-6` reproduce exactamente el `q_S = 0.01`
+anterior a S = 45 000, así que no altera el comportamiento actual. **No es una
+adimensionalización del filtro** — esa se evaluó y se descartó, ver la nota en `q_S_relativa`.
+
+### A.2 — Ljung-Box ahora se lee por magnitud
+
+`diagnostico.py` imprime ρ₁, ρ₂, ρ₃ junto al p-valor, el `n` efectivo tras el recorte, y el
+ρ₁ mínimo detectable con ese `n`. La función `_rho_minimo_detectable` reproduce **exactamente**
+la tabla de la v1.2 (n=500 → 0.250, n=2 000 → 0.125, n=11 500 → 0.052, n=50 000 → 0.025).
+El veredicto distingue "RECHAZA BLANCURA" (ρ₁ ≥ 0.20, model mismatch) de "rechazo NO MATERIAL"
+(ρ₁ < 0.20, con n grande Ljung-Box rechaza por correlaciones irrelevantes).
+
+⚠ **PROHIBIDO inflar Q o R con una constante ad-hoc.** Está medido en la v1.2: Q×7 lleva el
+NIS de 19.35 a 3.22 pero solo baja ρ₁ de +0.79 a +0.57, y Q×50 lo deja en +0.44. Un error
+determinista no lo describe ninguna matriz de covarianza — la inflación no corrige, oculta.
+
+### Sección D — la medición, y una expectativa del documento que NO se cumplió
+
+La v1.2 predice: "buena parte del exceso de NIS debería evaporarse sola, porque `R_n` real es
+lentamente variable". **No ocurrió.** Medido sobre dos bloques de 10 000 muestras:
+
+| | NIS medio | NIS mediana | var(y0) vs `r_S,base`=0.5 | var(y1) vs `r_EMD`=1.0 |
+|---|---|---|---|---|
+| Bloque 0 (pre-HHT, `R_n` de respaldo) | 848 | 4.11 | 446 | 0.40 |
+| Bloque 1 (**HHT activo**) | 147 | 4.69 | 4.03 (**8×**) | 161 (**161×**) |
+
+Lecturas, en orden de importancia:
+
+1. **La mediana del NIS es ~4.7 contra un teórico de 2** — solo 2.3× de exceso. La *media* de
+   147 está inflada por cola pesada (|y1| máximo 280 USD). Mirar la mediana.
+2. **`R` está gruesamente mal especificada, y es medible directamente.** `var(y0) = 4.03`
+   contra `r_S,base = 0.5` es exactamente la varianza del ruido que el mock inyecta
+   (`gauss(0, 2)` → 4.0): el filtro cree tener 8× más precisión de la que tiene. Y `r_EMD`
+   está 161× por debajo. Eso es *justo* lo que la Fase 2 (ALS) existe para estimar.
+3. **`R_n` real NO es lentamente variable.** Sale de una EMD de ventana deslizante recalculada
+   a 2 Hz; al desplazarse la ventana el residuo salta, y salta más cuando dispara un nodo de
+   fase. La premisa de la v1.2 sobre este punto era optimista.
+
+### ⚠ Cómo leer ρ₁ aquí: no todo rechazo es evidencia sobre `A`
+
+`diagnostico.py` ahora reporta, junto a ρ₁, con qué frecuencia cambia cada componente y cómo
+decae la autocorrelación. Con eso, los dos rechazos significan cosas distintas:
+
+- **`y1` (ρ₁ = 0.87)**: `R_n` proviene de ventanas EMD **solapadas**, así que valores
+  consecutivos están correlacionados *por construcción*. En el bloque 0 la componente llegaba
+  a repetirse ~8 ciclos idénticos (retención de orden cero: el Hilo Lento publica a 2 Hz, el
+  Rápido corre a 89 Hz). Su ρ₁ **no es evidencia sobre la matriz `A`**.
+- **`y0` (ρ₁ = 0.73, decae a 0.12 en el rezago 10)**: error de modelo suave y de corto
+  alcance. Ese sí apunta a lo que describe la Sección E — `A` asume velocidad constante contra
+  una oscilación.
+
+Un mismatch estructural del tipo de la Sección E dejaría correlación a rezagos del orden del
+ciclo estructural (miles de muestras), no solo en ρ₁. Aquí no aparece.
+
+### En Windows `unlink()` no destruye la memoria compartida — el bot no arrancaba dos veces
+
+Defecto real de arranque, encontrado en ejecución. En POSIX `shm_unlink` retira el nombre de
+inmediato; en Windows el bloque es un objeto del kernel con conteo de referencias y **vive
+mientras algún proceso lo tenga mapeado**. `SharedMemory.unlink()` es, de hecho, un no-op.
+
+Consecuencia: tras una caída sucia (o con un proceso hijo rezagado que el padre no alcanzó a
+matar en cascada), el bloque sobrevive y el arranque siguiente moría con
+`FileExistsError: [WinError 183]` al intentar destruir-y-recrear.
+
+`allocate_shared_memory` ahora **se adjunta al bloque huérfano y lo recicla** si su tamaño
+alcanza; solo si es más chico intenta liberarlo y recrearlo. Probado contra el fallo real
+(bloque huérfano de 57 bytes retenido por un PID vivo).
+
+### Higiene de secretos
+
+`.gitignore` excluye ahora `*Credenciales*`, `*.key`, `*.pem`, `.env*` y `secrets.*`.
+El repo `origin` es **público**: un secreto commiteado sobrevive en el historial de git
+aunque después se borre el archivo, así que la única defensa barata es que nunca entre.
+Las credenciales de la cuenta demo de Binance viven **fuera** del árbol de trabajo.
+
+### Pendiente tras esta fase
+
+- **Fase 2 sigue BLOQUEADA** por la compuerta (ρ₁ = 0.87 ≥ 0.20), y así se deja: el documento
+  manda no correr ALS con mismatch. Pero conviene decidir en la v1.3 si el ρ₁ de `y1` debe
+  contar para la compuerta, dado que es un artefacto del solapamiento de ventanas.
+- **`r_S,base` y `r_EMD` están medidos y mal por 8× y 161×.** No se tocaron: la Fase 2 es su
+  dueña. Es el candidato número uno a explicar el NIS residual.
+- Fase 3 (Ω_crit) — necesita Testnet.
+- Sección E (modelo de oscilador armónico en vez de velocidad constante) queda **aparcada por
+  decisión explícita** hasta que el bot opere en cuenta demo. `A` se queda como está.
+- `ω_m,max` en `constantes_micelio` sigue siendo un TODO(HHT): ahora que la cadena está
+  integrada, debe fijarse con el máximo empírico observado.
 
 ## Convenciones
 

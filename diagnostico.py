@@ -35,6 +35,13 @@ import numpy as np
 DIR_TELEMETRIA_POR_DEFECTO = "telemetria"
 DIM_MEDICION = 2  # m = rango del vector de medicion z_k (Sec. 7.3.1)
 
+# A.2 de la v1.2: umbral de rho_1 por debajo del cual un rechazo de Ljung-Box se
+# considera estadisticamente cierto pero SIN RELEVANCIA PRACTICA. La tabla de
+# decision de la Seccion D usa 0.2 como frontera de "rho grande" (model mismatch)
+# y 0.05 como "rho pequeno" (ruido mal calibrado).
+UMBRAL_RHO_MATERIAL = 0.20
+UMBRAL_RHO_DESPRECIABLE = 0.05
+
 
 # ==============================================================================
 # CARGA DE VOLCADOS
@@ -160,6 +167,22 @@ def reporte_nis(nis: np.ndarray, m: int = DIM_MEDICION, confianza: float = 0.95)
 # ==============================================================================
 # 1.3 LJUNG-BOX — compuerta de entrada a la Fase 2
 # ==============================================================================
+def _rho_minimo_detectable(n: int, h: int = 20, alfa: float = 0.05) -> float:
+    """rho_1 minimo que basta para rechazar Ljung-Box con este n (A.2 de la v1.2).
+
+    Suponiendo que toda la potencia del estadistico viene del primer rezago:
+        Q ~= n(n+2)·rho_1²/(n-1) >= chi2_critico   =>   rho_1 >= sqrt(...)
+    Sirve para leer el veredicto en contexto: el mismo p-valor significa cosas
+    muy distintas con n=500 que con n=50 000.
+    """
+    from scipy.stats import chi2
+
+    if n <= h + 1:
+        return float("nan")
+    critico = float(chi2.ppf(1.0 - alfa, h))
+    return float(np.sqrt(critico * (n - 1) / (n * (n + 2))))
+
+
 def ljung_box(serie: np.ndarray, h: int = 20):
     """Ljung-Box univariante sobre una componente de la innovacion.
 
@@ -182,16 +205,34 @@ def ljung_box(serie: np.ndarray, h: int = 20):
         return {"n": int(n), "Q": float("nan"), "veredicto": "SERIE CONSTANTE"}
 
     Q = 0.0
+    rhos = []
     for j in range(1, h + 1):
         rho_j = float(np.dot(x[j:], x[:-j]) / denom)
+        rhos.append(rho_j)
         Q += rho_j * rho_j / (n - j)
     Q *= n * (n + 2)
 
     p = float(chi2.sf(Q, h))
     critico = float(chi2.ppf(0.95, h))
+
+    # A.2 de la v1.2: EL VEREDICTO SE LEE SOBRE LA MAGNITUD, NO SOBRE EL P-VALOR.
+    # Ljung-Box es extremadamente potente con n grande y rechaza por correlaciones
+    # sin ninguna relevancia práctica. Con h=20 y alfa=0.05, el rho_1 minimo que
+    # basta para rechazar es:
+    #     n=500 -> 0.250 | n=2 000 -> 0.125 | n=11 500 -> 0.052 | n=50 000 -> 0.025
+    # Con rho_1 ~ 0.8 no hay ambiguedad; con rho_1 ~ 0.03 el p-valor diria lo mismo
+    # y significaria algo completamente distinto.
+    rho1 = abs(rhos[0]) if rhos else 0.0
+    if p >= 0.05:
+        veredicto = "BLANCA"
+    elif rho1 >= UMBRAL_RHO_MATERIAL:
+        veredicto = "RECHAZA BLANCURA"
+    else:
+        veredicto = "rechazo NO MATERIAL"
+
     return {
         "n": int(n), "h": h, "Q": float(Q), "critico_95": critico, "p": p,
-        "veredicto": "BLANCA" if p >= 0.05 else "RECHAZA BLANCURA",
+        "rho": rhos[:3], "rho1": rho1, "veredicto": veredicto,
     }
 
 
@@ -334,40 +375,91 @@ def generar_reporte(datos: np.ndarray, h: int = 20, descartar: int = -1) -> str:
     a("-" * 78)
     a("1.3  LJUNG-BOX (blancura de la innovacion) -- COMPUERTA A LA FASE 2")
     a("-" * 78)
+    a(f"  n efectivo tras el recorte: {len(datos)}   rezagos h={h}")
+    a("  (con este n, el rho_1 minimo que basta para rechazar es "
+      f"{_rho_minimo_detectable(len(datos), h):.3f})")
+    a("")
     Y = np.column_stack([datos["y0"], datos["y1"]])
     resultados = {}
     for etiqueta, serie in (("y0 (precio)", datos["y0"]), ("y1 (residuo)", datos["y1"])):
         r = ljung_box(serie, h)
         resultados[etiqueta] = r
         if np.isfinite(r["Q"]):
-            a(f"  {etiqueta:<14} Q={r['Q']:12.3f}  critico_95(h={h})="
-              f"{r['critico_95']:8.3f}  p={r['p']:.3e}  -> {r['veredicto']}")
+            rr = r.get("rho", [])
+            a(f"  {etiqueta:<14} Q={r['Q']:11.2f}  p={r['p']:.2e}   "
+              f"rho1={rr[0]:+.4f} rho2={rr[1]:+.4f} rho3={rr[2]:+.4f}"
+              f"   -> {r['veredicto']}")
         else:
             a(f"  {etiqueta:<14} {r['veredicto']}")
 
     rm = ljung_box_multivariante(Y, h)
     resultados["multivariante"] = rm
     if np.isfinite(rm["Q"]):
-        a(f"  {'multivariante':<14} Q={rm['Q']:12.3f}  critico_95(gl={rm['gl']})="
-          f"{rm['critico_95']:8.3f}  p={rm['p']:.3e}  -> {rm['veredicto']}")
+        a(f"  {'multivariante':<14} Q={rm['Q']:11.2f}  p={rm['p']:.2e}   "
+          f"critico_95(gl={rm['gl']})={rm['critico_95']:.1f}"
+          f"   -> {rm['veredicto']}")
     else:
         a(f"  multivariante  {rm['veredicto']}")
 
-    rechaza = any(
-        r.get("veredicto") == "RECHAZA BLANCURA" for r in resultados.values()
+    # Veredicto por MAGNITUD (A.2), no por p-valor.
+    rho1_max = max(
+        (r.get("rho1", 0.0) for r in resultados.values() if "rho1" in r), default=0.0
     )
+    rechaza_material = rho1_max >= UMBRAL_RHO_MATERIAL
+    rechaza_p = any(
+        r.get("p", 1.0) < 0.05 for r in resultados.values() if "p" in r
+    )
+    # --- Multi-tasa: distinguir retención de orden cero de mismatch real -----
     a("")
-    if rechaza:
-        a("  >> FASE 2 BLOQUEADA. Hay predictibilidad remanente que la matriz")
-        a("     cinematica A no capturo. Eso es MODEL MISMATCH, no mala calibracion")
-        a("     de ruido. Recalibrar Q y R aqui seria tapar el sintoma: ALS")
-        a("     absorberia el error de modelo dentro de Q y devolveria una respuesta")
-        a("     confiadamente equivocada.")
-        a("     Respuesta correcta: AUMENTO DE ESTADO (Sec. 3.6 del PDF) -- derivadas")
-        a("     de orden superior o sesgos de friccion como nuevas incognitas.")
+    a("  Estructura de la autocorrelacion (corta vs persistente):")
+    for etiqueta, serie in (("y0 (precio)", datos["y0"]), ("y1 (residuo)", datos["y1"])):
+        v = serie[np.isfinite(serie)]
+        if v.size < 100:
+            continue
+        frac = float(np.mean(np.diff(v) != 0.0))
+        repite = 1.0 / frac if frac > 0 else float("inf")
+        x = v - v.mean()
+        den = float(np.dot(x, x))
+        rr = []
+        for j in (1, 10, 45):
+            rr.append(float(np.dot(x[j:], x[:-j]) / den) if den > 0 else 0.0)
+        a(f"    {etiqueta:<14} cambia en {frac:5.1%} de los pasos "
+          f"(se repite ~{repite:.1f}x)   rho1={rr[0]:+.3f} rho10={rr[1]:+.3f} "
+          f"rho45={rr[2]:+.3f}")
+        if repite > 3.0:
+            a(f"      [!] RETENCION DE ORDEN CERO. Esta componente llega a una tasa "
+              f"~{repite:.0f}x menor")
+            a("          que el lazo de control, y el filtro la asimila como si fuera una")
+            a("          medicion NUEVA en cada ciclo. Eso fabrica autocorrelacion por si")
+            a("          solo: su rho_1 NO es evidencia sobre la matriz A. Lo correcto es")
+            a("          actualizar esa componente solo cuando llega un dato fresco")
+            a("          (actualizacion secuencial multi-tasa), no en cada tick.")
+    a("")
+    a("  Lectura: una autocorrelacion que decae a ~0 en pocas decenas de rezagos es de")
+    a("  CORTO ALCANCE (retencion o error de modelo suave). Un mismatch estructural de")
+    a("  la Sec. E -- A asume velocidad constante y el mercado es oscilatorio -- deja")
+    a("  correlacion a rezagos del orden del ciclo estructural, no solo en rho_1.")
+    a("")
+    a(f"  max|rho_1| sobre las componentes = {rho1_max:.4f}")
+    if rechaza_material:
+        a("  >> FASE 2 BLOQUEADA. rho_1 es GRANDE (>= "
+          f"{UMBRAL_RHO_MATERIAL:.2f}): hay predictibilidad remanente que la")
+        a("     matriz cinematica A no capturo. Eso es MODEL MISMATCH, no mala")
+        a("     calibracion de ruido. Recalibrar Q y R aqui seria tapar el sintoma:")
+        a("     ALS absorberia el error de modelo dentro de Q y devolveria una")
+        a("     respuesta confiadamente equivocada.")
+        a("     Respuesta correcta: AUMENTO DE ESTADO (Sec. 3.6 del PDF).")
+        a("     PROHIBIDO: inflar Q o R con una constante ad-hoc. Medido sobre este")
+        a("     sistema, Q x7 lleva el NIS de 19.35 a 3.22 pero solo baja rho_1 de")
+        a("     +0.79 a +0.57, y Q x50 lo deja en +0.44. Un error determinista no lo")
+        a("     describe ninguna matriz de covarianza: la inflacion no corrige, oculta.")
+    elif rechaza_p:
+        a(f"  >> Rechazo estadistico pero NO MATERIAL (rho_1 < {UMBRAL_RHO_MATERIAL:.2f}).")
+        a("     Con n grande Ljung-Box rechaza por correlaciones irrelevantes. Si el")
+        a("     NIS esta fuera de banda, la causa es ruido mal calibrado y el")
+        a("     estimador correcto es ALS (Fase 2), no una constante a ojo.")
     else:
-        a("  >> Compuerta superada: la innovacion pasa por blanca. La Fase 2 (ALS)")
-        a("     esta habilitada.")
+        a("  >> Compuerta superada: la innovacion pasa por blanca. Fase 2 habilitada.")
 
     # ---- 1.4 Shapiro-Wilk ----
     a("")

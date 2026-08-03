@@ -46,42 +46,52 @@ I_MAX = 0.50  # [BTC]
 
 # Precio de referencia para expresar límites de capital en USD.
 #   Unidades: USD/BTC
-#   No entra en ninguna fórmula del modelo; solo convierte I_MAX a C_MAX.
+#   No entra en ninguna fórmula del modelo; solo convierte I_MAX a K_USD.
 PRECIO_REFERENCIA = 45_000.0  # [USD/BTC]
 
-# C_max — capital operativo total.
+# K_USD — capital operativo total.
 #   Unidades: USD
-#   NOTA DE INTERPRETACION: hay una COLISIÓN DE NOMBRES entre documentos. La
-#   Sec. 6.2 del PDF usa C_max como cota de ū_compra/ū_venta, que están en BTC;
-#   la Sec. 0.2 del orden de trabajo lo define como "capital operativo total
-#   [USD]" para el denominador de γ_Q. Son la misma magnitud en dos unidades, así
-#   que se deriva una de otra y no se declaran por separado: el cap en BTC de las
-#   cajas es I_MAX, y C_MAX aquí es su equivalente en USD.
-C_MAX = I_MAX * PRECIO_REFERENCIA  # [USD]
+#   RENOMBRADO POR LA v1.2 (Sec. A.1). La v1.1 lo llamaba `C_max`, que colisionaba
+#   con el `C_max` de la Sec. 6.2 del PDF — allí es la capacidad de billetera que
+#   acota ū_compra/ū_venta, y esas están en BTC. El PDF llegó primero y es la
+#   fuente, así que `C_max` queda RESERVADO para su significado del PDF y el
+#   capital en USD pasa a llamarse K_USD.
+#   Las dos magnitudes siguen siendo la misma cantidad en distintas unidades, así
+#   que se deriva una de otra: el cap en BTC de las cajas es I_MAX, y K_USD es su
+#   equivalente en USD.
+K_USD = I_MAX * PRECIO_REFERENCIA  # [USD]
 
 # ω_m,max — mayor frecuencia modal observada vía HHT.
 #   Unidades: 1/Ticks
-#   TODO(HHT): debe salir del máximo empírico del colapso espectral de la
-#   Sec. 2.5 una vez integrada la cadena EMD → Hilbert. El valor de abajo es el
-#   pico del generador sintético de Testnet, no una medida de mercado.
+#   MEDIDO con la cadena `hht.py` ya integrada (25 semillas sobre el ciclo
+#   estructural de 40 s del generador, con ν ≈ 20 ticks/s):
+#       f observada: mediana 0.02511 Hz, p95 0.02695, max 0.02775  (real 0.025)
+#       ω_m = f/ν  : mediana 1.26e-3, p95 1.35e-3, max 1.39e-3  [1/Ticks]
+#   Se conserva 3.0e-3 —algo más del doble del máximo observado— a propósito:
+#   ese máximo corresponde a UN solo régimen (el ciclo de 40 s del mock), y
+#   γ_ω = 1/ω_m,max debe acotar el término también en regímenes más rápidos.
+#   Con este valor, γ_ω·ω_m ≈ 0.42 en régimen típico, dejando margen sin saturar.
+#   TODO(calibración demo): confirmar contra el rango real de regímenes de
+#   Mainnet; si aparecen ciclos más rápidos que ~20 s, subir esta cota.
 #   Piso teórico (Sec. 0.3): ω_m es la inversa de los ticks para completar un
 #   ciclo, y el mínimo son 2 ticks (Nyquist en espacio de ticks), luego
 #   ω_m,max ≤ 0.5 /Ticks  →  γ_ω ≥ 2 Ticks. Ver `verificar_nyquist_omega_m`.
 OMEGA_M_MAX = 3.0e-3  # [1/Ticks]
 
-# ΔS_max — desplazamiento máximo esperado respecto al nodo de fase.
+# ΔS_ref — desplazamiento absoluto esperado respecto al nodo de fase (Sec. 2.6).
 #   Unidades: USD/BTC
-#   NOTA DE INTERPRETACION: SEGUNDA COLISIÓN DE NOMBRES, y esta es peligrosa. La
-#   Sec. 7.4.1 del PDF llama ΔS_max al margen porcentual (±%) que fija el ancho
-#   del dominio de la malla de Loeper. La Sec. 0.2 del orden de trabajo llama
-#   ΔS_max al desplazamiento ABSOLUTO en USD/BTC respecto al nodo de fase de la
-#   Sec. 2.6. Son cantidades distintas con el mismo símbolo. Aquí se usa el
-#   segundo sentido (absoluto, USD/BTC); el margen relativo de la malla vive
-#   aparte, en `MARGEN_MALLA_REL`.
+#   RENOMBRADO POR LA v1.2 (Sec. A.1), y este era el renombre peligroso. La v1.1
+#   lo llamaba `ΔS_max`, mismo símbolo que la Sec. 7.4.1 del PDF usa para el
+#   MARGEN PORCENTUAL que fija el ancho del dominio de la malla de Loeper. Son
+#   cantidades de naturaleza distinta —una absoluta en USD/BTC, otra una fracción
+#   adimensional— y confundirlas escala mal γ_0 por varios órdenes de magnitud.
+#   `ΔS_max` queda RESERVADO para el margen de malla del PDF, que vive en
+#   `MARGEN_MALLA_REL`.
 #   Coherencia exigida: el dominio de la malla debe cubrir el desplazamiento
-#   esperado, es decir  MARGEN_MALLA_REL · S ≥ ΔS_max. Ver `verificar_dominio_malla`.
+#   esperado, es decir  MARGEN_MALLA_REL · S ≥ ΔS_ref. La guarda
+#   `verificar_dominio_malla` se mantiene precisamente para vigilar esa relación.
 #   TODO(calibración demo): debe salir de la distribución real de |S − S_ref|.
-DELTA_S_MAX = 150.0  # [USD/BTC]
+DELTA_S_REF = 150.0  # [USD/BTC]
 
 # Margen relativo del dominio espacial de la malla de Loeper (Sec. 7.4.1).
 #   Unidades: adimensional (fracción de S_k)
@@ -108,11 +118,26 @@ SUMA_Q_MAX = 1.3e5  # [USD]
 C_ESCALA_KAPPA = 100.0  # c   [adimensional]
 C_ESCALA_MU = 100.0  # c'  [adimensional]
 
+# σ_rel — volatilidad relativa de precio por paso del Hilo Rápido.
+#   Unidades: adimensional (fracción de S)
+#   Sección C de la v1.2. Parametriza la varianza de proceso del precio como
+#   RELATIVA en vez de absoluta:  q_S = (σ_rel · S_k)².
+#   Las unidades resultantes son (USD/BTC)², idénticas a las que q_S ya debía
+#   tener, así que el álgebra del filtro no cambia en absoluto. Lo que cambia es
+#   que q_S deja de depender del NIVEL de precio: con q_S fijo, un movimiento de
+#   BTC de 45k a 90k lo deja mal escalado por un factor de 4; con σ_rel fijo se
+#   corrige solo.
+#   [CALIBRAR] debe anclarse a la volatilidad realizada del par por intervalo de
+#   control. El valor de abajo reproduce el q_S = 0.01 anterior a S = 45 000
+#   (sqrt(0.01)/45000 = 2.22e-6), es decir, no cambia el comportamiento actual:
+#   solo lo vuelve invariante al nivel de precio.
+SIGMA_REL = 2.22e-6  # [adimensional]
+
 
 # ==============================================================================
 # 2. CONSTANTES DERIVADAS (Sec. 0.1) — funciones puras de los límites
 # ==============================================================================
-def gamma_0(S: float, i_max: float = I_MAX, delta_s_max: float = DELTA_S_MAX) -> float:
+def gamma_0(S: float, i_max: float = I_MAX, delta_s_ref: float = DELTA_S_REF) -> float:
     """γ_0 — curvatura del payoff terminal de cobertura.
 
         γ_0 = I_max / (S · ΔS_max)                       [BTC³/USD²]
@@ -138,9 +163,33 @@ def gamma_0(S: float, i_max: float = I_MAX, delta_s_max: float = DELTA_S_MAX) ->
     de control con el precio filtrado S_k. Guardarla como literal reintroduce
     exactamente el error que esta fórmula elimina.
     """
-    if S <= 0.0 or delta_s_max <= 0.0:
-        raise ValueError(f"gamma_0: S y ΔS_max deben ser positivos (S={S}, ΔS_max={delta_s_max})")
-    return i_max / (S * delta_s_max)
+    if S <= 0.0 or delta_s_ref <= 0.0:
+        raise ValueError(f"gamma_0: S y ΔS_max deben ser positivos (S={S}, ΔS_max={delta_s_ref})")
+    return i_max / (S * delta_s_ref)
+
+
+def q_S_relativa(S: float, sigma_rel: float = SIGMA_REL) -> float:
+    """q_S — varianza de proceso del precio, parametrizada de forma RELATIVA.
+
+        q_S = (σ_rel · S)²                                [(USD/BTC)²]
+
+    Sección C de la v1.2 del orden de trabajo. Entra en la diagonal de Q_k de la
+    Sec. 7.3.3 del PDF, en la posición del estado S.
+
+    ⚠ ESTO NO ES UNA ADIMENSIONALIZACIÓN DEL FILTRO, y la distinción importa. Se
+    evaluó y se DESCARTÓ normalizar el EAKF completo: escalar Q y R sin escalar a
+    la vez x, P, z y H no es un cambio de variables sino un cambio de modelo, y
+    lleva el NIS a ~1e11 con Tr(P) colapsando a 1e-10 — el filtro declarando
+    certeza casi perfecta mientras está equivocado. La transformación completa sí
+    sería exacta, pero tampoco mejora el condicionamiento: cond(P₀) queda igual,
+    porque el mal condicionamiento no viene de la escala sino de la asimetría de
+    confianza deliberada de la Sec. 7.3.4 (p_S ≈ 0 contra p_v, p_Rn ≈ 1e6), que es
+    información y no un defecto numérico.
+
+    Aquí solo se reparametriza UNA entrada de Q con las mismas unidades que ya
+    tenía. El álgebra del filtro es idéntica.
+    """
+    return (sigma_rel * S) ** 2
 
 
 def gamma_omega(omega_m_max: float = OMEGA_M_MAX) -> float:
@@ -158,7 +207,7 @@ def gamma_omega(omega_m_max: float = OMEGA_M_MAX) -> float:
     return 1.0 / omega_m_max
 
 
-def gamma_Q(suma_q_max: float = SUMA_Q_MAX, c_max: float = C_MAX) -> float:
+def gamma_Q(suma_q_max: float = SUMA_Q_MAX, k_usd: float = K_USD) -> float:
     """γ_Q — peso de ΣQ en el escalar de expansión ρ_k.
 
         γ_Q = 1 / max( max(ΣQ_T̄), C_max )                 [1/USD]
@@ -172,7 +221,7 @@ def gamma_Q(suma_q_max: float = SUMA_Q_MAX, c_max: float = C_MAX) -> float:
     C_max actúa como piso del denominador durante el arranque en frío, cuando
     todavía no hay historial de volumen.
     """
-    denominador = max(suma_q_max, c_max)
+    denominador = max(suma_q_max, k_usd)
     if denominador <= 0.0:
         raise ValueError("gamma_Q: el denominador max(ΣQ_max, C_max) debe ser positivo")
     return 1.0 / denominador
@@ -257,7 +306,7 @@ class ErrorDimensional(AssertionError):
 
 
 def verificar_cobertura_acotada(
-    S: float, g0: float, delta_s_max: float = DELTA_S_MAX, i_max: float = I_MAX,
+    S: float, g0: float, delta_s_ref: float = DELTA_S_REF, i_max: float = I_MAX,
     tolerancia: float = 1e-6,
 ) -> None:
     """Guarda 1 (Sec. 0.5): la cobertura no puede exceder el límite de inventario.
@@ -267,14 +316,14 @@ def verificar_cobertura_acotada(
     Por construcción de `gamma_0` esto es una IGUALDAD, así que la guarda detecta
     que alguien reintrodujo un γ_0 literal o lo escaló mal.
     """
-    cobertura = S * g0 * delta_s_max
+    cobertura = S * g0 * delta_s_ref
     if cobertura > i_max * (1.0 + tolerancia):
         # Mensajes en ASCII: la consola de Windows (cp1252) no puede codificar
         # letras griegas y un print fallido tumbaría el proceso.
         raise ErrorDimensional(
             f"gamma_0 MAL ESCALADO: la cobertura implicita es {cobertura:.4f} BTC "
             f"contra un limite I_max = {i_max:.4f} BTC "
-            f"(S={S:.2f}, gamma_0={g0:.6e}, dS_max={delta_s_max:.2f}). "
+            f"(S={S:.2f}, gamma_0={g0:.6e}, dS_max={delta_s_ref:.2f}). "
             f"Revisar si gamma_0 quedo con unidades de Delta (BTC^2/USD) en vez de "
             f"Gamma (BTC^3/USD^2) - ver constantes_micelio.gamma_0."
         )
@@ -375,9 +424,9 @@ def resumen_constantes(
         f"  kappa   = c*R_base/W_crit^2      = {kappa(r_base):.6e}  [Ticks^4/BTC^2]",
         f"  mu      = c'*q_base/W_crit^2     = {mu_inventario(q_base_inv):.6e}  [Ticks^4/BTC^2]",
         "--- Limites estructurales (Sec. 0.2) ---",
-        f"  I_max={I_MAX} BTC   C_max={C_MAX:.0f} USD   dS_max={DELTA_S_MAX} USD/BTC",
+        f"  I_max={I_MAX} BTC   C_max={K_USD:.0f} USD   dS_max={DELTA_S_REF} USD/BTC",
         f"  w_m,max={OMEGA_M_MAX:.4e} 1/Ticks   W_crit={OMEGA_CRIT}   SQ_max={SUMA_Q_MAX:.3e} USD",
-        f"  cobertura implicita en dS_max = {S*g0*DELTA_S_MAX:.4f} BTC (tope I_max={I_MAX})",
+        f"  cobertura implicita en dS_max = {S*g0*DELTA_S_REF:.4f} BTC (tope I_max={I_MAX})",
     ]
     for aviso in (
         verificar_nyquist_omega_m(),
@@ -390,7 +439,7 @@ def resumen_constantes(
 
 
 def verificar_dominio_malla(
-    S: float, margen_rel: float = MARGEN_MALLA_REL, delta_s_max: float = DELTA_S_MAX
+    S: float, margen_rel: float = MARGEN_MALLA_REL, delta_s_ref: float = DELTA_S_REF
 ) -> str | None:
     """El dominio de la malla debe cubrir el desplazamiento esperado del nodo de fase.
 
@@ -400,11 +449,11 @@ def verificar_dominio_malla(
     región donde la cobertura es significativa.
     """
     ancho_absoluto = margen_rel * S
-    if ancho_absoluto < delta_s_max:
+    if ancho_absoluto < delta_s_ref:
         return (
             f"El dominio de la malla (+/-{margen_rel:.1%} de S = +/-{ancho_absoluto:.1f} "
             f"USD) NO cubre el desplazamiento maximo esperado respecto al nodo de fase "
-            f"(dS_max = {delta_s_max:.1f} USD). El NMPC interpolaria fuera de la region "
-            f"util. Subir MARGEN_MALLA_REL o bajar DELTA_S_MAX."
+            f"(dS_max = {delta_s_ref:.1f} USD). El NMPC interpolaria fuera de la region "
+            f"util. Subir MARGEN_MALLA_REL o bajar DELTA_S_REF."
         )
     return None
