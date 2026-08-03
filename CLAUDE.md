@@ -11,10 +11,22 @@ IPOPT y qpOASES). No se han validado contra CUDA ni acados.**
 
 ## ESTADO ACTUAL (2026-08-02)
 
-El orden de trabajo de abajo está **ejecutado en su totalidad**. Ver la sección
-"Sesión 2026-08-02" al final para el detalle de qué se corrigió, cómo se verificó, y los
-huecos NUEVOS del PDF que aparecieron al hacerlo. Las secciones intermedias se conservan
-como registro del diagnóstico original — describen el estado *anterior* del código.
+Dos tandas de trabajo aplicadas, en este orden:
+
+1. **Correcciones estructurales** — el orden de trabajo de abajo, ejecutado en su totalidad.
+   Detalle en "Sesión 2026-08-02".
+2. **Fase de calibración** — Sección 0 y Fase 1 de `ORDEN_TRABAJO_CALIBRACION_1.1.md`.
+   Detalle en "Sesión 2026-08-02 (b)" al final. **Esta tanda deja obsoletas varias
+   afirmaciones de la primera**, señaladas donde corresponde.
+
+Las secciones intermedias se conservan como registro del diagnóstico original — describen
+el estado *anterior* del código.
+
+### Archivos
+
+- `Micelio.py` — orquestador (3 procesos).
+- `constantes_micelio.py` — **única** definición de las constantes de acoplamiento.
+- `diagnostico.py` — reporte offline de consistencia del filtro (`python diagnostico.py`).
 
 El entorno de esta sesión solo tenía NumPy: **numba, CasADi y pyarrow no están instalados**.
 Los núcleos que el PDF asigna a CUDA (Sec. 7.4) y a acados (Sec. 7.5) están implementados
@@ -282,7 +294,7 @@ tienen magnitud ni unidades declaradas**. Cada una rompió el sistema en ejecuci
    `f_Loeper = R_base·(1/D_k − 1)`: homogénea con `R_base`, nula sin impacto (Γ→0) y
    divergente en la singularidad — que es el comportamiento que la propia 7.5.2 describe.
 
-### ⚠ ε_burn NO es una constante estática
+### ⚠ ε_burn NO es una constante estática — RESUELTO en la sesión (b) por el criterio NIS
 
 La Sec. 7.1 da el criterio pero no el valor. Medido contra el generador sintético:
 `dTr/dt` vive en ~0.01–0.03 en régimen estacionario y el burn-in cierra en ~215–240 ciclos
@@ -323,9 +335,99 @@ telemetría con los 7 campos incluida `ỹ_k`; sin fugas en memoria compartida a
 - Todos los parámetros marcados `[CALIBRAR]` requieren métricas reales de Mainnet.
 - Sin validar contra CUDA ni acados.
 
+---
+
+## Sesión 2026-08-02 (b) — Fase de calibración
+
+Ejecuta la **Sección 0** y la **Fase 1** de `ORDEN_TRABAJO_CALIBRACION_1.1.md`.
+Las Fases 2 y 3 quedan sin hacer, y por razones del propio documento (ver abajo).
+
+### Sección 0 — las constantes de acoplamiento son fórmulas, no valores
+
+`constantes_micelio.py` es ahora la **única** definición de γ_0, γ_ω, γ_Q, κ y μ. Ninguna
+aparece como literal en `Micelio.py`: el bloque de hot-reloading almacena los **límites
+estructurales** (I_max, C_max, ω_m,max, ΔS_max, Ω_crit, ΣQ_max, c, c') y las derivadas se
+evalúan llamando al módulo.
+
+- `γ_0 = I_max/(S·ΔS_max)` **depende de S**, así que se reevalúa cada ciclo con el precio
+  filtrado. Verificado: la cobertura implícita en ΔS_max da exactamente I_max = 0.5 BTC.
+- `κ` y `μ` se evalúan dentro de `resolver_nmpc` a partir de Ω_crit. Comprobado que la
+  cascada funciona: con Ω_crit = 1, 2 o 4, `R(Ω_crit)` da **101× R_base en los tres casos**.
+  Esto es lo que hace segura la búsqueda de orden cero de la Fase 3.
+- Guardas de la Sec. 0.5 al arranque del Hilo Rápido, ambas probadas contra su fallo.
+- Constantes de ruido (Sec. 0.6) **sin tocar**. La guarda de σ_OU advierte sin corregir.
+
+**Dos colisiones de nombres entre documentos**, ambas documentadas en el módulo:
+`C_max` (BTC en la Sec. 6.2 del PDF, USD en la Sec. 0.2 del orden de trabajo) y `ΔS_max`
+(margen relativo de malla en 7.4.1, desplazamiento absoluto en USD/BTC en 0.2). La segunda
+es peligrosa y tiene guarda propia (`verificar_dominio_malla`).
+
+### Fase 1 — el NIS cambió el veredicto del sistema
+
+`ε_k = ỹᵀS⁻¹ỹ` se calcula en línea y tiene los dos consumos que pide el documento:
+telemetría (el escalar, no la matriz) y la **ventana adaptativa W_k de la Sec. 2.2.1**, que
+nunca se había implementado.
+
+**El burn-in pasa a criterio NIS** (`DIVERGE DEL PDF (Sec. 7.1)` en el código). Esto resuelve
+la advertencia sobre ε_burn de la sesión anterior: el NIS es adimensional y auto-normalizado,
+su banda χ²_m no depende de Δt, ni de ρ_k, ni del régimen.
+
+Y lo primero que hizo fue delatar al criterio viejo. Con 115 s de telemetría real:
+
+```
+NIS medio = 13.93   (teórico 2)        -> SOBRECONFIADO
+legacy dTr/dt: mediana 0.0053          -> racha de 1391 ticks "convergido"
+Ljung-Box y0 / y1 / multivariante      -> RECHAZA BLANCURA en los tres
+```
+
+El criterio de la traza daba el filtro por sano mientras subestimaba su incertidumbre ~7×.
+
+**Fase 2 (ALS) queda bloqueada por su propia compuerta, y es correcto.** Los mocks son
+deterministas: `R_n` es un coseno puro muestreado a 0.5 s y el precio una sinusoide de 40 s
+que un modelo de velocidad constante no puede seguir. Hay *model mismatch* genuino, así que
+correr ALS absorbería el error de modelo dentro de Q. Concuerda con lo que el propio orden de
+trabajo advierte: integrar la cadena EMD → Hilbert es **precondición** para que el NIS
+signifique algo, porque `R_n` entra directo en el vector de medición.
+
+⚠ **Al leer el reporte de `diagnostico.py`, mirar siempre el recorte de transitorio.** Sin
+descartar el arranque en frío, el NIS daba 3333 y la curtosis 3568 por la innovación del
+primer ciclo (`x2 = 0` contra `R_n ≈ 45000`, perfectamente legítima por la Sec. 7.3.4). Con
+recorte automático el veredicto sobrevive, así que es real — pero los tres tests de la Fase 1
+dan falsos positivos sin él.
+
+### Defectos corregidos de paso
+
+- El alias del módulo de constantes colisionaba con `K`, la ganancia de Kalman: Python trata
+  `K` como local en toda la función y las guardas del arranque reventaban con
+  `UnboundLocalError`. Renombrado a `CTE`.
+- **Un `print` fallido podía matar el Hilo Rápido en silencio.** Bajo `spawn` los hijos
+  heredan el handle de stdout del padre; si el consumidor de ese pipe se cierra, el siguiente
+  print lanza `BrokenPipeError` y el supervisor solo ve morir un hijo sin causa. Todo el
+  diagnóstico pasa ahora por `log()`, que nunca propaga. El supervisor además ya dice **qué**
+  proceso murió y con qué exitcode.
+- Los mensajes que se imprimen van en ASCII: la consola de Windows es cp1252 y no puede
+  codificar letras griegas.
+
+### Pendiente tras esta fase
+
+- **Integrar la cadena EMD → Hilbert.** Es la precondición de todo lo demás. Al hacerlo,
+  aplicar la conversión de la Sec. 0.4: el HHT entrega f en **Hz** y el modelo exige
+  **1/Ticks** (`CTE.omega_m_desde_hz`); ojo con que ν se almacena en Ticks/**Años**.
+- Fase 2 (ALS) — bloqueada hasta que Ljung-Box pase.
+- Fase 3 (Ω_crit por búsqueda de orden cero) — necesita datos de Testnet.
+- Marcar en el PDF las Secs. 3.5 y 8.6.1 como superadas por ALS (la telemetría de `ỹ_k` sigue
+  siendo correcta; cambia el método que la consume, no el dato).
+
 ## Convenciones
 
 - Comentarios y nombres de variables en español, consistente con el código y el PDF existentes.
 - Referenciar la sección del PDF en los comentarios al implementar una fórmula.
 - Cualquier suposición que rellene un hueco del PDF debe marcarse explícitamente con
   `# NOTA DE INTERPRETACION:` y describir qué se asumió.
+- Cuando una decisión **contradiga** al PDF (como el NIS sobre ε_burn, o ALS sobre Covariance
+  Matching), no aplicarla en silencio: marcar `# DIVERGE DEL PDF (Sec X.Y):` con la
+  justificación, para poder reconciliar el documento después.
+- Las constantes de acoplamiento se **derivan** en `constantes_micelio.py`, nunca se escriben
+  como literales. Un número mágico reabre el agujero que esas fórmulas cierran.
+- Todo texto que se **imprime** va en ASCII (la consola es cp1252); los comentarios y
+  docstrings sí llevan acentos y símbolos.
