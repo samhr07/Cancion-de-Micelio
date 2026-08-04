@@ -1,0 +1,98 @@
+La forma que propongo
+
+Sobre s = S − S_ref, la ecuación es s̈ = −ω_m²·s, y su discretización exacta es:
+
+𝐴
+𝑎
+𝑟
+𝑚
+=
+[
+cos
+⁡
+(
+𝜔
+Δ
+𝑡
+)
+	
+sin
+⁡
+(
+𝜔
+Δ
+𝑡
+)
+/
+𝜔
+	
+0
+
+
+−
+𝜔
+sin
+⁡
+(
+𝜔
+Δ
+𝑡
+)
+	
+cos
+⁡
+(
+𝜔
+Δ
+𝑡
+)
+	
+0
+
+
+0
+	
+0
+	
+1
+]
+A
+arm
+	​
+
+=
+	​
+
+cos(ωΔt)
+−ωsin(ωΔt)
+0
+	​
+
+sin(ωΔt)/ω
+cos(ωΔt)
+0
+	​
+
+0
+0
+1
+	​
+
+	​
+
+
+Tres propiedades que la hacen preferible:
+
+Sigue siendo lineal. No necesitas EKF ni jacobianos. El filtro no cambia de clase.
+
+Contiene el modelo actual como caso límite. Cuando ω → 0: cos → 1, sin(ωΔt)/ω → Δt, −ω·sin → 0, y queda exactamente [[1, Δt], [0, 1]]. Lo verifiqué numéricamente — la fila ω = 0 da 5.241 y +0.8407, idéntico a velocidad constante. Degrada con gracia por construcción: si el mercado deja de oscilar y ω_m → 0, vuelves solo a tu modelo actual, sin discontinuidad ni caso especial.
+
+Amplitud y fase salen gratis. No hace falta S_max, S_min ni S_desfase: la amplitud es √(s² + (v/ω)²) y la fase atan2(ωs, v), ambas derivadas del estado que el filtro ya mantiene.
+
+Sobre actualizar con los nodos de referencia
+
+Aquí tu instinto también es bueno, pero cuidado con cómo se hace. Cuando S_ref salta en un nodo de fase, la actualización correcta es aditiva sobre el estado:
+
+s ← s + (S_ref_viejo − S_ref_nuevo)
+
+P no se toca. Si en cambio reinicias el estado o reescalas la covarianza, generas una innovación espuria → pico de NIS → la ventana del EMD se contrae a W_min y puede romperse la racha del burn-in, todo sin que pase nada en el mercado. Es la misma trampa que discutimos con normalizar por S_ref.
