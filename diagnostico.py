@@ -76,10 +76,49 @@ def cargar_telemetria(directorio: str = DIR_TELEMETRIA_POR_DEFECTO) -> np.ndarra
             f"o cierralo con Ctrl-C (el cierre volca el bloque parcial)."
         )
 
+    # El directorio acumula corridas de distintas versiones del TELEM_DTYPE, y
+    # `np.concatenate` sobre dtypes estructurados distintos revienta con
+    # DTypePromotionError. Se conserva el esquema MAS COMPLETO y se descartan los
+    # bloques viejos, avisando: mezclarlos rellenando campos ausentes con ceros
+    # seria peor -- un `hay_medicion` inventado a cero borraria todas las
+    # observaciones de esos bloques sin que nadie se enterara.
+    if len({b.dtype.names for b in bloques}) > 1:
+        campos_max = max((b.dtype.names for b in bloques), key=len)
+        completos = [b for b in bloques if b.dtype.names == campos_max]
+        print(
+            f"[AVISO] {len(bloques) - len(completos)} bloque(s) de telemetria con "
+            f"un esquema anterior; se omiten. Se analizan {len(completos)} bloque(s) "
+            f"con los {len(campos_max)} campos actuales."
+        )
+        bloques = completos
+
     datos = np.concatenate(bloques)
     # Se descartan las filas nunca escritas (t_wall == 0) del ultimo bloque parcial.
     datos = datos[datos["t_wall"] > 0]
     return datos[np.argsort(datos["t_wall"])]
+
+
+def solo_observaciones(datos: np.ndarray) -> np.ndarray:
+    """Filas en las que REALMENTE hubo una medicion. v1.3.
+
+    Desde que el filtro corrige una vez por PAQUETE NUEVO y no una vez por ciclo
+    de control (Sec. 7.3, divergencia documentada), la telemetria sigue teniendo
+    una fila por ciclo (~90 Hz) pero la innovacion solo existe cuando llego un
+    paquete. En los demas ciclos y0 e y1 valen cero POR RELLENO.
+
+    ⚠ TODO analisis basado en la innovacion —NIS, Ljung-Box, Shapiro-Wilk, el A/B
+    de la Seccion E— debe correr sobre este subconjunto. Sin filtrar, la serie es
+    ~99 % ceros: rho_1 sale 0.0000, Shapiro rechaza normalidad por la masa
+    puntual en cero, y el veredicto tiene apariencia de dato sin serlo.
+    Medido en la corrida del 2026-08-04: 178 observaciones reales entre 20 000
+    filas de telemetria.
+
+    Compatible con volcados anteriores a la v1.3, que no llevan la bandera: en
+    ese caso todas las filas tenian medicion por construccion.
+    """
+    if "hay_medicion" in datos.dtype.names:
+        return datos[datos["hay_medicion"].astype(int) == 1]
+    return datos
 
 
 # ==============================================================================
@@ -311,8 +350,23 @@ def shapiro_normalidad(serie: np.ndarray, max_muestras: int = 5000, semilla: int
 def generar_reporte(datos: np.ndarray, h: int = 20, descartar: int = -1) -> str:
     L = []
     a = L.append
-    bruto = len(datos)
+    ciclos = len(datos)
     dur = float(datos["t_wall"].max() - datos["t_wall"].min())
+
+    # v1.3: TODO lo que sigue se calcula sobre las filas con medicion real. Ver
+    # `solo_observaciones`: con el filtro corrigiendo por paquete nuevo, la serie
+    # sin filtrar es mayoritariamente ceros de relleno y los tres tests de la
+    # Fase 1 dan resultados con apariencia de dato que no lo son.
+    datos = solo_observaciones(datos)
+    bruto = len(datos)
+    if bruto < 50:
+        return (
+            "=" * 78
+            + f"\nREPORTE ABORTADO: solo {bruto} observaciones reales en {ciclos} "
+            f"ciclos de control.\nEl feed no esta entregando datos, o esta "
+            f"entregando muy por debajo de la cadencia\ndel Hilo Rapido. Revisar "
+            f"el estado del WebSocket antes de sacar conclusiones.\n" + "=" * 78
+        )
 
     if descartar < 0:
         descartar = detectar_fin_transitorio(datos)
@@ -324,8 +378,15 @@ def generar_reporte(datos: np.ndarray, h: int = 20, descartar: int = -1) -> str:
     a("=" * 78)
     a("REPORTE DE CONSISTENCIA DEL FILTRO - Fase 1 del orden de trabajo")
     a("=" * 78)
-    a(f"Muestras: {bruto}   Duracion: {dur:.1f} s   "
-      f"Cadencia media: {dur/max(1,bruto)*1e3:.2f} ms/ciclo")
+    a(f"Ciclos de control: {ciclos}   Duracion: {dur:.1f} s   "
+      f"Cadencia media: {dur/max(1,ciclos)*1e3:.2f} ms/ciclo")
+    a(f"OBSERVACIONES REALES: {bruto} ({bruto/max(1,ciclos):.2%} de los ciclos), "
+      f"o sea {bruto/max(1e-9,dur):.2f} mediciones/s.")
+    if bruto / max(1, ciclos) < 0.05:
+        a("  [!] Menos del 5% de los ciclos traen medicion. El filtro PREDICE mucho")
+        a("      y CORRIGE poco, asi que P crece bastante entre observaciones y el")
+        a("      NIS saldra bajo por construccion. No es un filtro conservador: es")
+        a("      un feed lento. Mirar el estado del WebSocket antes que las matrices.")
     if descartar:
         a(f"Transitorio de arranque descartado: {descartar} muestras "
           f"({descartar/bruto:.2%}). Analizando {len(datos)}.")
@@ -485,8 +546,160 @@ def generar_reporte(datos: np.ndarray, h: int = 20, descartar: int = -1) -> str:
     else:
         a("  >> Sin evidencia fuerte de colas pesadas: ALS estandar deberia bastar.")
 
+    # ---- SECCIÓN E de la v1.3: reporte comparativo del A/B ----
+    a("")
+    a(reporte_ab(datos, h=h))
+
     a("")
     a("=" * 78)
+    return "\n".join(L)
+
+
+# ==============================================================================
+# SECCIÓN E de ORDEN_TRABAJO_RIESGO_1_3 — protocolo A/B y regla de decisión
+# ==============================================================================
+def reporte_ab(datos: np.ndarray, h: int = 20) -> str:
+    """Compara el EAKF de control contra el SOMBRA sobre el mismo flujo.
+
+    Regla de decisión de la Sec. E.3, sobre las innovaciones del canal `y0`, con
+    recorte de transitorio y leyendo la MEDIANA del NIS:
+
+      | rho_1(y0) del armonico < 0.20 Y menor que el de velocidad constante
+      |      -> ADOPTAR A_arm
+      | ambos con rho_1 >= 0.20
+      |      -> no adoptar; el mismatch no es el que creiamos
+      | armonico peor
+      |      -> no adoptar, y VERIFICAR ANTES D.1 y D.2
+
+    ⚠ NO SE USA `y1` PARA ESTA COMPUERTA. Su rho_1 = 0.87 es artefacto del
+    solapamiento de ventanas del EMD (retencion de orden cero: el Hilo Lento
+    publica a 2 Hz y el Rapido corre a ~89 Hz) y no es evidencia sobre `A`. Esto
+    resuelve la pregunta que la v1.2 dejo abierta.
+
+    ⚠ SE LEE LA MEDIANA DEL NIS, NO LA MEDIA. Medido en la v1.2: media 147 contra
+    mediana 4.69, porque la cola es pesada.
+    """
+    L = []
+    a = L.append
+    a("=" * 78)
+    a("SECCION E (v1.3)  PROTOCOLO A/B: A_arm CONTRA VELOCIDAD CONSTANTE")
+    a("=" * 78)
+
+    if "rama_A" not in datos.dtype.names or "y0_sombra" not in datos.dtype.names:
+        a("  Telemetria anterior a la v1.3: sin campos rama_A / *_sombra.")
+        a("  Volver a correr el bot para poder decidir sobre A_arm.")
+        return "\n".join(L)
+
+    # Solo filas con medicion: la innovacion del sombra tambien vale cero por
+    # relleno en los ciclos sin paquete nuevo.
+    datos = solo_observaciones(datos)
+    if len(datos) < 50:
+        a(f"  Solo {len(datos)} observaciones reales: insuficiente para decidir.")
+        return "\n".join(L)
+
+    rama = datos["rama_A"].astype(int)
+    n_arm = int((rama == 1).sum())
+    a(f"  Muestras: {len(datos)} | rama de control armonica en {n_arm} "
+      f"({n_arm/max(1,len(datos)):.1%}), velocidad constante en {len(datos)-n_arm}")
+    a("")
+
+    # El sombra usa SIEMPRE la rama contraria a la de control, asi que las
+    # innovaciones de cada modelo hay que reensamblarlas cruzando por `rama_A`.
+    y0_ctrl, y0_som = datos["y0"], datos["y0_sombra"]
+    y0_arm = np.where(rama == 1, y0_ctrl, y0_som)
+    y0_vc = np.where(rama == 1, y0_som, y0_ctrl)
+    nis_ctrl, nis_som = datos["nis"], datos["nis_sombra"]
+    nis_arm = np.where(rama == 1, nis_ctrl, nis_som)
+    nis_vc = np.where(rama == 1, nis_som, nis_ctrl)
+
+    filas = []
+    for etiqueta, y0s, niss in (
+        ("velocidad constante", y0_vc, nis_vc),
+        ("oscilador armonico", y0_arm, nis_arm),
+    ):
+        lb = ljung_box(y0s, h=h)
+        if "rho1" not in lb:
+            # `ljung_box` devuelve un dict reducido cuando n <= h+1 o la serie es
+            # constante. Sin esta guarda el reporte reventaba con KeyError justo
+            # en el caso que mas interesa diagnosticar: pocas observaciones.
+            a(f"  {etiqueta:<22} {lb.get('veredicto', 'SIN DATOS')} (n={lb['n']})")
+            a("  Insuficiente para decidir sobre A_arm.")
+            return "\n".join(L)
+        finitos = niss[np.isfinite(niss)]
+        mediana = float(np.median(finitos)) if finitos.size else float("nan")
+        media = float(np.mean(finitos)) if finitos.size else float("nan")
+        filas.append((etiqueta, lb, mediana, media))
+        a(f"  {etiqueta:<22} NIS mediana={mediana:8.3f}  (media={media:10.3f}, "
+          f"inflada por cola pesada)")
+        a(f"  {'':<22} rho_1={lb['rho1']:+.4f}  rho_2={lb['rho'][1]:+.4f}  "
+          f"rho_3={lb['rho'][2]:+.4f}  p={lb['p']:.3e}")
+        a(f"  {'':<22} n efectivo={lb['n']}  rho_1 minimo detectable="
+          f"{_rho_minimo_detectable(lb['n'], h):.4f}")
+        a("")
+
+    rho_vc = abs(filas[0][1]["rho1"])
+    rho_arm = abs(filas[1][1]["rho1"])
+    n_obs = filas[0][1]["n"]
+    rho_min = _rho_minimo_detectable(n_obs, h)
+    a("-" * 78)
+    a("REGLA DE DECISION (Sec. E.3), sobre y0 -- NUNCA sobre y1")
+    a("-" * 78)
+
+    # --- Condiciones bajo las que el A/B NO es decidible --------------------
+    # Se comprueban ANTES de aplicar la regla, porque un veredicto emitido sobre
+    # datos que no lo sostienen es peor que no emitir ninguno: se lee igual.
+    duracion_h = (
+        float(datos["t_wall"].max() - datos["t_wall"].min()) / 3600.0
+        if len(datos) > 1
+        else 0.0
+    )
+    tasa = n_obs / max(1e-9, duracion_h * 3600.0)
+    no_decidible = []
+    if duracion_h < 24.0:
+        no_decidible.append(
+            f"la corrida dura {duracion_h:.2f} h y la Sec. E.2 exige >= 24 h "
+            f"continuas, cubriendo las sesiones asiatica, europea y americana"
+        )
+    if tasa < 5.0:
+        no_decidible.append(
+            f"solo {tasa:.2f} mediciones/s contra ~90 Hz de ciclo de control. "
+            f"A_arm propaga el oscilador durante ~{1.0/max(tasa,1e-9):.1f} s entre "
+            f"correcciones, asi que un error del 10 % en omega se acumula mucho "
+            f"mas que en velocidad constante: el A/B mide el FEED, no el modelo"
+        )
+    if max(rho_vc, rho_arm) < rho_min:
+        no_decidible.append(
+            f"ambos rho_1 quedan por debajo del minimo detectable con n={n_obs} "
+            f"({rho_min:.4f}): el rechazo no es distinguible del ruido muestral"
+        )
+    if no_decidible:
+        a("  >> A/B NO DECIDIBLE TODAVIA. Lo que sigue es indicativo, no un veredicto:")
+        for motivo in no_decidible:
+            a(f"     - {motivo}")
+        a("")
+
+    if rho_arm < UMBRAL_RHO_MATERIAL and rho_arm < rho_vc:
+        a(f"  >> ADOPTAR A_arm. |rho_1| baja de {rho_vc:.4f} a {rho_arm:.4f}, por")
+        a(f"     debajo del umbral material {UMBRAL_RHO_MATERIAL:.2f}.")
+        a("     CONSECUENCIA (Sec. E.4): la compuerta de Ljung-Box queda ABIERTA y")
+        a("     la FASE 2 (ALS) se desbloquea. Es la via prevista para atacar")
+        a("     r_S,base y r_EMD, medidos mal por 8x y 161x en la v1.2 y candidatos")
+        a("     numero uno a explicar el NIS residual.")
+    elif rho_vc >= UMBRAL_RHO_MATERIAL and rho_arm >= UMBRAL_RHO_MATERIAL:
+        a(f"  >> NO ADOPTAR. Ambos modelos con |rho_1| >= {UMBRAL_RHO_MATERIAL:.2f} "
+          f"({rho_vc:.4f} y {rho_arm:.4f}).")
+        a("     El mismatch NO es el que creiamos: reabrir el diagnostico antes de")
+        a("     seguir cambiando A.")
+    else:
+        a(f"  >> NO ADOPTAR: el armonico es PEOR ({rho_arm:.4f} contra {rho_vc:.4f}).")
+        a("     >> VERIFICAR ANTES D.1 Y D.2. Un factor 2pi o un factor 125 se ven")
+        a("       EXACTAMENTE asi, y ninguno de los dos da sintoma propio. Correr")
+        a("       `python tests_v13.py` : test_D_trampa_2pi_periodo_implicito es la")
+        a("       unica defensa contra ambos.")
+    a("")
+    a("  Nota: y1 NO entra en esta compuerta. Su rho_1 alto es artefacto del")
+    a("  solapamiento de ventanas del EMD mas retencion de orden cero (Hilo Lento")
+    a("  a 2 Hz contra Hilo Rapido a ~89 Hz), no evidencia sobre A.")
     return "\n".join(L)
 
 
@@ -496,15 +709,34 @@ def main(argv):
     resto = [x for x in argv[1:] if not x.startswith("--")]
     if resto:
         directorio = resto[0]
+    episodio = None
     for x in argv[1:]:
         if x.startswith("--descartar="):
             descartar = int(x.split("=", 1)[1])
+        elif x.startswith("--episodio="):
+            episodio = int(x.split("=", 1)[1])
 
     try:
         datos = cargar_telemetria(directorio)
     except FileNotFoundError as err:
         print(f"[ERROR] {err}")
         return 1
+
+    # Sec. C.5 de la v1.3: los ~30 episodios deben ser separables en el analisis.
+    # Mezclarlos falsearia tanto Ljung-Box como el NIS, porque cada episodio
+    # arranca con su propio transitorio de burn-in.
+    if episodio is not None:
+        if "id_episodio" not in datos.dtype.names:
+            print("[ERROR] telemetria anterior a la v1.3: no lleva id_episodio")
+            return 1
+        mascara = datos["id_episodio"].astype(int) == episodio
+        if not mascara.any():
+            presentes = sorted(set(datos["id_episodio"].astype(int).tolist()))
+            print(f"[ERROR] no hay muestras del episodio {episodio}. Presentes: {presentes}")
+            return 1
+        datos = datos[mascara]
+        print(f"[FILTRO] Episodio {episodio}: {len(datos)} muestras.\n")
+
     print(generar_reporte(datos, descartar=descartar))
     return 0
 

@@ -302,6 +302,41 @@ def colapso_espectral(analiticas, n_prom: int = N_PROMEDIO_TERMINAL) -> float:
     return numerador / denominador
 
 
+def concentracion_espectral(analiticas, n_prom: int = N_PROMEDIO_TERMINAL) -> float:
+    """C ∈ [0,1]: fracción de la energía estructural que aporta la IMF dominante.
+
+    Sec. D.4.2 de ORDEN_TRABAJO_RIESGO_1_3. Es el conmutador que decide si la
+    matriz A del EAKF usa el oscilador armónico o velocidad constante:
+
+        C ≥ C_ON   -> hay UN ciclo dominante nítido; A_arm(ω_ang) tiene sentido
+        C ≤ C_OFF  -> la energía está repartida; ω_ang no describe la dinámica
+
+    Se calcula sobre las mismas energías E_i = A_i² del colapso espectral de la
+    Sec. 2.5 y con la misma exclusión de IMF1 (ruido de spread) y del residuo (sin
+    fase cíclica). Reutilizar ese denominador no es economía: si C se midiera
+    sobre un conjunto de modos distinto al que produce ω_m, estaría autorizando
+    una frecuencia que no describe.
+
+    ⚠ NO USAR C PARA ESCALAR ω. La tentación obvia —"si el ciclo es difuso, oscila
+    menos"— sesga la frecuencia a la baja incluso cuando el ciclo es nítido,
+    porque C nunca llega a 1. La decisión es binaria con histéresis.
+    """
+    if len(analiticas) < 2:
+        return 0.0
+    energias = []
+    for amplitud, _fase, _f in analiticas[1:]:  # [0] es IMF1: ruido de spread
+        k = int(min(max(2, n_prom), len(amplitud)))
+        e = float(np.mean(amplitud[-k:] ** 2))
+        if np.isfinite(e) and e > 0.0:
+            energias.append(e)
+    if not energias:
+        return 0.0
+    total = sum(energias)
+    if total <= 0.0:
+        return 0.0
+    return max(energias) / total
+
+
 def imf_dominante(analiticas, indice: int = -1) -> int:
     """Índice de la IMF estructural con más energía en `indice` (excluye IMF1)."""
     mejor, mejor_e = -1, -1.0
@@ -382,6 +417,9 @@ def analizar_ventana(precios: np.ndarray, dt: float, usar_ar: bool = True) -> di
     vacio = {
         "f_hz": 0.0, "R_n": float(x[-1]) if n else 0.0, "nodo": False,
         "imf_dom_t0": 0.0, "fase": np.zeros(0), "n_imfs": 0, "valido": False,
+        # C = 0 sin descomposición: sin evidencia de ciclo, la conmutación de la
+        # Sec. D.4.2 debe quedarse en velocidad constante, que es la rama segura.
+        "C": 0.0,
     }
     if n < 16:
         return vacio
@@ -430,5 +468,9 @@ def analizar_ventana(precios: np.ndarray, dt: float, usar_ar: bool = True) -> di
         "imf_dom_t0": float(imfs[i_dom][-1]) if i_dom >= 0 else 0.0,
         "fase": fase_dom,
         "n_imfs": len(analiticas),
+        # Concentración espectral para la conmutación de la rama de A (Sec. D.4.2
+        # de la v1.3). Se devuelve aquí y no se recalcula en el Hilo Lento porque
+        # depende de las mismas `analiticas` que ya se descompusieron.
+        "C": float(concentracion_espectral(analiticas)),
         "valido": True,
     }

@@ -76,6 +76,14 @@ import constantes_micelio as CTE
 # Cadena EMD -> Hilbert (Sección 2 del PDF). Prioridad 1 de la v1.2.
 import hht
 
+# --- v1.3: riesgo de cuenta, episodios y modelo oscilatorio -------------------
+import dinamica
+import episodios
+import mercado
+import riesgo
+from episodios import Estado
+from mercado import Modo
+
 # La consola de Windows usa cp1252 y no puede codificar letras griegas. Un print
 # fallido lanzaría UnicodeEncodeError dentro del lazo de control y tumbaría el
 # proceso, así que se degrada a reemplazo en vez de excepción.
@@ -105,7 +113,18 @@ def log(mensaje: str) -> None:
 # 1. ESTRUCTURACIÓN DE BLOQUES LOCK-FREE Y C-TYPES
 # ==============================================================================
 SYMBOL = "BTCUSDT"
-IS_TESTNET = True
+
+# ------------------------------------------------------------------------------
+# MODO TRI-ESTADO (Sec. B.6 de ORDEN_TRABAJO_RIESGO_1_3)
+# ------------------------------------------------------------------------------
+# Sustituye al booleano `IS_TESTNET`, que decidía A LA VEZ tres cosas que deben
+# moverse por separado: el generador de precios, el modelo de λ y el modelo de
+# fills. Con un solo booleano no se puede pedir "precios reales de Mainnet pero
+# sin ejecutar", que es exactamente lo que las Secciones D y E necesitan.
+#
+# Por defecto LECTURA: el modo que no puede tocar la cuenta. Elevar el modo tiene
+# que ser un acto explícito del operador, nunca el valor por omisión.
+MODO = Modo(os.environ.get("MICELIO_MODO", Modo.LECTURA.value).upper())
 
 SEGUNDOS_POR_ANIO = 31_557_600.0  # Año juliano; escala Ticks/s -> Ticks/Año (4.6)
 
@@ -124,6 +143,22 @@ ENV_DTYPE = np.dtype(
         # el resto del bloque estructural: Rápido -> Lento. Al ser un escalar de
         # 8 bytes alineado con un solo escritor, no necesita seqlock.
         ("nis_eps", np.float64),
+        # --- v1.3: estado de cuenta y de episodio, escrito por el Motor de Red ---
+        # El equity viene del ACCOUNT_UPDATE del User Data Stream (Sec. B.5), NO de
+        # un cálculo local: el cálculo local es justo lo que la guarda 6 existe
+        # para desconfiar.
+        ("equity", np.float64),  # [USD] equity de cuenta reportado por el exchange
+        ("id_episodio", np.uint64),  # Sec. C.5: separa los ~30 episodios en el análisis
+        ("causa_halt", np.int8),  # riesgo.CausaHalt vigente (0 = ninguna)
+        # Muestras de telemetría del episodio vigente. Único escritor: el HILO
+        # RÁPIDO, igual que `nis_eps`. Alimenta la compuerta de muestras mínimas
+        # de la Sec. C.3, que vive en el Motor de Red: sin cruzar el dato, esa
+        # compuerta no tendría forma de saber si el episodio dio para algo.
+        ("muestras_episodio", np.uint64),
+        # Latido del orquestador, para detectar una SEGUNDA INSTANCIA (ver
+        # `verificar_instancia_unica`). Escrito por `main()` una vez por segundo.
+        ("latido", np.float64),
+        ("pid_orquestador", np.uint64),
     ]
 )
 
@@ -142,6 +177,14 @@ MICELIO_DTYPE = np.dtype(
         ("delta_S", np.float64),  # ΔS = S - S_ref               [USD/BTC]
         ("vol_sum_Q", np.float64),  # ΣQ del ciclo vigente (6.3)   [USD]
         ("W_k", np.float64),  # Ventana adaptativa del EMD (2.2.1) [muestras]
+        # --- v1.3, Sec. D.2: DOS variables de frecuencia para DOS usos ---
+        # ω_m [1/Ticks] alimenta ρ_k (7.3.3) y c²_vol (4.5) y NO cambia.
+        # ω_ang [rad/s] alimenta A_arm, y SOLO A_arm. Se publican por separado
+        # precisamente para que nadie tenga que convertir en el punto de uso: las
+        # dos trampas de la Sec. D (el 2π y el factor 125) son errores de
+        # conversión en el consumidor, y ambas fallan en silencio.
+        ("w_ang", np.float64),  # ω_ang = 2π·f_hz              [rad/s]
+        ("C_espectral", np.float64),  # Concentración de la IMF dominante [0,1]
     ]
 )
 
@@ -171,6 +214,31 @@ TELEM_DTYPE = np.dtype(
         # es caro e innecesario si el escalar ya se computa en línea.
         ("nis", np.float64),  # ε_k = ỹᵀS⁻¹ỹ  -> diagnóstico de consistencia
         ("dtr_dt", np.float64),  # Criterio legacy de la Sec. 7.1, para contraste
+        # --- v1.3, Sec. C.5 y D.4.3 ---
+        ("id_episodio", np.uint64),  # Separa los ~30 episodios en el análisis
+        ("rama_A", np.int8),  # 0 = velocidad constante, 1 = armónico
+        # --- v1.3, Sec. E.1: el EAKF SOMBRA ---
+        # Corre sobre EL MISMO flujo de mediciones con la otra matriz A y no
+        # alimenta el control. Es la única comparación honesta: dos corridas
+        # distintas verían mercados distintos, y sobre un mercado real el
+        # experimento no se puede repetir.
+        ("y0_sombra", np.float64),
+        ("y1_sombra", np.float64),
+        ("nis_sombra", np.float64),
+        # ⚠ IMPRESCINDIBLE DESDE QUE EL FILTRO CORRIGE POR PAQUETE NUEVO.
+        # La telemetría sigue registrando una fila por CICLO DE CONTROL (~90 Hz),
+        # porque tr_P, x_k y rama_A evolucionan en cada ciclo. Pero la innovación
+        # solo existe cuando llegó un paquete nuevo, y en los demás ciclos vale
+        # cero POR RELLENO, no por acierto del filtro.
+        # Sin esta bandera, Ljung-Box y el NIS se calculan sobre una serie que es
+        # ~99 % ceros: ρ₁ sale 0.0000 y el veredicto del A/B es basura con
+        # apariencia de dato. Medido: 178 innovaciones reales entre 20 000 filas.
+        ("hay_medicion", np.int8),
+        # Entradas de la conmutación de rama (Sec. D.4). Sin ellas, `rama_A` dice
+        # QUÉ rama estuvo activa pero no POR QUÉ, y un chatter no se distingue de
+        # un régimen que cambia de verdad.
+        ("C_espectral", np.float64),
+        ("w_ang", np.float64),
     ]
 )
 
@@ -250,7 +318,43 @@ P_N_BURN = 36  # N             ticks continuos de convergencia  (7.1)
 
 # --- Seccion C de la v1.2: varianza de proceso relativa al precio ---
 P_SIGMA_REL = 37  # σ_rel         q_S = (σ_rel·S_k)²   [adimensional]
-TOTAL_PARAMS = 38
+
+# --- v1.3 Sec. A.2: FILTROS REALES DEL INSTRUMENTO, leídos de exchangeInfo ---
+# ⚠ Estos cuatro slots NO tienen valor por defecto defendible. Antes de la v1.3 el
+# código llamaba `apply_filters(u_c, 1e-5, 1e-5, 10.0, P_spot)` con los cuatro
+# valores inventados: un stepSize de 1e-5 contra el real de 1e-3 hace que el
+# `floor` sea prácticamente la identidad, y entonces NADA en las pruebas revela
+# que el controlador continuo se convierte en un interruptor al llegar al
+# exchange de verdad.
+# Se rellenan desde `mercado.leer_filtros` al arrancar y se refrescan en caliente
+# (Sec. A.2, tarea 2): Binance cambia minNotional y stepSize sin previo aviso.
+P_STEP_SIZE = 38  # stepSize del LOT_SIZE            [BTC]
+P_MIN_QTY = 39  # minQty del LOT_SIZE              [BTC]
+P_MIN_NOTIONAL = 40  # notional del MIN_NOTIONAL        [USDT]
+P_TICK_SIZE = 41  # tickSize del PRICE_FILTER        [USD]
+P_MODO = 42  # Código de mercado.Modo           [0=LECTURA,1=TESTNET,2=MAINNET]
+
+# --- v1.3 Sec. B: capa de riesgo de cuenta ---
+# NO son parámetros del modelo: no aparecen en ninguna ecuación del PDF. Viajan
+# por el bloque de hot-reloading para poder endurecerlos en caliente sin reiniciar
+# —endurecer un límite de riesgo nunca debe exigir parar el bot— pero se DERIVAN
+# de `constantes_micelio`, que sigue siendo su única definición.
+P_NOCIONAL_MAX_ORDEN = 43  # [USD] techo por orden individual        (A.3)
+P_PERDIDA_MAX_EPISODIO = 44  # [USD] drawdown de equity por episodio   (B.2)
+P_APALANCAMIENTO = 45  # [adim]                                  (B.3)
+P_EPS_HOLGURA_POS = 46  # [adim] holgura de la abrazadera sobre I_max
+P_MMR = 47  # maintenance margin rate                 (B.3)
+P_N_ORDENES_MAX_MIN = 48  # guarda 3 de la Sec. B.5
+P_M_RECHAZOS_MAX = 49  # guarda 4
+P_T_CONFIRM_MAX = 50  # guarda 5  [s]
+P_TOL_INV = 51  # guarda 6  [BTC]
+P_OFFSET_RELOJ_MAX = 52  # guarda 7  [s]
+
+# --- v1.3 Sec. D.4.2: conmutación de la rama de A por concentración espectral ---
+P_C_ON = 53  # C_ON   -> entra al armónico
+P_C_OFF = 54  # C_OFF  -> vuelve a velocidad constante (C_OFF < C_ON: histéresis)
+
+TOTAL_PARAMS = 55
 
 # Discretización de la malla de Loeper (Sec. 7.4.1).
 N_S_MALLA = 61  # Impar: garantiza que S_k caiga exactamente en un nodo
@@ -374,7 +478,79 @@ def initialize_default_parameters() -> np.ndarray:
 
     # --- Seccion C de la v1.2: varianza de proceso relativa ---
     params[P_SIGMA_REL] = CTE.SIGMA_REL
+
+    # --- v1.3 Sec. A.2: filtros del instrumento ---
+    # Se dejan en CERO a propósito. No es un valor por defecto: es un centinela.
+    # `cargar_filtros_en_parametros` los rellena leyendo `exchangeInfo`, y las
+    # guardas de arranque abortan si siguen en cero — así, olvidarse de leerlos
+    # falla ruidosamente en vez de operar con un literal inventado.
+    params[P_STEP_SIZE] = 0.0
+    params[P_MIN_QTY] = 0.0
+    params[P_MIN_NOTIONAL] = 0.0
+    params[P_TICK_SIZE] = 0.0
+    params[P_MODO] = mercado.CODIGO_MODO[MODO]
+
+    # --- v1.3 Sec. B: capa de riesgo de cuenta ---
+    params[P_NOCIONAL_MAX_ORDEN] = CTE.NOCIONAL_MAX_ORDEN
+    params[P_PERDIDA_MAX_EPISODIO] = CTE.PERDIDA_MAX_EPISODIO
+    params[P_APALANCAMIENTO] = float(CTE.APALANCAMIENTO)
+    params[P_EPS_HOLGURA_POS] = CTE.EPS_HOLGURA_POSICION
+    params[P_MMR] = mercado.MMR_PRIMER_TRAMO_BTCUSDT * mercado.FACTOR_SEGURIDAD_MMR
+    params[P_N_ORDENES_MAX_MIN] = float(CTE.N_ORDENES_MAX_MIN)
+    params[P_M_RECHAZOS_MAX] = float(CTE.M_RECHAZOS_MAX)
+    params[P_T_CONFIRM_MAX] = CTE.T_CONFIRM_MAX
+    params[P_TOL_INV] = CTE.TOL_INV
+    params[P_OFFSET_RELOJ_MAX] = CTE.OFFSET_RELOJ_MAX
+
+    # --- v1.3 Sec. D.4.2: histéresis de la rama de A ---
+    params[P_C_ON] = CTE.C_ON_ARMONICO
+    params[P_C_OFF] = CTE.C_OFF_ARMONICO
     return params
+
+
+def cargar_filtros_en_parametros(par_arr, modo=None, verboso: bool = True):
+    """Sec. A.2: lee `exchangeInfo` y publica los filtros en el hot-reloading.
+
+    Se leen AMBOS entornos aunque solo se opere en uno. La comparación es lo que
+    delata la discrepancia de granularidad medida el 2026-08-04: Testnet usa
+    stepSize = 0.0001 y Mainnet 0.001, o sea que **Testnet es 10× más fino**.
+    Calibrar el dimensionamiento contra Testnet produciría un sistema que pasa la
+    guarda de resolución en pruebas (476 lotes) y se degrada a un interruptor en
+    producción (47 lotes) — exactamente el fallo que la Sección A previene.
+
+    Devuelve (filtros_del_modo, filtros_de_mainnet). El segundo es el que la
+    guarda de resolución debe usar, sea cual sea el modo vigente.
+    """
+    modo = modo if modo is not None else MODO
+    lecturas = mercado.leer_filtros_ambos_entornos(SYMBOL)
+    for entorno, resultado in lecturas.items():
+        if isinstance(resultado, Exception):
+            log(f"[EXCHANGE] Fallo leyendo exchangeInfo de {entorno.value}: {resultado}")
+
+    f_mainnet = lecturas.get(Modo.MAINNET)
+    if isinstance(f_mainnet, Exception) or f_mainnet is None:
+        raise RuntimeError(
+            "No se pudo leer exchangeInfo de MAINNET. La guarda de resolucion de "
+            "control (Sec. A.3) DEBE evaluarse contra el stepSize de Mainnet, y no "
+            "hay valor por defecto defendible para el. Sin red, no se arranca."
+        )
+
+    # LECTURA comparte instrumento con MAINNET: es el mismo mercado.
+    clave = Modo.MAINNET if modo in (Modo.LECTURA, Modo.MAINNET) else Modo.TESTNET
+    filtros = lecturas.get(clave)
+    if isinstance(filtros, Exception) or filtros is None:
+        raise RuntimeError(f"No se pudo leer exchangeInfo de {clave.value}: {filtros}")
+
+    par_arr[P_STEP_SIZE] = filtros.step_size
+    par_arr[P_MIN_QTY] = filtros.min_qty
+    par_arr[P_MIN_NOTIONAL] = filtros.min_notional
+    par_arr[P_TICK_SIZE] = filtros.tick_size
+
+    if verboso:
+        for resultado in lecturas.values():
+            if not isinstance(resultado, Exception):
+                log("[EXCHANGE] " + resultado.resumen(CTE.PRECIO_REFERENCIA))
+    return filtros, f_mainnet
 
 
 # ==============================================================================
@@ -417,6 +593,59 @@ def allocate_shared_memory(nombre: str, n_bytes: int) -> shared_memory.SharedMem
     return shm
 
 
+PERIODO_LATIDO = 1.0  # [s] cadencia con que el orquestador marca que sigue vivo
+TOLERANCIA_LATIDO = 5.0  # [s] sin latido para dar por muerta a la otra instancia
+
+
+class ErrorSegundaInstancia(RuntimeError):
+    """Ya hay un Micelio vivo sobre estos mismos bloques de memoria compartida."""
+
+
+def verificar_instancia_unica(nombre_shm: str = "shm_ent") -> None:
+    """Impide que dos bots compartan silenciosamente la memoria. v1.3.
+
+    ⚠ DEFECTO REAL, ENCONTRADO EN EJECUCIÓN EL 2026-08-04. La recuperación de
+    bloques huérfanos que la v1.2 añadió para Windows (donde `unlink()` es un
+    no-op) tiene un efecto de segundo orden que no se vio entonces: si el bloque
+    existe porque **hay otro Micelio VIVO**, la segunda instancia se ADJUNTA a él
+    en vez de fallar. Entonces dos Hilos Lentos escriben el mismo `shm_mic` bajo
+    el mismo seqlock, dos Hilos Rápidos publican en el mismo Ring Buffer, y los
+    tres procesos de cada bot leen una mezcla de ambos mundos.
+
+    Se manifestó como CHATTER en la conmutación de la rama de A: 294 cambios en
+    10 000 ciclos, permanencia mediana de 0.27 s. Con una sola instancia, sobre el
+    mismo mercado y la misma configuración: **12 cambios en 20 000 ciclos**. El
+    síntoma apuntaba a la histéresis de la Sec. D.4.2 —que estaba bien— y no a la
+    memoria compartida por ningún lado.
+
+    Detección por latido y no por PID: un PID puede reciclarse, y en Windows no
+    hay forma barata y portable de preguntar si un PID concreto sigue siendo el
+    mismo proceso. Un timestamp que se refresca cada segundo no tiene esa
+    ambigüedad — o está fresco, o no lo está.
+    """
+    try:
+        previo = shared_memory.SharedMemory(name=nombre_shm)
+    except FileNotFoundError:
+        return  # No hay bloque: camino limpio
+    try:
+        if previo.size < ENV_DTYPE.itemsize:
+            return  # Bloque de otro esquema; `allocate_shared_memory` lo maneja
+        arr = np.ndarray((1,), dtype=ENV_DTYPE, buffer=previo.buf)
+        latido = float(arr[0]["latido"])
+        pid = int(arr[0]["pid_orquestador"])
+        edad = time.time() - latido
+        if latido > 0.0 and edad < TOLERANCIA_LATIDO:
+            raise ErrorSegundaInstancia(
+                f"Ya hay un Micelio vivo (pid={pid}, ultimo latido hace "
+                f"{edad:.1f} s) usando '{nombre_shm}'. Arrancar un segundo bot "
+                f"haria que ambos escribieran la MISMA memoria compartida y los "
+                f"datos de los dos serian basura silenciosa. Cierra el otro "
+                f"proceso, o espera {TOLERANCIA_LATIDO:.0f} s si ya murio."
+            )
+    finally:
+        previo.close()
+
+
 def escribir_micelio_seqlock(mic_arr, campos: dict) -> None:
     """Escritura atómica por seqlock del bloque estructural (Sec. 7.6.2).
 
@@ -451,6 +680,13 @@ def apply_filters(
 
     Orden correcto: se discretiza con floor y SOLO DESPUÉS se revalidan minQty y
     minNotional, porque el floor puede sacar la orden por debajo del nocional.
+
+    ⚠ v1.3: esta función ya NO es el punto de cuantización del sistema. La cadena
+    de la Sec. B.4 pasa por `riesgo.CapaRiesgo.preparar_orden`, que aplica los
+    clamps de nocional y posición ANTES del floor y los revalida después. Se
+    conserva porque el Hilo Rápido cuantiza para decidir si vale la pena publicar
+    en el Ring Buffer, pero los cuatro filtros llegan ahora del bloque de
+    hot-reloading (leídos de `exchangeInfo`), no como literales.
     """
     if u_raw <= 0.0 or stepSize <= 0.0 or Pspot <= 0.0:
         return 0.0
@@ -879,106 +1115,424 @@ class TokenBucket:
         return True
 
 
-async def exchange_websocket_handler(env_arr, act_arr, par_arr):
-    """Watchdog con reconexión infinita y backoff exponencial (Sec. 8.4.2).
+async def ingesta_mercado(env_arr, modo, estado):
+    """Alimenta el bloque de entorno. Modo LECTURA = feed público REAL de Mainnet.
 
-    El `except` vive DENTRO del `while True`: en la revisión anterior estaba fuera,
-    de modo que el primer TimeoutError marcaba dropout y terminaba la corrutina,
-    dejando al bot ciego para siempre.
+    PRECONDICIÓN de la v1.3: las Secciones D y E se calibran sobre datos reales de
+    Mainnet, no sobre Testnet (libro simulado) ni sobre mocks (los pusimos
+    nosotros, así que no prueban nada sobre el mercado).
+
+    En LECTURA y MAINNET se consume `btcusdt@aggTrade`, que trae precio Y volumen
+    por trade — el volumen es lo que la Sec. 1.1 llama ΣQ y lo que el mock tenía
+    que inventarse.
     """
-    bucket = TokenBucket(capacidad=1200.0, ventana_seg=60.0)
-    retry_count = 0
-    seq_esperada = 1  # Las secuencias emitidas arrancan en 1 (0 = slot vacío)
-    n_ticks = 0
-    inventario = 0.0
-    seq_fill = 0
-    t_origen = time.time()
+    if modo is Modo.TESTNET:
+        await _ingesta_mock(env_arr, estado)
+        return
 
+    # El feed se CONSERVA entre reconexiones del watchdog. Si se reconstruyera en
+    # cada reintento, el contador de estancamientos volvería a cero y el bot
+    # reintentaría eternamente un socket que ya se demostró mudo, sin llegar
+    # nunca a degradar al sondeo REST.
+    feed = estado.get("feed")
+    if feed is None:
+        feed = mercado.FeedPublico(modo, SYMBOL)
+        estado["feed"] = feed
+
+    def al_recibir(tick):
+        estado["n_ticks"] += 1
+        env_arr[0]["P_spot"] = tick.precio
+        # ΣQ en USD: la Sec. 1.1 lo define como volumen transado, y aggTrade lo
+        # entrega en BTC, así que se convierte con el precio del propio trade.
+        env_arr[0]["Q_transado"] += tick.cantidad * tick.precio
+        env_arr[0]["n_ticks"] = estado["n_ticks"]
+        # Reloj del EXCHANGE, no el local: τ_d de la Sec. 6.5 es precisamente la
+        # latencia entre ambos, y usar el local la haría idénticamente cero.
+        env_arr[0]["timestamp"] = tick.ts_evento
+        env_arr[0]["flag_dropout"] = 0
+        estado["ultimo_precio"] = tick.precio
+
+    await feed.escuchar(al_recibir)
+
+
+async def _ingesta_mock(env_arr, estado):
+    """Generador sintético. SOLO para TESTNET mientras no haya credenciales.
+
+    Serie con un modo cíclico dominante más microestructura. NO es ruido blanco a
+    propósito: el modelo de la Sec. 1 supone un mercado que revierte a nodos de
+    precio, y el detector de nodos de fase (Sec. 2.6) necesita una señal con ciclo
+    real. Con ruido blanco puro el nodo dispara en casi todos los ticks, ΣQ se
+    reinicia sin parar y el burn-in nunca alcanza la banda muerta.
+
+    ⚠ NO USAR EN MAINNET, y tampoco para concluir nada sobre el modelo: la
+    Sec. E.2 exige Modo LECTURA sobre Mainnet porque una comparación de modelos de
+    precio contra una serie que fabricamos nosotros no significa nada.
+    """
+    t_origen = time.time()
+    while True:
+        await asyncio.sleep(0.005)
+        ahora = time.time()
+        estado["n_ticks"] += 1
+        fase = 2.0 * math.pi * (ahora - t_origen) / PERIODO_CICLO_MOCK
+        precio = (
+            PRECIO_BASE_MOCK
+            + AMPLITUD_CICLO_MOCK * math.sin(fase)
+            + random.gauss(0.0, 2.0)
+        )
+        env_arr[0]["P_spot"] = precio
+        env_arr[0]["Q_transado"] += abs(random.gauss(0.0, 1.0)) * 500.0
+        env_arr[0]["n_ticks"] = estado["n_ticks"]
+        env_arr[0]["timestamp"] = ahora
+        env_arr[0]["flag_dropout"] = 0
+        estado["ultimo_precio"] = precio
+
+
+async def vigilancia_reloj(capa, modo, periodo: float = 30.0):
+    """Guarda 7 de la Sec. B.5: |offset| contra `/fapi/v1/time`.
+
+    Corre aparte del lazo de actuación porque su cadencia es tres órdenes de
+    magnitud más lenta y porque un fallo de red aquí no debe frenar las órdenes:
+    un sondeo fallido deja el último offset conocido, que es información vieja
+    pero no falsa.
+    """
     while True:
         try:
-            # --- Ingesta de mercado (peso bajo, prioridad baja) --------------
-            if not await bucket.adquirir(1.0, alta_prioridad=False):
-                await asyncio.sleep(0.01)  # Presión mitigada, yield del event loop
-                continue
+            offset = await mercado.offset_reloj(modo)
+            capa.registrar_offset_reloj(offset)
+        except Exception:
+            pass
+        await asyncio.sleep(periodo)
 
-            # (Aquí iría el `await ws.recv()` real con timeout; el sleep lo simula.)
-            await asyncio.sleep(0.005)
 
-            ahora = time.time()
-            n_ticks += 1
-            # PENDIENTE (mock de Testnet): serie sintética con un modo cíclico
-            # dominante más microestructura. NO es ruido blanco a propósito: el
-            # modelo de la Sec. 1 supone un mercado que revierte a nodos de precio,
-            # y el detector de nodos de fase (Sec. 2.6) necesita una señal con
-            # ciclo real. Con ruido blanco puro el nodo dispara en casi todos los
-            # ticks, ΣQ se reinicia sin parar y el burn-in de la Sec. 7.1 nunca
-            # alcanza la banda muerta. NO USAR EN MAINNET.
-            fase = 2.0 * math.pi * (ahora - t_origen) / PERIODO_CICLO_MOCK
-            env_arr[0]["P_spot"] = (
-                PRECIO_BASE_MOCK
-                + AMPLITUD_CICLO_MOCK * math.sin(fase)
-                + random.gauss(0.0, 2.0)
+async def lazo_actuacion(env_arr, act_arr, par_arr, modo, capa, cuenta, estado):
+    """Consumo del Ring Buffer y CADENA DE LA SEC. B.4 antes de firmar.
+
+    Este es el único punto del sistema por el que una orden puede salir, y vive en
+    el Motor de Red a propósito (Sec. B.4): la capa de riesgo debe poder detener el
+    sistema SIN COOPERACIÓN del Hilo Rápido. Si viviera dentro del NMPC no sería
+    una capa de seguridad, sería parte de lo que debe vigilar.
+    """
+    bucket = TokenBucket(capacidad=1200.0, ventana_seg=60.0)
+    seq_esperada = 1  # Las secuencias emitidas arrancan en 1 (0 = slot vacío)
+    seq_fill = 0
+    n_orden = 0
+
+    while True:
+        await asyncio.sleep(0.005)
+        S = float(env_arr[0]["P_spot"])
+        if S <= 0.0:
+            continue
+
+        # La cuenta de papel se dimensiona con el PRIMER PRECIO REAL, no con un
+        # ancla de referencia: EQUITY_MIN_EPISODIO va con S, y arrancar con un
+        # precio inventado dejaría el episodio mal capitalizado desde el minuto
+        # cero. Solo aplica a LECTURA (Sec. B.5).
+        if cuenta is None and estado.get("modo_lectura"):
+            cuenta = riesgo.CuentaPapel(CTE.equity_min_episodio(S) * 1.10)
+            estado["cuenta"] = cuenta
+            capa.registrar_equity(cuenta.equity_inicial)
+            log(
+                f"[CUENTA] Modo LECTURA: contabilidad de PAPEL sobre precios "
+                f"reales, equity inicial {cuenta.equity_inicial:.0f} USD a "
+                f"S={S:.2f}. NO es ACCOUNT_UPDATE."
             )
-            env_arr[0]["Q_transado"] += abs(random.gauss(0.0, 1.0)) * 500.0
-            env_arr[0]["n_ticks"] = n_ticks
-            env_arr[0]["timestamp"] = ahora
-            env_arr[0]["flag_dropout"] = 0
-            retry_count = 0
 
-            # --- Consumo del Ring Buffer SPSC (Sec. 7.6.2) -------------------
-            # La secuencia es un contador global monótono, no un índice de slot:
-            # antes se comparaba `seq_id > actuator_tail_idx`, lo que mezclaba dos
-            # espacios de numeración distintos y nunca despachaba correctamente.
-            # Detección de sobrepaso (overrun). El Hilo Rápido publica a ~100 Hz
-            # pero el presupuesto de pesos de Binance (Sec. 8.2) solo sostiene del
-            # orden de 1 orden/s, así que el productor LAPEA al consumidor y
-            # sobrescribe slots no consumidos. Sin esta guarda el consumidor queda
-            # esperando para siempre una secuencia que ya no existe y el lazo de
-            # control se rompe en silencio (el inventario deja de actualizarse).
+        # --- Equity y evaluación de las siete guardas (Sec. B.5) -------------
+        if cuenta is not None:
+            capa.registrar_equity(cuenta.equity(S))
+            env_arr[0]["equity"] = capa.equity_actual
+        causa = capa.evaluar(S)
+        env_arr[0]["causa_halt"] = int(causa)
+        if causa != riesgo.CausaHalt.NINGUNA:
+            if not estado.get("halt_reportado"):
+                estado["halt_reportado"] = True
+                log(
+                    f"[HALT] causa={causa.name} ({riesgo.DESCRIPCION_CAUSA[causa]}): "
+                    f"{capa.detalle_halt}"
+                )
+                estado["al_disparar"](causa, capa.detalle_halt)
+            # Semántica del halt (Sec. B.5): CERRAR Y PARAR, no congelar.
+            # Congelar deja exposición abierta sin supervisión.
+            await asyncio.sleep(0.1)
+            continue
+
+        # --- Consumo del Ring Buffer SPSC (Sec. 7.6.2) -----------------------
+        # La secuencia es un contador global monótono, no un índice de slot:
+        # antes se comparaba `seq_id > actuator_tail_idx`, lo que mezclaba dos
+        # espacios de numeración distintos y nunca despachaba correctamente.
+        # Detección de sobrepaso (overrun). El Hilo Rápido publica a ~100 Hz
+        # pero el presupuesto de pesos de Binance (Sec. 8.2) solo sostiene del
+        # orden de 1 orden/s, así que el productor LAPEA al consumidor y
+        # sobrescribe slots no consumidos. Sin esta guarda el consumidor queda
+        # esperando para siempre una secuencia que ya no existe y el lazo de
+        # control se rompe en silencio (el inventario deja de actualizarse).
+        slot = int(seq_esperada % RING_BUFFER_SIZE)
+        seq_slot = int(act_arr[slot]["seq_id"])
+        if seq_slot > seq_esperada:
+            # Sec. 8.2.3: una orden vieja se purga "para evitar que el bot
+            # ejecute operaciones basadas en un estado obsoleto del mercado", y
+            # por el horizonte recedente (Sec. 6.4) solo el U_0 más fresco es
+            # válido. Se resincroniza al ÚLTIMO publicado, no al más antiguo.
+            seq_nueva = int(act_arr["seq_id"].max())
+            descartadas = seq_nueva - seq_esperada
+            seq_esperada = seq_nueva
             slot = int(seq_esperada % RING_BUFFER_SIZE)
             seq_slot = int(act_arr[slot]["seq_id"])
-            if seq_slot > seq_esperada:
-                # Sec. 8.2.3: una orden vieja se purga "para evitar que el bot
-                # ejecute operaciones basadas en un estado obsoleto del mercado", y
-                # por el horizonte recedente (Sec. 6.4) solo el U_0 más fresco es
-                # válido. Se resincroniza al ÚLTIMO publicado, no al más antiguo.
-                seq_nueva = int(act_arr["seq_id"].max())
-                descartadas = seq_nueva - seq_esperada
-                seq_esperada = seq_nueva
-                slot = int(seq_esperada % RING_BUFFER_SIZE)
-                seq_slot = int(act_arr[slot]["seq_id"])
-                if descartadas > 0:
-                    log(
-                        f"[RING] Sobrepaso SPSC: {descartadas} órdenes obsoletas "
-                        f"purgadas; resincronizado en seq={seq_esperada}."
-                    )
+            if descartadas > 0:
+                log(
+                    f"[RING] Sobrepaso SPSC: {descartadas} órdenes obsoletas "
+                    f"purgadas; resincronizado en seq={seq_esperada}."
+                )
 
-            if seq_slot == seq_esperada:
-                u_c = float(act_arr[slot]["u_compra"])
-                u_v = float(act_arr[slot]["u_venta"])
-                seq_esperada += 1
+        if seq_slot != seq_esperada:
+            continue
 
-                if (u_c > 0.0 or u_v > 0.0) and await bucket.adquirir(
-                    20.0, alta_prioridad=True
-                ):
-                    # Sec. 4.5: órdenes IOC; el inventario se actualiza con el
-                    # volumen REALMENTE ejecutado, no con el calculado.
-                    fill_c = u_c * random.uniform(0.8, 1.0) if IS_TESTNET else u_c
-                    fill_v = u_v * random.uniform(0.8, 1.0) if IS_TESTNET else u_v
-                    inventario += fill_c - fill_v
-                    seq_fill += 1
-                    env_arr[0]["inv_confirmado"] = inventario
-                    env_arr[0]["seq_fill"] = seq_fill
+        # --- Paso 1 de la Sec. B.4: leer u del Ring Buffer -------------------
+        u_c_bruto = float(act_arr[slot]["u_compra"])
+        u_v_bruto = float(act_arr[slot]["u_venta"])
+        seq_esperada += 1
 
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            # Señalización de ceguera: el Hilo Rápido anulará K y dejará crecer P.
-            env_arr[0]["flag_dropout"] = 1
-            # τ_reintento,n = τ_base·2ⁿ + U(0, j_max)   (Sec. 8.2.3)
-            base = min(60.0, 0.1 * (2**retry_count))
-            await asyncio.sleep(base + random.uniform(0.0, 0.1))
-            retry_count += 1
+        # --- Pasos 2 a 6: clamps, cuantización y re-validación ---------------
+        u_c, u_v, motivo = capa.preparar_orden(
+            u_c_bruto, u_v_bruto, S, capa.inventario_local
+        )
+        if motivo is riesgo.MotivoNoEnvio.BAJO_RESOLUCION and (
+            capa.n_bajo_resolucion % 100 == 1
+        ):
+            # Una racha de estos es la firma de un tope por orden mal
+            # dimensionado (Sec. A.3), no de un mercado tranquilo.
+            log(
+                f"[RESOLUCION] {capa.n_bajo_resolucion} ordenes anuladas por el "
+                f"floor: u_c={u_c_bruto:.6f} u_v={u_v_bruto:.6f} BTC contra "
+                f"stepSize={capa.filtros.step_size:g} y minNotional="
+                f"{capa.filtros.min_notional:g} USDT a S={S:.2f}."
+            )
+        if motivo is not riesgo.MotivoNoEnvio.ENVIADA:
+            continue
+
+        if not await bucket.adquirir(20.0, alta_prioridad=True):
+            continue
+
+        # --- Paso 7: firmar y enviar -----------------------------------------
+        n_orden += 1
+        id_cliente = f"mic-{estado['id_episodio']:03d}-{n_orden:06d}"
+        capa.registrar_envio(id_cliente)
+
+        if mercado.ejecucion_permitida(modo):
+            # Aquí va la petición firmada. `assert_ejecucion_permitida` es
+            # redundante con el `if` a propósito: es la compuerta dura que hace
+            # IMPOSIBLE —no improbable— que una orden salga en Modo LECTURA, y
+            # debe seguir en pie aunque alguien reordene este bloque.
+            mercado.assert_ejecucion_permitida(modo, "enviar orden")
+            # TODO(credenciales): POST /fapi/v1/order firmado con HMAC. Hasta
+            # entonces TESTNET simula el fill igual que LECTURA, y por eso las
+            # estadisticas de fill de Testnet NO son evidencia sobre calidad de
+            # ejecucion (Sec. B.6): el libro es delgado y erratico, y Testnet
+            # valida PLOMERIA -- firma, filtros, reconciliacion, kill switch.
+            fill_c = u_c * random.uniform(0.8, 1.0)
+            fill_v = u_v * random.uniform(0.8, 1.0)
+        else:
+            # Modo LECTURA: contabilidad de papel sobre precios REALES. No se
+            # abre ningún socket de ejecución ni existe credencial con la que
+            # firmar. Sec. 4.5: órdenes IOC, el inventario se actualiza con el
+            # volumen realmente ejecutado.
+            fill_c, fill_v = u_c, u_v
+
+        inventario = cuenta.ejecutar(fill_c, fill_v, S) if cuenta is not None else 0.0
+        capa.registrar_confirmacion(id_cliente, inventario)
+        # Guarda 6: en LECTURA la "reconciliación" es trivialmente exacta porque
+        # no hay dos contabilidades. Se invoca igualmente para que la ruta esté
+        # ejercitada el día que haya un exchange al otro lado.
+        capa.registrar_reconciliacion(inventario)
+        seq_fill += 1
+        env_arr[0]["inv_confirmado"] = inventario
+        env_arr[0]["seq_fill"] = seq_fill
+
+
+def correr_diagnostico_episodio(id_episodio: int, dir_salida: str) -> bool:
+    """Compuerta 5 de la Sec. C.3: `diagnostico.py` ejecutado y resumen escrito.
+
+    Es lo que convierte el bucle de episodios en un pipeline de datos y no en una
+    tragamonedas. Devuelve False si no se pudo generar, y entonces la compuerta
+    bloquea el reaprovisionamiento — que es exactamente lo que debe pasar: sin
+    diagnóstico, recargar es tirar dinero a ciegas.
+    """
+    try:
+        import diagnostico
+
+        datos = diagnostico.cargar_telemetria(DIR_TELEMETRIA)
+        if "id_episodio" in datos.dtype.names:
+            mascara = datos["id_episodio"].astype(int) == id_episodio
+            if mascara.any():
+                datos = datos[mascara]
+        if len(datos) < 100:
+            return False
+        os.makedirs(dir_salida, exist_ok=True)
+        ruta = os.path.join(dir_salida, f"diagnostico_episodio_{id_episodio:03d}.txt")
+        with open(ruta, "w", encoding="utf-8") as fh:
+            fh.write(diagnostico.generar_reporte(datos))
+        return True
+    except Exception as err:
+        log(f"[DIAGNOSTICO] Episodio {id_episodio}: no se pudo generar ({err}).")
+        return False
+
+
+async def lazo_episodios(env_arr, par_arr, modo, capa, estado, periodo: float = 2.0):
+    """Máquina de episodios de la Sec. C.2, viviendo en el Motor de Red.
+
+    Aquí y no en el orquestador porque la capa de riesgo, la cuenta y la ruta de
+    cierre ya están en este proceso: mover la máquina fuera obligaría a
+    sincronizar el cierre a través de memoria compartida justo en el momento en
+    que menos se puede confiar en el estado.
+    """
+    maquina = estado["maquina"]
+    while True:
+        await asyncio.sleep(periodo)
+        cuenta = estado.get("cuenta")
+        if cuenta is None:
+            continue
+        S = float(env_arr[0]["P_spot"])
+        if S <= 0.0:
+            continue
+
+        if maquina.estado is Estado.ARRANQUE:
+            if maquina.abrir():
+                estado["id_episodio"] = maquina.id_episodio
+                env_arr[0]["id_episodio"] = maquina.id_episodio
+                estado["halt_reportado"] = False
+            continue
+
+        if maquina.estado is Estado.CERRANDO:
+            # Semántica del halt (Sec. B.5): cerrar y parar. La ruta de cierre
+            # reintenta con backoff y jamás reporta éxito sin posición plana.
+            ruta = riesgo.RutaDeCierre(
+                cerrar_fn=lambda pos: cuenta.ejecutar(
+                    max(0.0, -pos), max(0.0, pos), S
+                ),
+                leer_posicion_fn=lambda: cuenta.inventario,
+                alertar_fn=log,
+                dormir_fn=lambda s: None,
+            )
+            try:
+                final = ruta.ejecutar()
+                maquina.al_confirmar_plano(final)
+                log(f"[EPISODIO] Cierre confirmado plano: {final:.6f} BTC.")
+            except riesgo.ErrorDeCierre as err:
+                # No se degrada a "cerrado": queda exposición abierta y hay que
+                # decirlo. La máquina se detiene y exige intervención.
+                maquina.detener(str(err))
+            continue
+
+        if maquina.estado is Estado.CERRADO:
+            muestras = int(env_arr[0]["muestras_episodio"])
+            diag_ok = correr_diagnostico_episodio(
+                maquina.id_episodio, maquina.dir_salida
+            )
+            compuertas, _resumen = maquina.cerrar_y_evaluar(
+                muestras, {"ordenes_enviadas": capa.n_enviadas}, diag_ok
+            )
+            log(f"[EPISODIO] Compuertas C.3: {compuertas}")
+            continue
+
+        if maquina.estado is Estado.REAPROVISIONANDO:
+            maquina.sondear_equity()
+            continue
+
+        if maquina.estado is Estado.DETENIDO:
+            # Terminal y ruidoso. Nunca se sale de aquí por software.
+            await asyncio.sleep(30.0)
+            log(f"[DETENIDO] {maquina.motivo_detencion}")
+
+
+async def exchange_websocket_handler(env_arr, act_arr, par_arr, modo, filtros, cuenta, estado):
+    """Watchdog con reconexión infinita y backoff exponencial (Sec. 8.4.2).
+
+    El `except` vive DENTRO del `while True`: en una revisión anterior estaba
+    fuera, de modo que el primer TimeoutError marcaba dropout y terminaba la
+    corrutina, dejando al bot ciego para siempre.
+
+    v1.3: la ingesta, la actuación y la vigilancia del reloj corren como tareas
+    independientes. Que la ingesta caiga NO debe detener la evaluación de las
+    guardas — al contrario, un feed muerto es justo cuando más falta hace que
+    alguien esté mirando la exposición abierta.
+    """
+    capa = riesgo.CapaRiesgo(
+        filtros,
+        nocional_max_orden=float(par_arr[P_NOCIONAL_MAX_ORDEN]),
+        perdida_max=float(par_arr[P_PERDIDA_MAX_EPISODIO]),
+        n_ordenes_max_min=int(par_arr[P_N_ORDENES_MAX_MIN]),
+        m_rechazos_max=int(par_arr[P_M_RECHAZOS_MAX]),
+        t_confirm_max=float(par_arr[P_T_CONFIRM_MAX]),
+        tol_inv=float(par_arr[P_TOL_INV]),
+        offset_reloj_max=float(par_arr[P_OFFSET_RELOJ_MAX]),
+    )
+    if cuenta is not None:
+        capa.registrar_equity(cuenta.equity_inicial)
+    estado["capa"] = capa
+
+    # --- Máquina de episodios (Sec. C) --------------------------------------
+    def al_reiniciar(id_ep, equity_inicio):
+        """Reset limpio al ABRIR episodio (Sec. C.5).
+
+        Se hace al abrir y no al cerrar, a propósito: así el estado residual de
+        un cierre fallido tampoco se hereda. Lo que este proceso puede reiniciar
+        —capa de riesgo, cuenta— se reinicia aquí; ΣQ, la racha de burn-in, S_ref
+        y la ventana del EMD viven en otros procesos y se reinician solos al
+        detectar el cambio de `id_episodio` en memoria compartida.
+        """
+        capa.reiniciar(equity_inicio=equity_inicio)
+        estado["muestras_episodio"] = 0
+        env_arr[0]["causa_halt"] = 0
+        log(f"[EPISODIO {id_ep:03d}] Reset limpio; equity inicial {equity_inicio:.2f} USD.")
+
+    estado["maquina"] = episodios.MaquinaEpisodios(
+        reaprovisionador=episodios.ReaprovisionadorManual(log),
+        leer_equity_fn=lambda: (
+            estado["cuenta"].equity(float(env_arr[0]["P_spot"]))
+            if estado.get("cuenta") is not None
+            else 0.0
+        ),
+        precio_fn=lambda: float(env_arr[0]["P_spot"]) or CTE.PRECIO_REFERENCIA,
+        al_reiniciar=al_reiniciar,
+        alertar_fn=log,
+    )
+    estado["al_disparar"] = estado["maquina"].al_disparar_guarda
+
+    tareas = [
+        asyncio.create_task(lazo_actuacion(env_arr, act_arr, par_arr, modo, capa, cuenta, estado)),
+        asyncio.create_task(vigilancia_reloj(capa, modo)),
+        asyncio.create_task(lazo_episodios(env_arr, par_arr, modo, capa, estado)),
+    ]
+    retry_count = 0
+    try:
+        while True:
+            try:
+                await ingesta_mercado(env_arr, modo, estado)
+                retry_count = 0
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:
+                # Señalización de ceguera: el Hilo Rápido anulará K y dejará
+                # crecer P (Sec. 8.3.1).
+                env_arr[0]["flag_dropout"] = 1
+                # τ_reintento,n = τ_base·2ⁿ + U(0, j_max)   (Sec. 8.2.3)
+                base = min(60.0, 0.1 * (2**retry_count))
+                if retry_count % 8 == 0 or isinstance(err, mercado.EstancamientoFeed):
+                    log(f"[WATCHDOG] Feed caido ({type(err).__name__}: {err}); "
+                        f"reintento en {base:.1f} s.")
+                    feed = estado.get("feed")
+                    if feed is not None and feed.modo_degradado:
+                        log(
+                            "[WATCHDOG] Degradando a sondeo REST: el WebSocket de "
+                            "futuros conecta pero no entrega datos desde esta red. "
+                            "Precio y volumen siguen siendo REALES; lo que baja es "
+                            "la resolucion temporal (4 Hz)."
+                        )
+                await asyncio.sleep(base + random.uniform(0.0, 0.1))
+                retry_count += 1
+    finally:
+        for t in tareas:
+            t.cancel()
 
 
 def network_engine_process(shm_env_name, shm_act_name, shm_par_name):
@@ -993,8 +1547,46 @@ def network_engine_process(shm_env_name, shm_act_name, shm_par_name):
     act_arr = np.ndarray((RING_BUFFER_SIZE,), dtype=ACTUATOR_DTYPE, buffer=shm_act.buf)
     par_arr = np.ndarray((TOTAL_PARAMS,), dtype=np.float64, buffer=shm_par.buf)
 
+    modo = mercado.modo_desde_codigo(par_arr[P_MODO])
+    filtros = mercado.FiltrosInstrumento(
+        symbol=SYMBOL,
+        modo=modo,
+        step_size=float(par_arr[P_STEP_SIZE]),
+        min_qty=float(par_arr[P_MIN_QTY]),
+        max_qty=0.0,
+        tick_size=float(par_arr[P_TICK_SIZE]),
+        min_notional=float(par_arr[P_MIN_NOTIONAL]),
+        ts_lectura=time.time(),
+    )
+    if filtros.step_size <= 0.0 or filtros.min_notional <= 0.0:
+        # Centinela de la Sec. A.2: los filtros no se leyeron de exchangeInfo.
+        log(
+            "[FATAL] Los filtros del instrumento siguen a cero: no se leyeron de "
+            "exchangeInfo. No hay valor por defecto defendible (Sec. A.2)."
+        )
+        return
+
+    # Cuenta de papel: solo en LECTURA, donde no hay cuenta que consultar. En
+    # TESTNET/MAINNET el equity DEBE venir del ACCOUNT_UPDATE (Sec. B.5).
+    # Se construye de forma PEREZOSA, en `lazo_actuacion`, con el primer precio
+    # real: dimensionarla aquí exigiría un precio que todavía no existe.
+    cuenta = None
+
+    estado = {
+        "n_ticks": 0,
+        "ultimo_precio": 0.0,
+        "id_episodio": int(env_arr[0]["id_episodio"]) or 1,
+        "halt_reportado": False,
+        "al_disparar": lambda causa, detalle: None,
+        "cuenta": None,
+        "modo_lectura": modo is Modo.LECTURA,
+        "feed": None,
+    }
+
     try:
-        asyncio.run(exchange_websocket_handler(env_arr, act_arr, par_arr))
+        asyncio.run(
+            exchange_websocket_handler(env_arr, act_arr, par_arr, modo, filtros, cuenta, estado)
+        )
     except KeyboardInterrupt:
         pass
     finally:
@@ -1048,7 +1640,25 @@ def fast_thread_process(shm_env_name, shm_mic_name, shm_act_name, shm_par_name):
     I3 = np.eye(3)
     H = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])  # Sec. 7.3.2
     P_k = np.diag([1e-5, 1e6, 1e6])  # Sec. 7.3.4: p_S≈0, p_v,p_Rn≈1e6
-    S0 = float(env_arr[0]["P_spot"]) if env_arr[0]["P_spot"] > 0 else 40000.0
+
+    # v1.3: se ESPERA al primer tick real antes de inicializar el estado.
+    # Antes se caía a un literal de 40 000 USD si el Motor de Red aún no había
+    # publicado, y ese literal contaminaba TODO el arranque: γ_0 ∝ 1/S, la
+    # abrazadera de posición ∝ S, el equity mínimo del episodio, la guarda de
+    # resolución de control y el λS²Γ que se reporta. Con BTC a ~63 800, arrancar
+    # creyendo 40 000 desplazaba el nocional máximo de posición un 36 %.
+    t_espera = time.time()
+    while float(env_arr[0]["P_spot"]) <= 0.0:
+        if (time.time() - t_espera) > 30.0:
+            log(
+                "[FATAL] 30 s sin un solo precio del Motor de Red. Las guardas de "
+                "arranque necesitan un precio REAL: evaluarlas contra un literal "
+                "las vuelve decorativas."
+            )
+            return
+        time.sleep(0.05)
+    S0 = float(env_arr[0]["P_spot"])
+    log(f"[INIT] Primer precio real recibido: S={S0:.2f} USD/BTC. Evaluando guardas.")
     x_k = np.array([[S0], [0.0], [0.0]])
 
     telem_buffer = np.zeros(TELEMETRY_SIZE, dtype=TELEM_DTYPE)
@@ -1062,6 +1672,9 @@ def fast_thread_process(shm_env_name, shm_mic_name, shm_act_name, shm_par_name):
 
     seq_emision = 1  # 0 queda reservado como "slot vacío"
     ultimo_seq_fill = 0
+    ultimo_n_tick = -1  # Novedad del paquete: ver el bloque de correccion
+    ultimo_id_episodio = -1  # Reset limpio entre episodios (Sec. C.5)
+    muestras_episodio = 0  # Compuerta de muestras minimas de la Sec. C.3
     inventario = 0.0
     n_ciclos = 0
     en_singularidad = False
@@ -1073,6 +1686,18 @@ def fast_thread_process(shm_env_name, shm_mic_name, shm_act_name, shm_par_name):
     idx_nis = 0
     n_nis = 0  # Muestras acumuladas; la media no es válida hasta llenar la ventana
     burnt_ticks_traza = 0  # Criterio secundario, solo para contraste
+
+    # --- v1.3 Sec. D: conmutador de la rama de A y filtro SOMBRA -------------
+    conmutador = dinamica.ConmutadorRamaA(
+        c_on=float(par_arr[P_C_ON]), c_off=float(par_arr[P_C_OFF])
+    )
+    # Sec. E.1: el sombra usa SIEMPRE la rama contraria a la que gobierna el
+    # control en el arranque, de modo que la comparación existe desde el primer
+    # ciclo. Comparte x0, P0, z_k, R_k y Q_k con el de producción: cualquier otra
+    # diferencia contaminaría el A/B.
+    sombra = dinamica.EAKFSombra(x_k, P_k, H, usa_armonico=True)
+    coste_sombra_acum = 0.0
+    n_coste_sombra = 0
 
     # --- SECCIÓN 0.5/0.6: guardas dimensionales al arranque ------------------
     # Dos asserts baratos que delatan un error dimensional en el primer ciclo en
@@ -1099,6 +1724,37 @@ def fast_thread_process(shm_env_name, shm_mic_name, shm_act_name, shm_par_name):
         f"alrededor del valor teorico {DIM_MEDICION}."
     )
 
+    # --- v1.3 Secs. A.3 y B.3: guardas de la capa de riesgo al arranque ------
+    # Van aquí, en el Hilo Rápido, junto a las guardas dimensionales de la
+    # Sec. 0.5, aunque la capa de riesgo viva en el Motor de Red: son guardas de
+    # CONFIGURACIÓN, y su sitio es donde el sistema falla más ruidosamente y antes
+    # de que se emita ninguna orden.
+    step_mainnet = float(par_arr[P_STEP_SIZE])
+    CTE.verificar_resolucion_control(
+        S_guarda, step_mainnet, float(par_arr[P_NOCIONAL_MAX_ORDEN])
+    )
+    CTE.verificar_cap_antes_de_liquidacion(
+        S_guarda,
+        float(par_arr[P_APALANCAMIENTO]),
+        float(par_arr[P_PERDIDA_MAX_EPISODIO]),
+        float(par_arr[P_MMR]),
+    )
+    log(CTE.resumen_riesgo(S_guarda, step_mainnet, float(par_arr[P_MMR]), False))
+    # Criterio de aceptación de la Sec. F: λS²Γ reportado al arranque. Si alguien
+    # bajara I_max "para que quepa" en el presupuesto de la cuenta (Sec. B.1),
+    # este número se desploma y el freno de Loeper queda desconectado en silencio.
+    prod_loeper, alcanzable = CTE.loeper_alcanzable(S_guarda, float(par_arr[P_MU_OU]))
+    log(
+        f"[LOEPER] lambda*S^2*gamma_0 = {prod_loeper:.4f} contra un umbral de 1.0 "
+        f"-> freno {'ALCANZABLE' if alcanzable else 'ESTRUCTURALMENTE INALCANZABLE'}"
+    )
+    if not alcanzable:
+        log(
+            "[!] El freno de singularidad de Loeper (Sec. 4.4.3) no puede "
+            "dispararse con esta configuracion. Sospechoso principal: I_max "
+            "recortado como si fuera un parametro de riesgo (Sec. B.1)."
+        )
+
     try:
         while True:
             n_ciclos += 1
@@ -1107,6 +1763,37 @@ def fast_thread_process(shm_env_name, shm_mic_name, shm_act_name, shm_par_name):
             t_ultimo_ciclo = t_ahora
             if dt_ciclo < 1e-4:
                 dt_ciclo = 1e-4  # Guarda contra división por cero cinemática
+
+            # --- Reset limpio de episodio (Sec. C.5) ------------------------
+            # El estado que sobrevive a un halt es fuente segura de confusión al
+            # analizar el episodio siguiente. Cada proceso reinicia LO SUYO al
+            # detectar el cambio de `id_episodio` en memoria compartida; no hace
+            # falta señalización adicional porque el campo ya es monótono y lo
+            # escribe un único productor.
+            id_ep = int(env_arr[0]["id_episodio"])
+            if id_ep != ultimo_id_episodio:
+                ultimo_id_episodio = id_ep
+                if id_ep > 0:
+                    P_k = np.diag([1e-5, 1e6, 1e6])  # Sec. 7.3.4
+                    x_k = np.array([[float(env_arr[0]["P_spot"])], [0.0], [0.0]])
+                    is_burnt_in = False
+                    burnt_ticks = 0
+                    burnt_ticks_traza = 0
+                    buffer_nis[:] = 0.0
+                    idx_nis = 0
+                    n_nis = 0
+                    inventario = 0.0
+                    ultimo_seq_fill = int(env_arr[0]["seq_fill"])
+                    en_singularidad = False
+                    conmutador.rama = dinamica.RAMA_VELOCIDAD_CONSTANTE
+                    sombra = dinamica.EAKFSombra(x_k, P_k, H, usa_armonico=True)
+                    last_tr_P = float(np.trace(P_k))
+                    muestras_episodio = 0
+                    env_arr[0]["muestras_episodio"] = 0
+                    log(
+                        f"[EPISODIO {id_ep:03d}] Hilo Rapido reiniciado: burn-in, "
+                        f"NIS, P, inventario y rama de A a estado inicial."
+                    )
 
             # --- Lectura lock-free del bloque estructural -------------------
             mic, _mic_ok = leer_micelio_seqlock(mic_arr)
@@ -1117,6 +1804,11 @@ def fast_thread_process(shm_env_name, shm_mic_name, shm_act_name, shm_par_name):
             R_n_med = float(mic["R_n"])
             S_ref = float(mic["S_ref"])
             vol_sum_Q = float(mic["vol_sum_Q"])
+            # Sec. D.2: ω_ang viene YA en rad/s desde el Hilo Lento. NO se deriva
+            # aquí de w_m ni de f_hz — ese es exactamente el punto de uso donde
+            # las dos trampas (el 2π y el factor 125) se cuelan sin dar síntoma.
+            w_ang = float(mic["w_ang"])
+            C_esp = float(mic["C_espectral"])
 
             dropout = int(env_arr[0]["flag_dropout"])
 
@@ -1124,8 +1816,15 @@ def fast_thread_process(shm_env_name, shm_mic_name, shm_act_name, shm_par_name):
             # Δt medido por ciclo: el 0.001 hardcodeado en A no coincidía con el
             # sleep de 0.01, y desde Colombia la señal tarda ~300 ms (Sec. 8), así
             # que ningún valor fijo es defendible.
-            A = np.array([[1.0, dt_ciclo, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
-            x_pred = A @ x_k
+            #
+            # v1.3 Sec. D: la matriz de transición deja de ser fija. Con un ciclo
+            # dominante nítido (C >= C_ON) se usa el oscilador armónico, que es la
+            # solución exacta de s̈ = −ω²s; si la energía se reparte (C <= C_OFF) se
+            # vuelve a velocidad constante. La histéresis evita el chatter, y la
+            # rama activa se registra en telemetría para poder condicionar el
+            # análisis del A/B sobre ella (Sec. D.4.3).
+            rama = conmutador.actualizar(C_esp, w_ang)
+            A = conmutador.matriz(dt_ciclo, w_ang)
 
             # Q_k = ρ_k·diag(q_S, q_v, q_Rn),  ρ_k = 1 + γ_ω|ω_m| + γ_Q|ΣQ|  (7.3.3)
             # ρ_k va con ω_m (frecuencia de mercado), NO con Ω (estabilidad).
@@ -1146,7 +1845,20 @@ def fast_thread_process(shm_env_name, shm_mic_name, shm_act_name, shm_par_name):
                 * abs(vol_sum_Q)
             )
             Q_k = rho_k * np.diag([q_S, q_base * 1e-2, q_base])
-            P_pred = A @ P_k @ A.T + Q_k
+
+            # FORMA AFÍN (Sec. D.3): x_pred = x_ref + A·(x_k − x_ref), con
+            # x_ref = [S_ref, 0, 0]ᵀ. Conserva x[0] = S ABSOLUTO, así que no hay
+            # que auditar a los consumidores (q_S = (σ_rel·S)², γ_0(S), el centro
+            # de la malla de Loeper, z₀ = P_spot, la telemetría, el NMPC).
+            # Y el manejo de nodos de fase sale gratis: cuando S_ref salta, el
+            # offset se aplica en la predicción siguiente sin discontinuidad en x
+            # ni en P — se elimina la cascada innovación espuria -> pico de NIS ->
+            # ventana del EMD a W_min -> racha de burn-in rota.
+            # Con la rama de velocidad constante es algebraicamente idéntico a
+            # P_pred = A·P·Aᵀ + Q y x_pred = A·x, porque [1,Δt;0,1] deja invariante
+            # a [S_ref,0,0]ᵀ salvo por el propio offset.
+            S_ref_pred = S_ref if S_ref > 0.0 else float(x_k[0, 0])
+            x_pred, P_pred = dinamica.predecir_afin(A, x_k, P_k, Q_k, S_ref_pred)
 
             innov = np.zeros((2, 1))
 
@@ -1167,7 +1879,62 @@ def fast_thread_process(shm_env_name, shm_mic_name, shm_act_name, shm_par_name):
                 retardo_sensor = max(0.0, t_ahora - ts_paquete)
             paquete_valido = retardo_sensor <= par_arr[P_TAU_MAX]  # Criterio Sec. 6.5
 
-            if dropout == 1 or not paquete_valido:
+            # --- v1.3: NOVEDAD DEL PAQUETE ---------------------------------
+            # DIVERGE DEL PDF (Sec. 7.3): el filtro corrige UNA VEZ POR PAQUETE
+            # NUEVO, no una vez por ciclo de control.
+            #
+            # El Hilo Rápido corre a ~90 Hz y el feed entrega a una cadencia
+            # menor —2 Hz para R_n desde el Hilo Lento, y hasta 1 Hz para el
+            # precio si el WebSocket degrada a sondeo REST. Corrigiendo cada
+            # ciclo, la MISMA medición entra al filtro decenas de veces
+            # seguidas: P se contrae como si hubiera decenas de observaciones
+            # independientes, el filtro se declara mucho más seguro de lo que
+            # está, y la innovación queda autocorrelacionada POR CONSTRUCCIÓN.
+            #
+            # Eso no es una hipótesis: es la explicación medida del ρ₁ = 0.87 de
+            # `y1` que la v1.2 dejó como pregunta abierta para este documento
+            # (retención de orden cero, Hilo Lento a 2 Hz contra Hilo Rápido a
+            # 89 Hz). La Sec. E.3 lo resuelve excluyendo `y1` de la compuerta;
+            # esto lo resuelve en el origen, y además impide que el canal `y0`
+            # herede el mismo artefacto al degradar el feed — lo que habría
+            # contaminado justo la serie sobre la que se decide A_arm.
+            #
+            # Sin paquete nuevo, z_k = ∅ y aplica la Sec. 8.3.1 tal cual: K = 0 y
+            # la incertidumbre crece con Q_k. Es la semántica correcta, no un
+            # apaño: entre dos observaciones el filtro efectivamente no sabe más.
+            n_tick_actual = int(env_arr[0]["n_ticks"])
+            paquete_nuevo = n_tick_actual != ultimo_n_tick
+            ultimo_n_tick = n_tick_actual
+
+            hay_medicion = not (dropout == 1 or not paquete_valido or not paquete_nuevo)
+            if hay_medicion:
+                R_k_ab = np.diag(
+                    [
+                        par_arr[P_R_S_BASE]
+                        * math.exp(par_arr[P_BETA_JITTER] * retardo_sensor),
+                        par_arr[P_R_EMD],
+                    ]
+                )
+                z_k_ab = np.array([[float(env_arr[0]["P_spot"])], [R_n_med]])
+            else:
+                R_k_ab = np.eye(2)
+                z_k_ab = np.zeros((2, 1))
+
+            # ---------- Sec. E.1: EAKF SOMBRA sobre el MISMO flujo -----------
+            # Solo uno alimenta el control; el otro corre en sombra. Es la única
+            # comparación honesta, porque dos corridas distintas verían mercados
+            # distintos y sobre un mercado real el experimento no se repite.
+            # El sombra usa la rama CONTRARIA a la vigente: así el A/B tiene datos
+            # en ambas ramas sin importar cuál esté gobernando.
+            sombra.usa_armonico = rama == dinamica.RAMA_VELOCIDAD_CONSTANTE
+            t_sombra = time.perf_counter()
+            innov_sombra, nis_sombra = sombra.paso(
+                z_k_ab, R_k_ab, Q_k, dt_ciclo, w_ang, S_ref_pred, hay_medicion
+            )
+            coste_sombra_acum += time.perf_counter() - t_sombra
+            n_coste_sombra += 1
+
+            if not hay_medicion:
                 # Sec. 8.3.1: K = 0, la incertidumbre crece con Q_k (z_k = ∅).
                 x_k = x_pred
                 P_k = P_pred
@@ -1178,14 +1945,8 @@ def fast_thread_process(shm_env_name, shm_mic_name, shm_act_name, shm_par_name):
                 eps_nis = float("nan")
             else:
                 # R_eff^(1,1) = r_S,base · e^(β·τ_d)   (Sec. 6.5 / 7.3.3)
-                R_k = np.diag(
-                    [
-                        par_arr[P_R_S_BASE]
-                        * math.exp(par_arr[P_BETA_JITTER] * retardo_sensor),
-                        par_arr[P_R_EMD],
-                    ]
-                )
-                z_k = np.array([[float(env_arr[0]["P_spot"])], [R_n_med]])
+                R_k = R_k_ab
+                z_k = z_k_ab
                 innov = z_k - (H @ x_pred)
 
                 S_cov = H @ P_pred @ H.T + R_k
@@ -1267,6 +2028,24 @@ def fast_thread_process(shm_env_name, shm_mic_name, shm_act_name, shm_par_name):
                         f"dropout={dropout} valido={paquete_valido}"
                     )
 
+            # v1.3 Sec. E.1: sobrecosto del filtro sombra. El criterio de
+            # aceptación exige < 0.3 ms/ciclo contra los 2.2 ms medidos de
+            # Loeper+NMPC; si se dispara, el A/B se está pagando con latencia de
+            # control y hay que replantearlo.
+            if n_ciclos % 1000 == 0 and n_coste_sombra > 0:
+                coste_ms = 1e3 * coste_sombra_acum / n_coste_sombra
+                if w_ang > 0.0:
+                    ciclo = f"w_ang={w_ang:.5f} rad/s (periodo {2*math.pi/w_ang:.1f} s)"
+                else:
+                    ciclo = "sin ciclo dominante"
+                log(
+                    f"[A/B] rama_control={'armonico' if rama else 'vel_const'} "
+                    f"C={C_esp:.3f} {ciclo} conmutaciones="
+                    f"{conmutador.n_conmutaciones} | NIS_control={eps_nis:.3f} "
+                    f"NIS_sombra={nis_sombra:.3f} | sobrecosto_sombra="
+                    f"{coste_ms:.4f} ms/ciclo (max 0.3)"
+                )
+
             # ================= TELEMETRÍA (Sec. 8.6.1) =======================
             reg = telem_buffer[telem_idx]
             reg["t_wall"] = t_ahora
@@ -1280,7 +2059,20 @@ def fast_thread_process(shm_env_name, shm_mic_name, shm_act_name, shm_par_name):
             reg["y1"] = innov[1, 0]
             reg["nis"] = eps_nis  # Escalar, no la matriz S_k (Fase 1.1)
             reg["dtr_dt"] = deriv_tr  # Criterio legacy, para contrastarlo offline
+            # v1.3 Sec. C.5: separa los ~30 episodios en el análisis offline.
+            reg["id_episodio"] = int(env_arr[0]["id_episodio"])
+            # v1.3 Sec. D.4.3: rama activa de A, para condicionar el A/B.
+            reg["rama_A"] = int(rama)
+            # v1.3 Sec. E.1: innovaciones del filtro sombra, mismo flujo.
+            reg["y0_sombra"] = innov_sombra[0, 0]
+            reg["y1_sombra"] = innov_sombra[1, 0]
+            reg["nis_sombra"] = nis_sombra
+            reg["hay_medicion"] = 1 if hay_medicion else 0
+            reg["C_espectral"] = C_esp
+            reg["w_ang"] = w_ang
             telem_idx += 1
+            muestras_episodio += 1
+            env_arr[0]["muestras_episodio"] = muestras_episodio
             if telem_idx >= TELEMETRY_SIZE:
                 # Se delega una COPIA a un hilo de I/O; el ciclo de control no se
                 # detiene y no se pierden datos (antes el buffer se vaciaba sin
@@ -1343,9 +2135,29 @@ def fast_thread_process(shm_env_name, shm_mic_name, shm_act_name, shm_par_name):
                         )
 
                 # Cuantización comercial (Sec. 8.5) antes de publicar la orden.
+                # v1.3 Sec. A.2: los cuatro filtros vienen del bloque de
+                # hot-reloading, leídos de `exchangeInfo`. Antes eran
+                # `apply_filters(u_c, 1e-5, 1e-5, 10.0, P_spot)` — los cuatro
+                # valores inventados, y los cuatro equivocados por órdenes de
+                # magnitud contra los reales (0.001 / 0.001 / 50 / 0.10).
+                # Esta cuantización es solo un pre-filtro para no llenar el Ring
+                # Buffer de órdenes que morirán en el floor; la cadena vinculante
+                # es la de la Sec. B.4, en el Motor de Red.
                 P_spot = float(env_arr[0]["P_spot"])
-                u_c_q = apply_filters(u_c, 1e-5, 1e-5, 10.0, P_spot)
-                u_v_q = apply_filters(u_v, 1e-5, 1e-5, 10.0, P_spot)
+                u_c_q = apply_filters(
+                    u_c,
+                    par_arr[P_STEP_SIZE],
+                    par_arr[P_MIN_QTY],
+                    par_arr[P_MIN_NOTIONAL],
+                    P_spot,
+                )
+                u_v_q = apply_filters(
+                    u_v,
+                    par_arr[P_STEP_SIZE],
+                    par_arr[P_MIN_QTY],
+                    par_arr[P_MIN_NOTIONAL],
+                    P_spot,
+                )
 
                 if u_c_q > 0.0 or u_v_q > 0.0:
                     slot = int(seq_emision % RING_BUFFER_SIZE)
@@ -1386,6 +2198,7 @@ def slow_thread_process(shm_env_name, shm_mic_name, shm_par_name):
     mic_arr = np.ndarray((1,), dtype=MICELIO_DTYPE, buffer=shm_mic.buf)
     par_arr = np.ndarray((TOTAL_PARAMS,), dtype=np.float64, buffer=shm_par.buf)
 
+    modo = mercado.modo_desde_codigo(par_arr[P_MODO])
     lam_ruido = float(par_arr[P_MU_OU])  # Arranca en la media: evita transitorio
     t_ultimo = time.time()
 
@@ -1403,6 +2216,10 @@ def slow_thread_process(shm_env_name, shm_mic_name, shm_par_name):
     w_m = 0.0  # [1/Ticks] hasta que el HHT produzca la primera estimación
     R_n = 0.0  # [USD/BTC] residuo macro de la EMD
     f_hz_actual = 0.0  # Frecuencia dominante en Hz, para el refractario
+    # --- v1.3 Sec. D: frecuencia angular y concentración espectral ---
+    f_hz_ema = 0.0  # f suavizada por EMA (Sec. D.4.1), antes de derivar ω_ang
+    w_ang = 0.0  # [rad/s] = 2π·f_hz_ema. SOLO para A_arm (Sec. D.2)
+    C_espectral = 0.0  # Fracción de energía de la IMF dominante, [0,1]
 
     # Historia para las derivadas respecto a T̄ de la Sec. 1.4
     T_prev = 0.0
@@ -1410,6 +2227,7 @@ def slow_thread_process(shm_env_name, shm_mic_name, shm_par_name):
     w_m_prev = 0.0
     dS_prev = 0.0
     Omega = 0.0
+    ultimo_id_episodio = -1  # Reset limpio entre episodios (Sec. C.5)
 
     try:
         while True:
@@ -1420,6 +2238,32 @@ def slow_thread_process(shm_env_name, shm_mic_name, shm_par_name):
             t_ultimo = t_now
             if dt_sim <= 0.0:
                 dt_sim = PERIODO_HILO_LENTO
+
+            # --- Reset limpio de episodio (Sec. C.5) ------------------------
+            # ΣQ, S_ref y la ventana del EMD son exactamente el estado que el
+            # documento nombra: arrastrarlo de un episodio al siguiente haría que
+            # el nodo de fase y el volumen acumulado vinieran de un mercado que
+            # ya no es el que se está midiendo.
+            id_ep = int(env_arr[0]["id_episodio"])
+            if id_ep != ultimo_id_episodio:
+                ultimo_id_episodio = id_ep
+                if id_ep > 0:
+                    buffer_precios.clear()
+                    t_ultima_muestra = 0.0
+                    S_ref = 0.0
+                    Q_ref = float(env_arr[0]["Q_transado"])
+                    t_ultimo_nodo = 0.0
+                    n_nodos = 0
+                    signo_imf_prev = 0
+                    w_m = 0.0
+                    f_hz_ema = 0.0
+                    w_ang = 0.0
+                    C_espectral = 0.0
+                    R_n = 0.0
+                    log(
+                        f"[EPISODIO {id_ep:03d}] Hilo Lento reiniciado: SigmaQ, "
+                        f"S_ref, ventana del EMD y w_m a estado inicial."
+                    )
 
             S_actual = float(env_arr[0]["P_spot"])
             Q_bruto = float(env_arr[0]["Q_transado"])
@@ -1497,6 +2341,24 @@ def slow_thread_process(shm_env_name, shm_mic_name, shm_par_name):
                     R_n = res_hht["R_n"]  # Residuo REAL de la EMD, no un coseno
                     f_hz_actual = res_hht["f_hz"]
 
+                    # --- v1.3 Sec. D.4.1: EMA sobre f_hz ANTES de derivar ω_ang.
+                    # `A_arm` asciende la frecuencia de modulador de Q a
+                    # DETERMINANTE DE LA DINÁMICA DEL ESTADO: hoy un ω_m ruidoso
+                    # solo ensancha la incertidumbre, con el armónico haría
+                    # ruidosa la transición misma. La mediana sobre las 12
+                    # muestras terminales ya vive en `hht.py`; esta EMA va encima.
+                    f_hz_ema = (
+                        0.7 * f_hz_ema + 0.3 * f_hz_actual
+                        if f_hz_ema > 0.0
+                        else f_hz_actual
+                    )
+                    # Sec. D.1 y D.2: ω_ang [rad/s] = 2π·f_hz, publicada APARTE de
+                    # ω_m [1/Ticks]. Dos variables distintas para dos usos
+                    # distintos, sin conversión en el punto de uso — que es donde
+                    # el 2π y el factor 125 se cuelan sin dar síntoma.
+                    w_ang = dinamica.omega_angular_desde_hz(f_hz_ema)
+                    C_espectral = float(res_hht.get("C", 0.0))
+
             # --- Nodo de fase y ΔS (Sec. 2.6) -------------------------------
             if S_ref <= 0.0:
                 S_ref = S_actual
@@ -1554,7 +2416,18 @@ def slow_thread_process(shm_env_name, shm_mic_name, shm_par_name):
             T_prev, sumQ_prev, w_m_prev, dS_prev = T_actual, sum_Q, w_m, delta_S
 
             # --- λ_sim: fricción sintética (Sec. 8.1.1 / 8.1.2) -------------
-            if IS_TESTNET:
+            # v1.3 Sec. B.6: en TESTNET λ sigue viniendo del proceso OU, y es
+            # correcto — no hay impacto de mercado sobre un libro simulado.
+            #
+            # NOTA DE INTERPRETACION — CONSECUENCIA QUE HAY QUE DEJAR ESCRITA:
+            # **Testnet NO puede calibrar μ_OU, θ_OU, σ_OU, η ni λ_min.** Esas
+            # cinco salen del feed de solo lectura de Mainnet. Si una corrida de
+            # Testnet pareciera "confirmarlas", estaría confirmando el propio
+            # proceso OU que las genera, que es una tautología.
+            # Con I_max intacto (Sec. B.1), λS²Γ se mantiene en rango realista y
+            # el freno de singularidad SÍ se ejercita: una razón más para no
+            # tocar I_max.
+            if modo is Modo.TESTNET:
                 theta = par_arr[P_THETA_OU]
                 mu_OU = par_arr[P_MU_OU]  # Ya no está hardcodeado: viene del bloque
                 sigma = par_arr[P_SIGMA_OU]
@@ -1601,6 +2474,8 @@ def slow_thread_process(shm_env_name, shm_mic_name, shm_par_name):
                     "delta_S": delta_S,
                     "vol_sum_Q": sum_Q,
                     "W_k": float(W_k),
+                    "w_ang": w_ang,
+                    "C_espectral": C_espectral,
                 },
             )
 
@@ -1659,6 +2534,12 @@ def main():
 
     try:
         log("== MICELIO MULTICORE DEPLOY INITIALIZING ==")
+        # ANTES de reservar nada: si hay otro Micelio vivo, esto aborta. Va aquí y
+        # no dentro de `allocate_shared_memory` porque esa función tiene que poder
+        # reciclar bloques huérfanos —su razón de existir en Windows— y la
+        # distinción entre "huérfano" y "de alguien que sigue trabajando" es
+        # justo lo que el latido resuelve.
+        verificar_instancia_unica("shm_ent")
         shm_env = allocate_shared_memory("shm_ent", ENV_DTYPE.itemsize)
         shm_mic = allocate_shared_memory("shm_mic", MICELIO_DTYPE.itemsize)
         # El actuador reserva los 16 slots del Ring Buffer, no uno solo.
@@ -1672,6 +2553,31 @@ def main():
 
         p_array = np.ndarray((TOTAL_PARAMS,), dtype=np.float64, buffer=shm_par.buf)
         p_array[:] = initialize_default_parameters()
+
+        # --- v1.3 Sec. A.2: filtros REALES antes de arrancar nada ------------
+        # Se leen aquí, en el padre, y no en cada hijo: bajo `spawn` cada proceso
+        # pagaría su propia latencia de red y —peor— podrían quedarse con lecturas
+        # distintas si Binance cambiara un filtro entre medias. Una sola lectura,
+        # publicada en el bloque compartido, es lo que garantiza que los tres
+        # procesos operen contra el mismo instrumento.
+        log(f"== MODO DE OPERACION: {MODO.value} ==")
+        if MODO is Modo.LECTURA:
+            log(
+                "   Feed publico REAL de Mainnet. Sin credenciales cargadas: la "
+                "ejecucion es fisicamente imposible (precondicion de la v1.3)."
+            )
+        filtros, filtros_mainnet = cargar_filtros_en_parametros(p_array, MODO)
+        # ⚠ La guarda de resolucion se evalua contra el stepSize de MAINNET sea
+        # cual sea el modo: Testnet es 10x mas fino y dejaria pasar una
+        # configuracion que en produccion degrada el NMPC a un interruptor.
+        p_array[P_STEP_SIZE] = max(filtros.step_size, filtros_mainnet.step_size)
+        if filtros.step_size != filtros_mainnet.step_size:
+            log(
+                f"[EXCHANGE] stepSize de {MODO.value} ({filtros.step_size:g}) difiere "
+                f"del de MAINNET ({filtros_mainnet.step_size:g}). Se publica el mas "
+                f"GRUESO para que la guarda de resolucion (Sec. A.3) y la "
+                f"cuantizacion sean conservadoras contra produccion."
+            )
 
         p1 = mp.Process(
             target=network_engine_process, args=("shm_ent", "shm_act", "shm_par")
@@ -1688,8 +2594,13 @@ def main():
             pr.start()
 
         nombres = {id(p1): "Motor de Red", id(p2): "Hilo Rapido", id(p3): "Hilo Lento"}
+        env_latido = np.ndarray((1,), dtype=ENV_DTYPE, buffer=shm_env.buf)
+        env_latido[0]["pid_orquestador"] = os.getpid()
         while True:
-            time.sleep(1.0)
+            # Latido: marca que esta instancia sigue viva, para que un segundo
+            # arranque se niegue en vez de compartir la memoria en silencio.
+            env_latido[0]["latido"] = time.time()
+            time.sleep(PERIODO_LATIDO)
             muertos = [pr for pr in procesos if not pr.is_alive()]
             if muertos:
                 for pr in muertos:
@@ -1701,6 +2612,12 @@ def main():
 
     except KeyboardInterrupt:
         pass
+    except ErrorSegundaInstancia as err:
+        # No se limpia la memoria compartida: es de la OTRA instancia, que sigue
+        # trabajando. Liberarla aquí sería exactamente el daño que se evita.
+        log(f"[ABORTADO] {err}")
+        cerrado.set()
+        return
     except Exception as err:
         log(f"[FATAL ORQUESTADOR]: {err}")
     finally:

@@ -37,3 +37,6 @@ telem_*.npy
 .idea/
 Thumbs.db
 desktop.ini
+
+# Resumenes y diagnosticos por episodio (Sec. C.5): se regeneran en cada corrida
+episodios/

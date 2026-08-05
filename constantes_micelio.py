@@ -47,7 +47,20 @@ I_MAX = 0.50  # [BTC]
 # Precio de referencia para expresar límites de capital en USD.
 #   Unidades: USD/BTC
 #   No entra en ninguna fórmula del modelo; solo convierte I_MAX a K_USD.
-PRECIO_REFERENCIA = 45_000.0  # [USD/BTC]
+#
+#   ACTUALIZADO POR LA v1.3 (Sec. G). Estaba en 45 000 desde la v1.1, con BTC ya
+#   en ~63 800 (medido el 2026-08-04 contra `/fapi/v1/ticker/price`), lo que dejaba
+#   K_USD corto en ~40 %.
+#   Se comprobó que la corrección NO altera γ_Q: su denominador es
+#   max(ΣQ_max, K_USD) = max(1.3e5, 31 500) = 1.3e5 tanto antes como después, así
+#   que ΣQ_max sigue dominando el max() y γ_Q no se mueve. La corrección importa
+#   igualmente porque K_USD es el piso del denominador durante el arranque en frío,
+#   cuando todavía no hay historial de volumen.
+#   [CALIBRAR EN ENTORNO REAL] Este es un ancla de escala, no una constante física:
+#   se desactualiza sola con el precio de BTC. Debe revisarse cada vez que el precio
+#   se aleje de ella más de ~30 %, o convertirse en un valor dinámico alimentado por
+#   una media móvil larga del feed de LECTURA.
+PRECIO_REFERENCIA = 63_000.0  # [USD/BTC]
 
 # K_USD — capital operativo total.
 #   Unidades: USD
@@ -132,6 +145,174 @@ C_ESCALA_MU = 100.0  # c'  [adimensional]
 #   (sqrt(0.01)/45000 = 2.22e-6), es decir, no cambia el comportamiento actual:
 #   solo lo vuelve invariante al nivel de precio.
 SIGMA_REL = 2.22e-6  # [adimensional]
+
+
+# ==============================================================================
+# 1.bis LÍMITES DE CUENTA (Sec. B.2 de ORDEN_TRABAJO_RIESGO_1_3)
+# ==============================================================================
+# ⚠ ESTAS NO SON CONSTANTES DEL MODELO. No aparecen en ninguna ecuación del PDF.
+# Son una ABRAZADERA EXTERNA que acota lo que el sistema puede hacerle a la
+# cuenta, y su requisito de diseño es que sigan funcionando aunque el modelo esté
+# completamente equivocado. Por eso viven aquí abajo, separadas, y no se mezclan
+# con los límites estructurales de la Sec. 0.2.
+#
+# PRINCIPIO DE SEPARACIÓN (Sec. B.1) — por qué I_MAX no se toca
+# --------------------------------------------------------------
+# Γ = γ_0 exactamente, y γ_0 = I_max/(S·ΔS_ref). Bajar I_max para "que quepa" en
+# el presupuesto de la cuenta baja γ_0 en el mismo factor, baja λS²Γ en el mismo
+# factor, y deja el freno de singularidad de Loeper (Sec. 4.4.3) ESTRUCTURALMENTE
+# INALCANZABLE. Con I_max = 0.5 BTC se tiene λS²Γ ≈ 0.075 contra un umbral de 1;
+# recortar I_max a 0.0016 BTC lo llevaría a ~2.4e-4 y correrías 30 episodios
+# validando un sistema al que le desconectaste uno de los dos mecanismos de
+# seguridad, sin que nada lo reportara.
+# El límite de cuenta es, por tanto, aguas abajo y en otro sitio: en el Motor de
+# Red, después del Ring Buffer y antes de firmar.
+
+NOCIONAL_MAX_ORDEN = 3_000.0  # [USD] techo por orden individual (Sec. A.3)
+PERDIDA_MAX_EPISODIO = 3_000.0  # [USD] drawdown de EQUITY desde el inicio
+APALANCAMIENTO = 5  # [adimensional] atado por la guarda de la Sec. B.3
+EPS_HOLGURA_POSICION = 0.02  # [adimensional] holgura de la abrazadera sobre I_max
+
+# Resolución mínima exigida entre cero y el tope por orden (Sec. A.3). Con menos,
+# la cuantización deja de ser un redondeo y pasa a ser una decisión binaria.
+MIN_LOTES_RESOLUCION = 40
+
+# Guardas 3 a 7 de la Sec. B.5. Son protección contra BUGS, no contra el modelo:
+# en Testnet el fallo probable no es un NMPC malo, es un bucle que dispara órdenes.
+# Son independientes del Token Bucket, que regula pesos de API y no riesgo.
+# [CALIBRAR EN ENTORNO REAL] los cinco umbrales de abajo son órdenes de magnitud
+# razonados, no medidos, y podrían necesitar ser dinámicos: la tasa de órdenes
+# tolerable depende del régimen de volatilidad, y la tolerancia de desincronía
+# depende del tamaño típico de fill del instrumento.
+N_ORDENES_MAX_MIN = 120  # órdenes en ventana de 60 s
+M_RECHAZOS_MAX = 5  # rechazos consecutivos del exchange
+T_CONFIRM_MAX = 10.0  # [s] sin confirmación de una orden en vuelo
+TOL_INV = 0.002  # [BTC] |inv_local - inv_exchange| tolerado
+OFFSET_RELOJ_MAX = 0.500  # [s] contra /fapi/v1/time
+
+# Compuertas de la máquina de episodios (Sec. C.3).
+MAX_EPISODIOS_AUTOMATICOS = 5  # revisión humana obligatoria cada 5
+MUESTRAS_MIN_EPISODIO = 2_000  # un episodio que muere en 30 s es un bug
+ENFRIAMIENTO_EPISODIO = 60.0  # [s] evita bucles apretados
+
+# Conmutación de la rama de A (Sec. D.4.2). C = fracción de energía de la IMF
+# dominante. C_OFF < C_ON mata el chatter por histéresis.
+# [CALIBRAR] sobre la distribución real de C en Mainnet, que es un dato que aún
+# no tenemos: estos dos valores son los sugeridos por el documento, no medidos.
+C_ON_ARMONICO = 0.50
+C_OFF_ARMONICO = 0.35
+
+
+def nocional_max_posicion(
+    S: float, i_max: float = I_MAX, eps: float = EPS_HOLGURA_POSICION
+) -> float:
+    """Abrazadera de exposición abierta, en USD. Sec. B.2.
+
+    Se DERIVA de I_max con una holgura pequeña, deliberadamente. Si se declarara
+    como constante independiente y quedara por debajo de I_max·S, la abrazadera
+    mordería ANTES que las restricciones de caja de la Sec. 6.2 y el NMPC operaría
+    permanentemente contra un límite que no sabe que existe: dejarías de medir el
+    controlador para medir el clamp.
+
+    La holgura del 2 % la convierte en un backstop contra bugs, no en un
+    controlador competidor.
+    """
+    if S <= 0.0:
+        return 0.0
+    return i_max * S * (1.0 + eps)
+
+
+def equity_min_episodio(
+    S: float,
+    apalancamiento: float = APALANCAMIENTO,
+    perdida_max: float = PERDIDA_MAX_EPISODIO,
+) -> float:
+    """Equity mínimo para poder abrir un episodio. Sec. B.3.
+
+        EQUITY_MIN = nocional_max_posicion(S)/APALANCAMIENTO + PERDIDA_MAX_EPISODIO
+
+    Es el margen que la posición máxima consume MÁS el colchón que el kill switch
+    necesita para poder morder. Si el faucet entrega menos, NO SE ARRANCA: se
+    registra el saldo real y se reporta.
+    """
+    if apalancamiento <= 0.0:
+        raise ValueError("equity_min_episodio: el apalancamiento debe ser positivo")
+    return nocional_max_posicion(S) / apalancamiento + perdida_max
+
+
+def verificar_cap_antes_de_liquidacion(
+    S: float,
+    apalancamiento: float = APALANCAMIENTO,
+    perdida_max: float = PERDIDA_MAX_EPISODIO,
+    mmr: float = 0.004,
+) -> None:
+    """Guarda de la Sec. B.3: el tope de pérdida debe morder ANTES de la liquidación.
+
+    Mantener I_max = 0.50 BTC exige ~32 500 USD de nocional a BTC 63 800. A 1x eso
+    requiere el nocional entero de margen, que excede lo que entrega el faucet. Se
+    resuelve con apalancamiento, PERO eso introduce liquidación, que el modelo no
+    contempla en ninguna ecuación del PDF. La única defensa es que el kill switch
+    dispare siempre primero.
+
+    Si esta guarda no se cumple, el kill switch es DECORATIVO: el exchange cierra
+    la posición por su cuenta y el episodio termina por una vía que el sistema ni
+    controla ni registra.
+
+    `mmr` es el maintenance margin rate del primer tramo de BTCUSDT. Debe LEERSE de
+    `leverageBracket` — que es un endpoint firmado, así que en Modo LECTURA no está
+    disponible; `mercado.leer_mmr` devuelve entonces el valor por defecto ya
+    inflado por un factor de seguridad y marca que fue asumido, no leído.
+    """
+    nocional = nocional_max_posicion(S)
+    margen = nocional / apalancamiento
+    colchon_liquidacion = margen - nocional * mmr
+    if perdida_max >= colchon_liquidacion:
+        raise ErrorDimensional(
+            f"PERDIDA_MAX_EPISODIO={perdida_max:.0f} USD no muerde antes de la "
+            f"liquidacion (colchon={colchon_liquidacion:.0f} USD con "
+            f"apalancamiento={apalancamiento:g}x, mmr={mmr:.4f}, "
+            f"nocional={nocional:.0f} USD a S={S:.2f}). El kill switch seria "
+            f"decorativo. Bajar el cap de perdida, bajar el apalancamiento, o "
+            f"subir el equity inicial."
+        )
+
+
+def verificar_resolucion_control(
+    S: float,
+    step_size: float,
+    nocional_max_orden: float = NOCIONAL_MAX_ORDEN,
+    min_lotes: int = MIN_LOTES_RESOLUCION,
+) -> None:
+    """Sec. A.3: la cuantización debe ser un redondeo, no una decisión binaria.
+
+        NOCIONAL_MAX_ORDEN / (stepSize · S) >= min_lotes
+
+    Un controlador continuo con 1.6 lotes de rango efectivo no es un controlador:
+    es un interruptor, y no distinguirías un NMPC bien calibrado de uno roto
+    porque ambos emitirían la misma secuencia de ceros y unos.
+
+    ⚠ EVALUAR SIEMPRE CONTRA EL stepSize DE MAINNET, sea cual sea el modo vigente.
+    Medido el 2026-08-04: Testnet usa stepSize = 0.0001 y Mainnet 0.001, o sea que
+    Testnet es 10× MÁS FINO. Evaluar esta guarda contra Testnet da 476 lotes y pasa
+    cómodamente mientras Mainnet da 47 y va mucho más justa — el sistema
+    funcionaría en pruebas y se degradaría a un interruptor en producción, que es
+    exactamente el fallo que esta guarda existe para prevenir.
+    """
+    if step_size <= 0.0 or S <= 0.0:
+        raise ErrorDimensional(
+            f"verificar_resolucion_control: stepSize={step_size} y S={S} deben ser "
+            f"positivos. Un stepSize no leido de exchangeInfo es un literal "
+            f"inventado (Sec. A.2)."
+        )
+    lotes = nocional_max_orden / (step_size * S)
+    if lotes < min_lotes:
+        raise ErrorDimensional(
+            f"Resolucion de control insuficiente: {lotes:.1f} lotes entre 0 y el "
+            f"tope por orden (minimo {min_lotes}). El NMPC seria un interruptor. "
+            f"nocional_max_orden={nocional_max_orden:.0f} USD, stepSize="
+            f"{step_size:g} BTC, S={S:.2f} -> 1 lote = {step_size*S:.2f} USD. "
+            f"Subir NOCIONAL_MAX_ORDEN a >= {min_lotes*step_size*S:.0f} USD."
+        )
 
 
 # ==============================================================================
@@ -436,6 +617,49 @@ def resumen_constantes(
         if aviso:
             lineas.append(f"  [!] {aviso}")
     return "\n".join(lineas)
+
+
+def resumen_riesgo(S: float, step_size: float, mmr: float, mmr_leido: bool) -> str:
+    """Vuelca la capa de riesgo de cuenta y sus guardas. Sec. B, al arranque.
+
+    Incluye λS²Γ evaluado con γ_0 y μ_OU, que es el criterio de aceptación de la
+    Sec. F: debe reportarse al arranque y ser del orden de 0.075. Si alguien baja
+    I_max "para que quepa", este número se desploma y queda constancia.
+    """
+    g0 = gamma_0(S)
+    nocional = nocional_max_posicion(S)
+    margen = nocional / APALANCAMIENTO
+    colchon = margen - nocional * mmr
+    lotes = NOCIONAL_MAX_ORDEN / (step_size * S) if step_size > 0 else 0.0
+    lineas = [
+        "--- Capa de riesgo de cuenta (Sec. B) - NO son parametros del modelo ---",
+        f"  nocional_max_orden    = {NOCIONAL_MAX_ORDEN:.0f} USD "
+        f"({lotes:.1f} lotes de {step_size*S:.2f} USD; minimo exigido "
+        f"{MIN_LOTES_RESOLUCION})",
+        f"  nocional_max_posicion = {nocional:.0f} USD  (derivado de I_max="
+        f"{I_MAX} BTC con holgura {EPS_HOLGURA_POSICION:.0%})",
+        f"  apalancamiento={APALANCAMIENTO}x -> margen={margen:.0f} USD, "
+        f"colchon de liquidacion={colchon:.0f} USD contra un cap de "
+        f"{PERDIDA_MAX_EPISODIO:.0f} USD ({colchon/max(PERDIDA_MAX_EPISODIO,1e-9):.1f}x)",
+        f"  mmr={mmr:.4f} ({'LEIDO de leverageBracket' if mmr_leido else 'ASUMIDO e inflado por seguridad - sin credenciales'})",
+        f"  equity_min_episodio   = {equity_min_episodio(S):.0f} USD",
+        f"  I_max={I_MAX} BTC SIN TOCAR (Sec. B.1): gamma_0={g0:.6e} BTC^3/USD^2",
+    ]
+    return "\n".join(lineas)
+
+
+def loeper_alcanzable(S: float, lam: float) -> tuple[float, bool]:
+    """λS²γ_0 y si el freno de la Sec. 4.4.3 sigue siendo alcanzable.
+
+    Criterio de aceptación de la Sec. F: "λS²Γ reportado al arranque y del orden
+    de 0.075". El segundo valor es False cuando el producto cae tanto por debajo
+    de 1 que la singularidad se ha vuelto estructuralmente inalcanzable — el
+    síntoma exacto de haber recortado I_max como si fuera un parámetro de riesgo
+    (Sec. B.1). Se toma 1e-2 como suelo: dos órdenes de magnitud de margen contra
+    el umbral es tensión razonable; cuatro es un freno desconectado.
+    """
+    producto = lam * S * S * gamma_0(S)
+    return producto, producto >= 1.0e-2
 
 
 def verificar_dominio_malla(

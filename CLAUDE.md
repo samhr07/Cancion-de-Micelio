@@ -9,9 +9,9 @@ IPOPT y qpOASES). No se han validado contra CUDA ni acados.**
 
 ---
 
-## ESTADO ACTUAL (2026-08-03)
+## ESTADO ACTUAL (2026-08-04)
 
-Dos tandas de trabajo aplicadas, en este orden:
+Cuatro tandas de trabajo aplicadas, en este orden:
 
 1. **Correcciones estructurales** — el orden de trabajo de abajo, ejecutado en su totalidad.
    Detalle en "Sesión 2026-08-02".
@@ -26,16 +26,54 @@ el estado *anterior* del código.
    `ORDEN_TRABAJO_CALIBRACION_1.2.md`. Detalle en "Sesión 2026-08-03". Integra la cadena
    EMD → Hilbert, que era la precondición que bloqueaba las Fases 2 y 3.
 
-**Las Fases 2 y 3 siguen sin ejecutar**, cada una por su compuerta: la 2 porque Ljung-Box
-sigue rechazando blancura (ρ₁ = 0.87 en `y1`), la 3 porque necesita datos de Testnet.
-Ninguna de las dos está bloqueada ya por la ausencia del HHT.
+4. **Riesgo de cuenta y modelo oscilatorio v1.3** — `ORDEN_TRABAJO_RIESGO_1_3.md`, completo:
+   precondición (Modo LECTURA) y Secciones A, B, C, D, E y F. Detalle en
+   "Sesión 2026-08-04". Los 31 criterios de aceptación de la Sección F pasan
+   (`python tests_v13.py`).
+
+**Las Fases 2 y 3 siguen sin ejecutar.** La 3 necesita Testnet. La 2 sigue tras su
+compuerta, pero la v1.3 cambió el terreno: el ρ₁ = 0.87 de `y1` resultó ser artefacto de
+corregir el filtro 90 veces con la misma medición, y eso está corregido en origen (ver
+"El filtro corregía 90 veces por medición").
 
 ### Archivos
 
 - `Micelio.py` — orquestador (3 procesos).
-- `constantes_micelio.py` — **única** definición de las constantes de acoplamiento.
-- `hht.py` — cadena EMD → Hilbert (Sección 2 del PDF).
-- `diagnostico.py` — reporte offline de consistencia del filtro (`python diagnostico.py`).
+- `constantes_micelio.py` — **única** definición de las constantes de acoplamiento y de
+  los límites de cuenta (Sec. 1.bis).
+- `hht.py` — cadena EMD → Hilbert (Sección 2 del PDF) + concentración espectral `C`.
+- `mercado.py` — **v1.3**: tri-estado `MODO`, lectura de `exchangeInfo`, feed público real.
+- `riesgo.py` — **v1.3**: capa de riesgo de cuenta, 7 guardas, ruta de cierre.
+- `episodios.py` — **v1.3**: máquina de episodios y adaptador de faucet.
+- `dinamica.py` — **v1.3**: matrices `A`, conmutador de rama, EAKF sombra.
+- `diagnostico.py` — reporte offline (`python diagnostico.py [--episodio=N]`).
+- `tests_v13.py` — criterios de aceptación de la Sec. F (`python tests_v13.py`).
+
+### Cómo se arranca
+
+```
+python Micelio.py                     # arranca en LECTURA (feed real, sin ejecucion)
+MICELIO_MODO=TESTNET python Micelio.py
+
+python tests_v13.py                   # 33 criterios de aceptacion de la Sec. F
+python tests_v13.py --sin-red         # omite los que consultan exchangeInfo
+
+python diagnostico.py                 # reporte de consistencia + A/B de la Sec. E
+python diagnostico.py --episodio=3    # un solo episodio (Sec. C.5)
+```
+
+`MODO` es tri-estado y su valor por omisión es **LECTURA**. Elevarlo a TESTNET o MAINNET
+tiene que ser un acto explícito del operador: el modo que puede tocar la cuenta nunca es
+el que sale por descuido.
+
+⚠ **No arranques dos bots a la vez.** `verificar_instancia_unica` lo impide desde la v1.3,
+pero conviene saber por qué existe: antes se adjuntaban en silencio a la misma memoria
+compartida y los datos de ambos quedaban inservibles sin ningún error. Si acabas de matar
+uno, espera 5 s (tolerancia del latido) antes de arrancar el siguiente.
+
+⚠ **El HHT tarde ~192 s en dar su primera estimación** (384 muestras a 0.5 s). Hasta
+entonces `C = 0`, `ω_ang = 0` y la rama de `A` es velocidad constante. Una corrida más corta
+que eso no dice nada sobre las Secciones D y E.
 
 ### Nomenclatura (v1.2 Sec. A.1) — dos símbolos renombrados
 
@@ -582,13 +620,425 @@ Las credenciales de la cuenta demo de Binance viven **fuera** del árbol de trab
 - **Fase 2 sigue BLOQUEADA** por la compuerta (ρ₁ = 0.87 ≥ 0.20), y así se deja: el documento
   manda no correr ALS con mismatch. Pero conviene decidir en la v1.3 si el ρ₁ de `y1` debe
   contar para la compuerta, dado que es un artefacto del solapamiento de ventanas.
+  → **RESUELTO en la v1.3, y no como se esperaba.** No era el solapamiento de ventanas: era
+  que el filtro corregía ~45 veces con la misma medición. La Sec. E.3 además excluye `y1` de
+  la compuerta por decisión del documento. Ver "El filtro corregía 90 veces por medición".
 - **`r_S,base` y `r_EMD` están medidos y mal por 8× y 161×.** No se tocaron: la Fase 2 es su
-  dueña. Es el candidato número uno a explicar el NIS residual.
-- Fase 3 (Ω_crit) — necesita Testnet.
+  dueña. Es el candidato número uno a explicar el NIS residual. → **Sigue vigente.**
+- Fase 3 (Ω_crit) — necesita Testnet. → **Sigue vigente.**
 - Sección E (modelo de oscilador armónico en vez de velocidad constante) queda **aparcada por
   decisión explícita** hasta que el bot opere en cuenta demo. `A` se queda como está.
+  → **DESAPARCADA por la v1.3**, que la promueve a su Sección D. `A_arm` está implementada,
+  con conmutación por concentración espectral. El veredicto sobre adoptarla sigue pendiente
+  del A/B.
 - `ω_m,max` en `constantes_micelio` sigue siendo un TODO(HHT): ahora que la cadena está
-  integrada, debe fijarse con el máximo empírico observado.
+  integrada, debe fijarse con el máximo empírico observado. → **Sigue vigente**, pero ya hay
+  material: sobre mercado real se observaron períodos de 33–188 s.
+
+## Sesión 2026-08-04 — Riesgo de cuenta y modelo oscilatorio (v1.3 completa)
+
+Ejecuta `ORDEN_TRABAJO_RIESGO_1_3.md` entero: precondición y Secciones A–F. Es la primera
+tanda en la que el bot corre contra **datos reales de Mainnet**.
+
+### RESULTADOS DE UN VISTAZO
+
+Todo lo de abajo está **medido en ejecución**, no razonado. Cada fila tiene su subsección
+más abajo con el detalle y el porqué.
+
+**Estado de las secciones del orden de trabajo**
+
+| Sección | Estado | Nota |
+|---|---|---|
+| Precondición — Modo LECTURA | ✔ operativo | feed público real de Mainnet, sin credenciales |
+| A — filtros y resolución | ✔ completa | dos cifras del documento corregidas |
+| B — riesgo de cuenta | ✔ completa | las 7 guardas + disparo forzado probado |
+| C — episodios y faucet | ✔ completa | 6 compuertas, `DETENIDO` terminal |
+| D — matriz `A` oscilatoria | ✔ completa | ambas trampas verificadas por test |
+| E — protocolo A/B | ⚠ infraestructura sí, **veredicto no** | el feed degradado lo invalida |
+| F — criterios de aceptación | ✔ **33/33** | `python tests_v13.py` |
+
+**Constantes y guardas al arranque, con S real de 63 920 USD**
+
+| Magnitud | Valor medido | Criterio |
+|---|---|---|
+| `nocional_max_orden` | 3 000 USD = **46.9 lotes** | ≥ 40 exigidos (Sec. A.3) |
+| `nocional_max_posicion` | 32 599 USD | derivado de `I_max`, no declarado |
+| colchón de liquidación a 5× | 6 259 USD contra cap de 3 000 | **2.1×** de holgura |
+| ídem a 20× | 1 366 USD | **rechazado**, como debe |
+| `equity_min_episodio` | 9 520 USD | por debajo, no se arranca |
+| `λS²γ₀` | **0.1065** | freno de Loeper ALCANZABLE |
+| ídem con `I_max` recortado a 0.0016 | 3.4e-4 | freno **desconectado** (contraprueba B.1) |
+| offset de reloj vs `/fapi/v1/time` | **0.279 s** | guarda 7 en 0.500 s |
+
+**Sección D — las dos trampas, medidas con `periodo_implicito`**
+
+| | período que `A_arm` codifica de verdad |
+|---|---|
+| correcto (`ω_ang = 2π·f`) | **40.00 s** (real 40 s, error 0.00 %) |
+| sin el 2π | 251 s |
+| con `ω_m` en 1/Ticks | 5 027 s |
+
+**Efecto de los cuatro defectos corregidos**
+
+| Defecto | Antes | Después |
+|---|---|---|
+| WS mudo + `ticker/price` rezagado | `Tr(P)` → **6e9**, NIS `nan`, 0 correcciones | `Tr(P)` ~10, acotado |
+| corrección por ciclo en vez de por paquete | `y1` con ρ₁ = 0.87 (artefacto) | corrige 1 vez por paquete |
+| dos bots sobre la misma memoria | **294** conmutaciones / 10 000 ciclos | **1** / 40 000 ciclos |
+| `A_arm` sin rama de Taylor | `nan` irreversible en `P` | identidad exacta con `ω=0` |
+
+**Sobrecosto del EAKF sombra:** 0.046–0.10 ms/ciclo contra un presupuesto de 0.3 y los
+2.2 ms de Loeper+NMPC. No es un problema y no lo será.
+
+### Modo LECTURA — la precondición, y lo que destapó
+
+`IS_TESTNET` se sustituye por `MODO ∈ {LECTURA, TESTNET, MAINNET}`. El booleano decidía a
+la vez tres cosas que debían moverse por separado (generador de precios, modelo de λ,
+modelo de fills), y con una sola bandera no se podía pedir "precios reales de Mainnet pero
+sin ejecutar", que es justo lo que las Secciones D y E necesitan.
+
+En LECTURA no hay credenciales cargadas y `assert_ejecucion_permitida` es una **aserción
+dura**, no un `if`: la ejecución tiene que ser imposible, no improbable. La contabilidad es
+de papel (`riesgo.CuentaPapel`) sobre precios reales, y está marcada como tal — **no es el
+`ACCOUNT_UPDATE`** que la Sec. B.5 exige en TESTNET y MAINNET.
+
+### ⚠ El WebSocket de futuros conecta y NO entrega datos
+
+Fallo real, medido, y del peor tipo. Desde esta red `wss://fstream.binance.com` (futuros)
+**completa el handshake y luego no manda ni un solo mensaje**, mientras
+`wss://stream.binance.com:9443` (spot) funciona con normalidad. Sin excepción, sin cierre,
+sin error.
+
+Eso **derrota al watchdog de la Sec. 8.4.2 tal como estaba escrito**, porque ese watchdog
+solo reacciona a excepciones y un socket sano que no habla no levanta ninguna. El efecto
+completo se vio en la primera corrida de verificación: `valido=False` en todos los ciclos,
+NIS en `nan`, burn-in eternamente en racha 0 y **Tr(P) creciendo hasta 6e9** sin una sola
+corrección. El bot se creía en un mercado en calma.
+
+Defensa en dos capas, ambas en `mercado.FeedPublico`:
+1. **Detector de estancamiento**: 12 s sin mensaje sobre un socket conectado levanta
+   `EstancamientoFeed`, que el watchdog sí ve.
+2. **Degradación a sondeo REST** tras dos estancamientos. El objeto del feed se conserva
+   entre reconexiones; si se reconstruyera, el contador volvería a cero y el bot
+   reintentaría eternamente un socket ya demostrado mudo.
+
+### ⚠ El endpoint REST obvio era el equivocado, por 7.6 segundos
+
+Al degradar hay que elegir endpoint. Medido el 2026-08-04, con `τ_d` = (reloj local al
+recibir) − (timestamp del propio dato), que es el retardo del sensor de la Sec. 6.5:
+
+| endpoint | peso | τ_d mediana | volumen |
+|---|---|---|---|
+| `ticker/price` | 1 | **7.64 s** | no |
+| `ticker/bookTicker` | 2 | 1.54 s | no |
+| **`aggTrades`** | 20 | **0.70 s** | **sí** |
+
+`ticker/price` era la elección obvia y es la equivocada: su campo `time` no es la hora del
+servidor sino la del último cambio de precio publicado, y llega con ~7.6 s de rezago.
+Contra el `τ_max = 2 s` de la Sec. 6.5 eso significa **rechazar el 100 % de los paquetes**,
+con el mismo cuadro clínico que el socket mudo. Y el síntoma no apuntaba al endpoint por
+ningún lado.
+
+Se usa `aggTrades`, que además trae volumen — sin él ΣQ queda en cero y con ello mueren Φ,
+Ψ y Ω, o sea todo el acoplamiento endógeno de la Sec. 1.4. Peso 20 a 1 Hz = 1 200/min
+contra 2 400 disponibles.
+
+Detalle que decide: se usa `aiohttp` y no `urllib` porque la sesión **reutiliza la conexión
+TLS** — 0.27 s por llamada contra ~0.9 s abriendo socket nuevo cada vez. A 1 Hz de sondeo,
+esa diferencia es la que decide si `τ_d` cabe bajo `τ_max`.
+
+Offset de reloj medido contra `/fapi/v1/time`: **0.279 s**, coherente con los ~300 ms desde
+Colombia que anticipa la Sec. 8, y holgado contra la guarda 7 (500 ms).
+
+### ⚠ El filtro corregía 90 veces con la misma medición — y eso explica el ρ₁ de `y1`
+
+`DIVERGE DEL PDF (Sec. 7.3)`: el filtro corrige **una vez por paquete nuevo**, no una vez
+por ciclo de control.
+
+El Hilo Rápido corre a ~90 Hz; el feed entrega a 2 Hz (R_n desde el Hilo Lento) y hasta
+1 Hz (precio, con el feed degradado). Corrigiendo cada ciclo, la misma medición entra al
+filtro decenas de veces: P se contrae como si hubiera decenas de observaciones
+independientes, el filtro se declara mucho más seguro de lo que está, y **la innovación
+queda autocorrelacionada por construcción**.
+
+Eso no es una hipótesis: **es la explicación del ρ₁ = 0.87 de `y1`** que la v1.2 dejó como
+pregunta abierta para este documento. La Sec. E.3 lo resuelve excluyendo `y1` de la
+compuerta; esto lo resuelve en el origen, y además impide que `y0` heredara el mismo
+artefacto al degradar el feed — lo que habría contaminado justo la serie sobre la que se
+decide `A_arm`.
+
+Efecto medido al aplicarlo, con el mismo feed: **Tr(P) pasa de 6e9 a ~10**, acotado, y
+`valido=True`. Con el paquete repetido el NIS ni siquiera existía.
+
+**Consecuencia sobre la telemetría, y hay que tenerla presente al analizar.** Se sigue
+registrando una fila por ciclo de control (~90 Hz), porque `tr_P`, `x_k` y `rama_A`
+evolucionan en cada uno. Pero la innovación **solo existe cuando llegó un paquete**, y en
+los demás ciclos vale cero por relleno. Con el feed degradado eso es el 98.7 % de las filas.
+
+Sin marcar esa distinción, Ljung-Box y el NIS se calculan sobre una serie que es casi toda
+ceros: **ρ₁ sale 0.0000 y el veredicto del A/B es basura con apariencia de dato** — se vio
+tal cual antes de corregirlo. De ahí el campo `hay_medicion` y la función
+`diagnostico.solo_observaciones`, por la que pasa todo análisis basado en la innovación.
+`diagnostico.py` reporta ahora explícitamente cuántas observaciones reales hay y avisa si
+bajan del 5 % de los ciclos, porque en ese régimen un NIS bajo no significa "filtro
+conservador" sino "feed lento".
+
+### ⚠ Dos bots compartiendo memoria en silencio — el chatter que no era chatter
+
+Defecto real, y de los que enseñan a desconfiar del síntoma. Al medir la conmutación de la
+rama de `A` sobre datos reales salieron **294 cambios en 10 000 ciclos**, con permanencia
+mediana de 0.27 s. Eso es chatter de manual, y el sospechoso obvio era la histéresis de la
+Sec. D.4.2. Pero la histéresis estaba bien: aguanta 200 oscilaciones dentro de la zona
+muerta sin conmutar una sola vez.
+
+La causa era que **había dos instancias del bot corriendo a la vez, y ambas escribían la
+misma memoria compartida**. La recuperación de bloques huérfanos que la v1.2 añadió para
+Windows (donde `unlink()` es un no-op) tiene un efecto de segundo orden que entonces no se
+vio: si el bloque existe porque hay otro Micelio **vivo**, la segunda instancia se adjunta
+a él en vez de fallar. Dos Hilos Lentos escribiendo el mismo seqlock, dos Hilos Rápidos
+publicando en el mismo Ring Buffer.
+
+Con una sola instancia, mismo mercado y misma configuración: **12 cambios en 20 000 ciclos**.
+
+`verificar_instancia_unica` lo corta antes de reservar nada. La detección es por **latido**
+y no por PID: un PID se recicla, y en Windows no hay forma barata y portable de preguntar si
+un PID sigue siendo el mismo proceso; un timestamp refrescado cada segundo no tiene esa
+ambigüedad. Si aborta, **no limpia la memoria compartida** — es de la otra instancia, que
+sigue trabajando, y liberarla sería exactamente el daño que se evita.
+
+### Sección A — los filtros del instrumento, medidos
+
+`exchangeInfo` leído de ambos entornos. Los cuatro slots del bloque de hot-reloading nacen
+en **cero como centinela**, no con un valor por defecto: olvidarse de leerlos falla
+ruidosamente en vez de operar con un literal.
+
+Antes se llamaba `apply_filters(u_c, 1e-5, 1e-5, 10.0, P_spot)` — los cuatro inventados y
+los cuatro equivocados por órdenes de magnitud. Un `stepSize` de 1e-5 contra el real de
+1e-3 hace que el `floor` sea casi la identidad, y entonces nada en las pruebas revela que
+el controlador continuo se convierte en interruptor al llegar al exchange.
+
+**Dos correcciones a las cifras de la Sec. A.1**, ambas materiales:
+
+| entorno | stepSize | minQty | tickSize | minNotional | 1 lote a 63 800 |
+|---|---|---|---|---|---|
+| MAINNET | 0.001 | 0.001 | 0.10 | **50 USDT** | 63.8 USD |
+| TESTNET | **0.0001** | 0.0001 | 0.10 | 50 USDT | 6.4 USD |
+
+1. **minNotional es 50, no 100.** La primera fila de la tabla de A.1 ("ninguna orden es
+   legal") no se cumple hoy. Pero el margen es estrecho: por debajo de BTC = 50 000 un lote
+   deja de alcanzar el nocional mínimo y la orden legal más pequeña pasa a 0.002 BTC. Por
+   eso `cantidad_minima_legal` depende del precio en vez de fijarse una vez.
+2. ⚠ **Testnet es 10× MÁS FINO que Mainnet**, y es una trampa silenciosa: la guarda de
+   resolución evaluada contra Testnet da 476 lotes y pasa cómodamente, contra Mainnet da 47
+   y va mucho más justa. Calibrar contra Testnet produciría un sistema que funciona en
+   pruebas y se degrada a interruptor en producción. **`verificar_resolucion_control` se
+   evalúa siempre contra el stepSize de Mainnet**, y el orquestador publica el más grueso
+   de los dos.
+
+### Sección B — la abrazadera va aguas abajo, e `I_max` no se toca
+
+Los números al arranque, con S real de 63 920:
+
+```
+nocional_max_orden    = 3000 USD (46.9 lotes; minimo exigido 40)
+nocional_max_posicion = 32599 USD (DERIVADO de I_max con holgura 2%)
+apalancamiento 5x -> margen 6520, colchon liquidacion 6259 contra cap 3000 (2.1x)
+lambda*S^2*gamma_0    = 0.1065  -> freno de Loeper ALCANZABLE
+```
+
+El principio de separación de la Sec. B.1 está verificado por contraprueba en los tests:
+con `I_max = 0.0016 BTC` el producto cae a 3.4e-4 y el freno de singularidad queda
+**estructuralmente inalcanzable** — correrías 30 episodios validando un sistema con un
+mecanismo de seguridad desconectado y nada lo reportaría. Por eso `I_max` se queda en 0.50
+y el límite de cuenta vive en el Motor de Red, después del Ring Buffer y antes de firmar.
+
+**El `mmr` no se puede leer sin credenciales**: `leverageBracket` es un endpoint firmado.
+`mercado.leer_mmr` devuelve el valor por defecto **inflado por un factor de seguridad de
+2×** y marca que fue asumido, no leído. La guarda queda conservadora ante la duda.
+
+⚠ **Una desviación del clamp de la Sec. B.4, deliberada.** El documento escribe
+`u ← min(u, nocional_max_posicion(S)/S − |inv|)` sin distinguir compra de venta. Tomado
+literalmente, al llegar al tope ese término vale 0 y anula **ambas** componentes, incluida
+la que REDUCE la posición: el sistema quedaría atrapado en el límite, incapaz de deshacer,
+y **rompería la ruta de cierre del halt**, que necesita emitir exactamente esas órdenes. Se
+aplica de forma direccional sobre el inventario resultante. Marcado
+`# NOTA DE INTERPRETACION:` y con test propio.
+
+Las 7 guardas están implementadas con `causa_halt` distinguible y detalle propio. La
+semántica es **cerrar y parar, no congelar**; `RutaDeCierre` reintenta con backoff, escala
+la alerta y **jamás reporta éxito sin posición plana confirmada** — con test que la fuerza
+a fallar.
+
+### Sección C — episodios, y por qué el faucet automático necesita compuertas
+
+`episodios.py`. La máquina vive en el **Motor de Red**, no en el orquestador: la capa de
+riesgo, la cuenta y la ruta de cierre ya están en ese proceso, y moverla fuera obligaría a
+sincronizar el cierre por memoria compartida justo en el momento en que menos se puede
+confiar en el estado.
+
+`ARRANQUE → OPERANDO → CERRANDO → CERRADO → REAPROVISIONANDO → ARRANQUE`, con `DETENIDO`
+terminal. Verificado que **no existe transición de salida de `DETENIDO` por software**: la
+única asignación a `ARRANQUE` desde otro estado está en `sondear_equity`, que exige estar en
+`REAPROVISIONANDO`.
+
+Las **seis compuertas de la Sec. C.3** están probadas una por una, forzando cada condición
+por separado y comprobando que bloquea *la suya y solo la suya*. La que más importa:
+**solo se recarga sobre la guarda 1 (drawdown)**. Las guardas 2–7 son fallos de sistema, y
+recargar sobre ellas es tapar el bug con dinero — hay un test que recorre las seis causas de
+sistema y verifica que ninguna pasa.
+
+Sobre el adaptador de faucet, el documento tiene razón en no fingir: **el faucet de Testnet
+es una función de la interfaz web, no un endpoint de la API**. Lo que hace que el modo
+automático no sea una ruta sin probar es que **manual y automático comparten el sondeo de
+equity**; la única diferencia es quién provoca la recarga. `ReaprovisionadorAutomatico`
+lleva aserción dura contra `MODO == MAINNET` **en el constructor**, no un `if` que devuelve
+`False`: un `if` dejaría el sistema corriendo con un reaprovisionador que sobre dinero real
+es un sinsentido peligroso.
+
+**Reset limpio (Sec. C.5), y cómo cruza procesos.** Se hace al ABRIR episodio, no al cerrar,
+para que el estado residual de un cierre fallido tampoco se herede. El Motor de Red reinicia
+lo suyo (capa de riesgo, cuenta) y publica `id_episodio` en memoria compartida; el Hilo
+Rápido y el Hilo Lento **detectan el cambio y reinician lo suyo por su cuenta** — burn-in,
+NIS, `P`, inventario y rama de `A` en uno; ΣQ, `S_ref`, ventana del EMD y `ω_m` en el otro.
+No hace falta señalización adicional porque el campo ya es monótono y lo escribe un único
+productor.
+
+`id_episodio` va también en `TELEM_DTYPE`, y `diagnostico.py --episodio=N` filtra por él:
+mezclar episodios falsearía Ljung-Box y el NIS, porque cada uno arranca con su propio
+transitorio de burn-in.
+
+### Sección D — las dos trampas, y por qué hacen falta tests
+
+`A_arm` sale de `s̈ = −ω²s`, cuya solución es `cos(ωt)`: ahí ω es **angular**. Pero
+`hht.frecuencia_instantanea` divide por 2π y `omega_m_desde_hz` devuelve ciclos/tick — las
+dos son frecuencias **ordinarias**. Y `ω_m` está en 1/Ticks mientras `Δt` está en segundos.
+
+Ninguno de los dos errores produce excepción, `nan` ni log. Producen un modelo que "no
+aporta", y la conclusión equivocada sería que la propuesta no sirve. Medido con
+`periodo_implicito`, que invierte la construcción de la matriz:
+
+| | período que `A_arm` codifica de verdad |
+|---|---|
+| correcto (`ω_ang = 2π·f`) | **40.00 s** (real 40 s, error 0.00 %) |
+| sin el 2π | 251 s |
+| con `ω_m` en 1/Ticks | 5 027 s |
+
+Resolución: **dos variables publicadas por separado**, sin conversión en el punto de uso.
+`ω_m` [1/Ticks] sigue alimentando ρ_k y c²_vol sin cambios; `ω_ang` [rad/s] alimenta
+`A_arm` y solo `A_arm`.
+
+La predicción pasa a **forma afín** (`x_pred = x_ref + A·(x_k − x_ref)`), que conserva
+`x[0] = S` absoluto y evita auditar a todos los consumidores. Verificado: al saltar `S_ref`
+100 USD en un nodo de fase, **P queda idéntica** y `x[0]` se mueve 0.00012 USD, contra los
+100 USD que saltaría la formulación sobre la desviación.
+
+Concentración espectral `C` medida: **0.967** en un ciclo nítido contra **0.487** con
+energía repartida, así que `C_ON = 0.50` discrimina. La histéresis aguanta 200 oscilaciones
+dentro de la zona muerta con **cero conmutaciones**.
+
+Sobre mercado real, el conmutador entra en la rama armónica con `C` de 0.81–0.99 y períodos
+de 47–188 s, y vuelve a velocidad constante al caer `C` por debajo de 0.35. Ojo con el
+warm-up: la ventana del EMD son 384 muestras a 0.5 s, o sea **192 s** antes del primer
+tamizado; hasta entonces `C = 0` y la rama es velocidad constante, que es lo correcto.
+
+### Sección E — dos EAKF en paralelo
+
+El sombra usa siempre la rama contraria a la de control y comparte `z_k`, `R_k` y `Q_k`:
+cualquier otra diferencia contaminaría la comparación. Sobrecosto medido **0.046–0.10
+ms/ciclo** contra un presupuesto de 0.3 y los 2.2 ms de Loeper+NMPC.
+
+`diagnostico.py` reensambla las innovaciones de cada modelo cruzando por `rama_A` y aplica
+la regla de decisión de la Sec. E.3 sobre `y0`, leyendo **mediana** de NIS. Si el armónico
+sale peor, el reporte remite explícitamente a `test_D_trampa_2pi_periodo_implicito`, porque
+un 2π o un factor 125 se ven exactamente así.
+
+**Primera medición end-to-end (8 min de LECTURA, 355 observaciones):**
+
+| modelo | NIS mediana | ρ₁ | ρ₂ | ρ₃ |
+|---|---|---|---|---|
+| velocidad constante | 1.166 | +0.268 | −0.037 | −0.089 |
+| oscilador armónico | 1.237 | +0.483 | +0.360 | +0.326 |
+
+⚠ **Esto NO es el veredicto, y el reporte ahora lo dice él mismo.** Se añadieron tres
+condiciones de "no decidible" que se evalúan antes de aplicar la regla, porque un veredicto
+emitido sobre datos que no lo sostienen se lee igual que uno bueno:
+
+1. La corrida dura 0.13 h contra las ≥ 24 h que exige la Sec. E.2.
+2. **0.76 mediciones/s contra ~90 Hz de ciclo de control.** Con el feed degradado, `A_arm`
+   propaga el oscilador ~1.3 s entre correcciones, así que un error del 10 % en ω se
+   acumula mucho más que en velocidad constante. Con estos datos el A/B mide el **feed**, no
+   el modelo — y eso explica por sí solo que el armónico salga peor.
+3. ρ₁ mínimo detectable con n = 355 es 0.296, o sea que el 0.268 de velocidad constante
+   ni siquiera es distinguible del ruido muestral.
+
+Lo que sí queda demostrado es que la infraestructura del A/B funciona de punta a punta y
+que el veredicto, cuando llegue, será legible.
+
+### Sección F — la suite de aceptación, y para qué sirve de verdad
+
+`python tests_v13.py` → **33/33**. Sin dependencia de pytest a propósito: el runner son
+veinte líneas, así que la suite corre en cualquier entorno donde corra el bot.
+`--sin-red` omite los dos que consultan `exchangeInfo`.
+
+Cada test lleva en el nombre la casilla de la Sección F que cubre, y **cada uno imprime el
+número que midió**, no un "OK" pelado — la salida es en sí misma el registro de calibración.
+
+Los tres que más valen:
+
+- `test_B_disparo_forzado_cadena_completa` — el criterio que el propio documento marca como
+  el más importante. Recorre **detección → cierre → posición plana confirmada → halt →
+  alerta → volcado del resumen** inyectando una pérdida ficticia. "Un freno que nunca se
+  probó no es un freno."
+- `test_B_cierre_fallido_reintenta_escala_y_no_miente` — fuerza el cierre a fallar siempre y
+  verifica que reintenta, escala y **propaga la excepción**. Reportar un halt como
+  completado con exposición abierta es el fallo más caro del sistema, porque a partir de ahí
+  nadie está mirando.
+- `test_D_trampa_2pi_periodo_implicito` — la única defensa contra D.1 y D.2, que no producen
+  excepción, ni `nan`, ni log. Sin este test, un factor 2π o un factor 125 se leerían como
+  "el oscilador armónico no aporta".
+
+⚠ **Cuatro de los cinco fallos iniciales de la suite eran defectos de los tests, no del
+código.** El más instructivo: en `d[k] = v` Python evalúa `v` **antes** que `k`, así que
+`disparadas[capa.evaluar(S)] = capa.detalle_halt` leía el detalle antes de que la guarda
+disparara. Un test que falla por su propia culpa gasta el mismo tiempo que uno real.
+
+### Pendiente tras esta fase
+
+- **El A/B todavía no tiene veredicto.** La Sec. E.2 exige ≥ 24 h continuas de Modo LECTURA
+  cubriendo las sesiones asiática, europea y americana. Lo ejecutado es la infraestructura y
+  su verificación, no la corrida de decisión.
+- **`C_ON` y `C_OFF` siguen `[CALIBRAR]`** contra la distribución real de `C` en Mainnet.
+  Los 0.50/0.35 son los sugeridos por el documento; el 0.967/0.487 medido es sobre señal
+  sintética, no sobre mercado.
+- **El WebSocket de futuros sigue mudo desde esta red, y es hoy el cuello de botella
+  principal.** El bot opera degradado a 0.76 mediciones/s contra ~90 Hz de ciclo de control,
+  y eso basta para invalidar el A/B por sí solo (ver arriba). El spot sí funciona, así que
+  parece filtrado de `fstream.binance.com` y no un problema de código. **Resolver esto es la
+  tarea de mayor rendimiento pendiente**: sin feed rápido, ni la Sección E ni la Fase 2
+  pueden concluir nada.
+- **Fase 2 (ALS)**: sigue tras su compuerta, pero con el artefacto de la medición repetida
+  eliminado, el ρ₁ que se mida ahora sí es evidencia sobre `A`.
+- **`r_S,base` y `r_EMD`** siguen medidos mal por 8× y 161× (v1.2). No se tocaron: la Fase 2
+  es su dueña, y la regla de no inflar Q ni R con una constante ad-hoc sigue en pie.
+- Fase 3 (`Ω_crit`) — necesita Testnet operativo.
+- `ω_m,max` en `constantes_micelio` sigue siendo un `TODO(HHT)`. Ahora hay material para
+  fijarlo: sobre mercado real se observaron períodos de 33–188 s.
+- **`PRECIO_REFERENCIA` se actualizó a 63 000** (estaba en 45 000 desde la v1.1). Se
+  comprobó que **no altera γ_Q**, porque su denominador es `max(ΣQ_max, K_USD)` y ΣQ_max =
+  1.3e5 sigue dominando. Queda marcado como ancla que se desactualiza sola con el precio.
+- `.gitignore` excluye ahora `episodios/` — los resúmenes y diagnósticos por episodio se
+  regeneran en cada corrida.
+- Hay un `Addendum_I_Cancion_del_Micelio.pdf` sin rastrear en el árbol. **No lo he tocado**;
+  decide tú si entra al repo.
+
+### Orden sugerido para la v1.4
+
+1. **Desatascar el feed de futuros.** Todo lo demás depende de ello y hoy nada más lo hace.
+2. Corrida de LECTURA de ≥ 24 h y veredicto del A/B (Sec. E.3).
+3. Según ese veredicto: Fase 2 (ALS) sobre `r_S,base` y `r_EMD`, o reabrir el diagnóstico
+   de `A` si ambos modelos siguen con ρ₁ ≥ 0.20.
+4. Testnet con credenciales → Fase 3 (`Ω_crit`) y las 30 corridas, con el test de disparo
+   forzado ejecutado en cada una (Sec. G).
 
 ## Convenciones
 
