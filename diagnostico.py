@@ -378,12 +378,16 @@ def generar_reporte(datos: np.ndarray, h: int = 20, descartar: int = -1) -> str:
     a("=" * 78)
     a("REPORTE DE CONSISTENCIA DEL FILTRO - Fase 1 del orden de trabajo")
     a("=" * 78)
-    a(f"Ciclos de control: {ciclos}   Duracion: {dur:.1f} s   "
-      f"Cadencia media: {dur/max(1,ciclos)*1e3:.2f} ms/ciclo")
-    a(f"OBSERVACIONES REALES: {bruto} ({bruto/max(1,ciclos):.2%} de los ciclos), "
+    # v2.0: desde que el filtro corre bajo Delta_n = 1, cada fila de telemetria
+    # es un TICK (una transaccion), no un ciclo de control. La etiqueta anterior
+    # decia "ciclos" y era enganosa: sugeria que el 100 % de observaciones era
+    # sospechoso, cuando es justo lo que se persigue.
+    a(f"TICKS registrados: {ciclos}   Duracion: {dur:.1f} s   "
+      f"Tasa: {ciclos/max(1e-9,dur):.2f} ticks/s")
+    a(f"OBSERVACIONES REALES: {bruto} ({bruto/max(1,ciclos):.2%} de los ticks), "
       f"o sea {bruto/max(1e-9,dur):.2f} mediciones/s.")
     if bruto / max(1, ciclos) < 0.05:
-        a("  [!] Menos del 5% de los ciclos traen medicion. El filtro PREDICE mucho")
+        a("  [!] Menos del 5% de los ticks traen medicion. El filtro PREDICE mucho")
         a("      y CORRIGE poco, asi que P crece bastante entre observaciones y el")
         a("      NIS saldra bajo por construccion. No es un filtro conservador: es")
         a("      un feed lento. Mirar el estado del WebSocket antes que las matrices.")

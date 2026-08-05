@@ -40,3 +40,9 @@ desktop.ini
 
 # Resumenes y diagnosticos por episodio (Sec. C.5): se regeneran en cada corrida
 episodios/
+
+# Logs de corridas: se regeneran
+corrida_*.log
+
+# Capturas de mercado para el test §5.2: se regeneran
+captura_*.npz

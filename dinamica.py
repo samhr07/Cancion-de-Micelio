@@ -77,6 +77,19 @@ def omega_angular_desde_hz(f_hz: float) -> float:
     return 2.0 * math.pi * f_hz
 
 
+def periodo_implicito_ticks(A: np.ndarray) -> float:
+    """Período en TICKS que la matriz A codifica de verdad.  §4.1 / §8.
+
+    Igual que `periodo_implicito` pero con Δn = 1, que es el paso del filtro en
+    reloj de transacciones. Sigue siendo la ÚNICA defensa contra la trampa del
+    2π, que en espacio de ticks reaparece intacta: `omega_m_desde_hz` devuelve
+    ciclos/tick (ordinaria) y `A_arm` necesita rad/tick (angular).
+
+    Para pasar a segundos: `periodo_s = periodo_ticks / nu_ticks_por_s`.
+    """
+    return periodo_implicito(A, 1.0)
+
+
 def periodo_implicito(A: np.ndarray, dt: float) -> float:
     """Período [s] que la matriz A codifica de verdad. Instrumento de test.
 
@@ -161,6 +174,29 @@ def matriz_A_armonica(w_ang: float, dt: float) -> np.ndarray:
         ],
         dtype=np.float64,
     )
+
+
+def acumular_Q(A_un_paso: np.ndarray, Q_tick: np.ndarray, n_pasos: int) -> np.ndarray:
+    """Ruido de proceso acumulado sobre `n_pasos` de Δn = 1.  §4.2 / §8.
+
+        Q_N = Σ_{i=0}^{N-1}  Aⁱ · Q_tick · (Aⁱ)ᵀ
+
+    ⚠ NO es `N · Q_tick`, y la diferencia importa. Solo coinciden si A = I: en
+    cuanto A propaga (velocidad hacia posición, u oscilación), el ruido inyectado
+    en el paso i se transporta i pasos más y su contribución a la covarianza
+    final crece. Suponer `N·Q` sobreestima la certeza en la posición.
+
+    Esta función existe sobre todo para el TEST DE INVARIANCIA A LA TASA del §8:
+    N pasos de Δn=1 deben dar el mismo `x` y la misma `P` que un paso de Δn=N con
+    esta `Q_N`. Ese test es el que demuestra que §1.3 quedó cerrado — que el ruido
+    de proceso dejó de depender de cuántas veces despertó el planificador.
+    """
+    Q_acum = np.zeros_like(Q_tick)
+    Ai = np.eye(A_un_paso.shape[0])
+    for _ in range(int(n_pasos)):
+        Q_acum = Q_acum + Ai @ Q_tick @ Ai.T
+        Ai = A_un_paso @ Ai
+    return Q_acum
 
 
 def predecir_afin(A: np.ndarray, x: np.ndarray, P: np.ndarray, Q: np.ndarray, S_ref: float):
@@ -280,8 +316,16 @@ class EAKFSombra:
         self.innov = np.zeros((2, 1))
         self.nis = float("nan")
 
-    def paso(self, z, R_k, Q_k, dt, w_ang, S_ref, hay_medicion: bool):
-        """Un ciclo completo. Devuelve (innovacion, nis)."""
+    def paso(self, z, R_k, Q_k, dt, w_ang, S_ref, hay_medicion: bool, H_ef=None):
+        """Un ciclo completo. Devuelve (innovacion, nis).
+
+        `H_ef` permite la ACTUALIZACION SECUENCIAL MULTI-TASA: cuando `R_n` no
+        es fresco, el filtro de produccion corrige solo con la fila del precio, y
+        el sombra tiene que hacer EXACTAMENTE lo mismo. Si el sombra asimilara
+        siempre las dos componentes, la comparacion del A/B dejaria de aislar la
+        matriz `A` — que es su unico proposito.
+        """
+        H_ef = self.H if H_ef is None else H_ef
         A = (
             matriz_A_armonica(w_ang, dt)
             if self.usa_armonico
@@ -291,14 +335,14 @@ class EAKFSombra:
 
         if not hay_medicion:
             self.x, self.P = x_pred, P_pred
-            self.innov = np.zeros((2, 1))
+            self.innov = np.zeros((z.shape[0], 1))
             self.nis = float("nan")
             return self.innov, self.nis
 
-        innov = z - (self.H @ x_pred)
-        S_cov = self.H @ P_pred @ self.H.T + R_k
+        innov = z - (H_ef @ x_pred)
+        S_cov = H_ef @ P_pred @ H_ef.T + R_k
         try:
-            K = (P_pred @ self.H.T) @ np.linalg.solve(S_cov, np.eye(S_cov.shape[0]))
+            K = (P_pred @ H_ef.T) @ np.linalg.solve(S_cov, np.eye(S_cov.shape[0]))
             self.nis = float(innov.T @ np.linalg.solve(S_cov, innov))
         except np.linalg.LinAlgError:
             self.x, self.P = x_pred, P_pred
@@ -306,7 +350,7 @@ class EAKFSombra:
             return self.innov, self.nis
 
         self.x = x_pred + K @ innov
-        joseph = self.I3 - K @ self.H
+        joseph = self.I3 - K @ H_ef
         self.P = (joseph @ P_pred @ joseph.T) + (K @ R_k @ K.T)  # Forma de Joseph
         self.innov = innov
         return self.innov, self.nis

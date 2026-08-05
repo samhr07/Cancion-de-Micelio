@@ -455,6 +455,220 @@ def mu_inventario(
 
 
 # ==============================================================================
+# 3.bis LOS DOS RELOJES (§2 de ORDEN_TRABAJO_RELOJES_2_0)
+# ==============================================================================
+# El sistema tiene DOS tiempos físicamente distintos, y hasta la v2.0 usaba uno
+# solo con todas las conversiones ocurriendo implícitamente en el punto de uso.
+#
+#   RELOJ DE TRANSACCIONES  [Ticks]  -> estimacion: EAKF, EMD -> Hilbert.
+#       Los retornos son mas estacionarios y mas gaussianos en tiempo de
+#       transaccion que en tiempo de calendario.
+#   RELOJ DE PARED          [s]      -> ejecucion: tau_d y tau_max (Sec. 6.5),
+#       las 7 guardas de riesgo, rate limits, funding, expiracion de ordenes,
+#       horizonte de Loeper y NMPC. Nada de eso tiene significado en ticks.
+#
+#   ν [Ticks/s] es el UNICO puente entre ambos.
+#
+# ⚠ REGLAS NO NEGOCIABLES (§2.4). Las dos trampas de la v1.3 —el 2π y el factor
+# 125— fueron errores de conversion entre relojes, y NINGUNA produjo excepcion,
+# `nan` ni log. Con dos relojes formales el riesgo se multiplica:
+#
+#   1. Toda magnitud lleva su reloj en el NOMBRE, sin excepciones, ni siquiera en
+#      variables locales:  dt_s, dn_ticks, dq_usd; omega_ang_rad_s,
+#      omega_ang_rad_tick, omega_m_ciclos_tick; sigma_rel_s, sigma_rel_tick.
+#   2. Cada conversion ocurre en UNA UNICA funcion, aqui abajo, y cada una tiene
+#      un test que INVIERTE la construccion. Ese patron —el de
+#      `dinamica.periodo_implicito`— es el unico que atrapa esta clase de fallo,
+#      porque el sintoma de un factor equivocado es "el modelo no aporta".
+#   3. PROHIBIDO convertir en el punto de uso. Si un consumidor necesita una
+#      magnitud en otro reloj, se publica YA CONVERTIDA en el bloque compartido.
+
+
+def omega_ang_rad_tick_desde_ciclos(omega_m_ciclos_tick: float) -> float:
+    """ω angular [rad/Tick] a partir de ω_m [ciclos/Tick].  §4.1.
+
+        omega_ang_rad_tick = 2π · omega_m_ciclos_tick
+
+    ⚠ LA TRAMPA DEL 2π, OTRA VEZ, EN OTRO ESPACIO. `hht.frecuencia_instantanea`
+    ya divide por 2π, asi que `omega_m_desde_hz` devuelve una frecuencia
+    ORDINARIA en ciclos/tick. `A_arm` sale de s̈ = −ω²s, cuya solucion es cos(ωn):
+    ahi ω es ANGULAR. Usar ω_m directamente mete un factor 6.28 de error.
+
+    En la v1.3 esto mismo, en espacio de segundos, convertia un periodo real de
+    40 s en uno de 251 s. La defensa sigue siendo la misma:
+    `dinamica.periodo_implicito_ticks` invierte la construccion y el test lo
+    compara contra el periodo real.
+
+    Control de magnitud: con ω_m ≈ 1.26e-3 ciclos/tick sale ω ≈ 7.9e-3 rad/tick,
+    o sea un periodo de ~795 ticks; a ~20 transacciones/s son ~40 s, coherente
+    con el ciclo estructural conocido.
+    """
+    if not math.isfinite(omega_m_ciclos_tick) or omega_m_ciclos_tick <= 0.0:
+        return 0.0
+    return 2.0 * math.pi * omega_m_ciclos_tick
+
+
+def omega_m_ciclos_tick_desde_ang(omega_ang_rad_tick: float) -> float:
+    """Inversa exacta de `omega_ang_rad_tick_desde_ciclos`. Existe PARA EL TEST.
+
+    Una conversion sin inversa no se puede verificar mas que releyendola, y
+    releerla es justo lo que fallo dos veces en la v1.3.
+    """
+    if not math.isfinite(omega_ang_rad_tick) or omega_ang_rad_tick <= 0.0:
+        return 0.0
+    return omega_ang_rad_tick / (2.0 * math.pi)
+
+
+def sigma_rel_tick_desde_s(sigma_rel_s: float, nu_ticks_por_s: float) -> float:
+    """σ_rel por TRANSACCION a partir de σ_rel por SEGUNDO.  §4.2.
+
+        sigma_rel_tick = sigma_rel_s / sqrt(nu_ticks_por_s)
+
+    Raiz cuadrada y no division directa porque los incrementos entre ticks se
+    suponen iid: la VARIANZA es aditiva, no la desviacion. Con ν ticks por
+    segundo, la varianza de un segundo se reparte entre ν transacciones, luego
+    σ² por tick = σ²_s/ν  y  σ_tick = σ_s/√ν.
+
+    ⚠ POR QUE IMPORTA, mas alla de las unidades. `Q` por paso de bucle era
+    varianza inyectada por DESPERTAR DEL PLANIFICADOR — una propiedad del sistema
+    operativo, no del mercado. `Q` por tick es varianza inyectada por
+    TRANSACCION, que si es una propiedad del mercado. El reloj de ticks saca al
+    planificador del presupuesto de ruido del filtro.
+    """
+    if nu_ticks_por_s <= 0.0 or not math.isfinite(nu_ticks_por_s):
+        return sigma_rel_s
+    return sigma_rel_s / math.sqrt(nu_ticks_por_s)
+
+
+def sigma_rel_s_desde_tick(sigma_rel_tick: float, nu_ticks_por_s: float) -> float:
+    """Inversa de `sigma_rel_tick_desde_s`. Existe PARA EL TEST."""
+    if nu_ticks_por_s <= 0.0 or not math.isfinite(nu_ticks_por_s):
+        return sigma_rel_tick
+    return sigma_rel_tick * math.sqrt(nu_ticks_por_s)
+
+
+def nu_ticks_por_s_desde_anio(nu_ticks_por_anio: float) -> float:
+    """ν de Ticks/Año a Ticks/s. Sitio unico de esta conversion.
+
+    ν se ALMACENA en Ticks/Año porque es la unidad que necesita
+    c²_vol = k·ω_m·ν para quedar en 1/Años (Sec. 4.5). Pero el puente entre
+    relojes es Ticks/SEGUNDO. Mezclarlas es la trampa del factor 125 de la v1.3
+    con otro disfraz.
+    """
+    return nu_ticks_por_anio / SEGUNDOS_POR_ANIO
+
+
+def nu_ticks_por_anio_desde_s(nu_ticks_por_s: float) -> float:
+    """Inversa de `nu_ticks_por_s_desde_anio`. Existe PARA EL TEST."""
+    return nu_ticks_por_s * SEGUNDOS_POR_ANIO
+
+
+# ==============================================================================
+# 3.ter EL RELOJ DE VOLUMEN Y EL FACTOR φ' (§6 de ORDEN_TRABAJO_RELOJES_2_0)
+# ==============================================================================
+# El punto de partida ya estaba en el diseño: `Φ = ΣQ · ω_m` (Sec. 1.4 del PDF)
+# ES el acoplamiento volumen-frecuencia. El reloj de volumen no es una idea
+# externa, es la misma intuición física reapareciendo una capa más abajo.
+#
+# ⚠ POR QUE `Δt · ΣQ` NO PUEDE SER EL RELOJ. Dos obstrucciones, ambas fatales
+# para un reloj y ninguna para un peso:
+#   1. ΣQ YA ES UNA INTEGRAL TEMPORAL: se acumula desde el nodo de fase
+#      (Sec. 6.3). Multiplicarla por Δt integra el tiempo dos veces, y a
+#      actividad constante crece como t² dentro del ciclo.
+#   2. ΣQ SE REINICIA EN CADA NODO DE FASE. Un reloj debe ser monótono; ése
+#      retrocedería a cero varias veces por hora, y con él toda magnitud
+#      derivada.
+#
+# Lo que hace el trabajo es el INCREMENTO, no el acumulado:
+#     dφ' = dQ                 volumen transado DURANTE el intervalo   [USD]
+#     τ_Q = Σ dQ / ΔQ*         reloj de volumen, monótono              [cuantos]
+#
+# LA OBSERVACION QUE UNIFICA: el peso que se buscaba y el reloj que se buscaba
+# son EL MISMO OBJETO. `dφ' = dQ` sirve de incremento de reloj y de factor de
+# ponderación sin cambiar de forma. No hacen falta dos construcciones.
+
+# ΔQ* — cuanto de volumen.
+#   Unidades: USD
+#   MEDIDO el 2026-08-04 sobre 61 s de `aggTrades` de BTCUSDT perpetuo:
+#       volumen por transaccion: mediana 0.0060 BTC, p95 1.0050, max 30.14
+#       a S ~ 64 400 USD/BTC  ->  mediana ~ 386 USD
+#   Se fija en la MEDIANA por transaccion, siguiendo la recomendacion del §6.3:
+#   asi, a actividad tipica, el reloj de volumen y el de ticks avanzan a la misma
+#   tasa media. La UNICA diferencia entre ambos pasa a ser la PONDERACION POR
+#   TAMANO, que es exactamente la propiedad que se quiere poner a prueba, y la
+#   degradacion de uno al otro es continua en vez de un salto de escala.
+#   [CALIBRAR EN ENTORNO REAL] la mediana del tamano de trade cambia con el
+#   regimen y con el precio de BTC; este valor podria tener que ser dinamico.
+DELTA_Q_ESTRELLA = 386.0  # [USD]
+
+# Selector de reloj del filtro (§6.6). El de TRANSACCIONES es el primario y es lo
+# que se implementa a fondo; el de VOLUMEN corre sobre LA MISMA maquinaria, no
+# como rama paralela: con ΔQ* fijado como arriba, la diferencia se reduce a como
+# se cuenta el incremento.
+# NINGUNA decision sobre cual gana. Se decide con datos, y esos datos no existen.
+RELOJ_TICKS = "TICKS"
+RELOJ_VOLUMEN = "VOLUMEN"
+CODIGO_RELOJ = {RELOJ_TICKS: 0.0, RELOJ_VOLUMEN: 1.0}
+
+
+def reloj_desde_codigo(codigo: float) -> str:
+    """Inversa de CODIGO_RELOJ. Ante un codigo desconocido, TICKS.
+
+    Degradacion hacia el reloj primario, que es el que esta implementado a fondo.
+    """
+    return RELOJ_VOLUMEN if round(float(codigo), 6) == 1.0 else RELOJ_TICKS
+
+
+def avance_de_reloj(dn_ticks: int, dq_usd: float, reloj: str,
+                    delta_q: float = DELTA_Q_ESTRELLA) -> float:
+    """Cuanto avanza el reloj elegido ante `dn_ticks` transacciones y `dq_usd`.
+
+    Es el UNICO sitio donde el selector se interpreta. Devuelve un numero de
+    "pasos" del reloj vigente:
+        TICKS   -> el propio numero de transacciones
+        VOLUMEN -> dq_usd / ΔQ*, o sea cuantos cuantos de volumen pasaron
+
+    Con ΔQ* = mediana de volumen por transaccion, a actividad tipica ambos
+    devuelven aproximadamente lo mismo; lo que los separa es que el de volumen
+    PESA las transacciones grandes.
+    """
+    if reloj == RELOJ_VOLUMEN:
+        if delta_q <= 0.0:
+            return float(dn_ticks)
+        return max(0.0, dq_usd) / delta_q
+    return float(dn_ticks)
+
+
+# ⚠ REGLA §6.5 — EL DOBLE CONTEO EN Ω, Y POR QUE NO DA SINTOMA
+# ------------------------------------------------------------------------------
+# Si ω_m se midiera en reloj de VOLUMEN, ya llevaria dentro la informacion de
+# volumen que `Φ = ΣQ·ω_m` vuelve a multiplicar. Y Ω se construye sobre Φ y Ψ, y
+# Ω determina κ y μ via Ω_crit — o sea que el error se propagaria al costo entero
+# del NMPC, escalado AL CUADRADO (κΩ², μΩ²), sin producir ningun sintoma local.
+#
+# REGLA: `Φ`, `Ψ` y `Ω` se calculan SIEMPRE con ω_m en reloj de TRANSACCIONES,
+# aunque el filtro corra en reloj de volumen. Por eso se publican
+# `omega_m_ciclos_tick` y `omega_m_ciclos_cuanto` como campos SEPARADOS, y por
+# eso esta escrito aqui que consumidor lee cual:
+#
+#   omega_m_ciclos_tick   -> Φ, Ψ, Ω (Sec. 1.4)  |  ρ_k (7.3.3)  |  c²_vol (4.5)
+#   omega_m_ciclos_cuanto -> SOLO diagnostico y comparacion de relojes
+#   omega_ang_rad_tick    -> SOLO A_arm bajo Δn = 1 (§4.1)
+#   w_ang [rad/s]         -> SOLO el camino de reloj de pared
+#
+# Misma disciplina que ω_m / ω_ang, y por la misma razon: la conversion implicita
+# en el punto de uso es lo que ha producido TODOS los fallos silenciosos de este
+# proyecto.
+CONSUMIDOR_DE_OMEGA = {
+    "Phi_Psi_Omega": "omega_m_ciclos_tick",
+    "rho_k": "omega_m_ciclos_tick",
+    "c2_vol": "omega_m_ciclos_tick",
+    "A_arm": "omega_ang_rad_tick",
+    "diagnostico_relojes": "omega_m_ciclos_cuanto",
+}
+
+
+# ==============================================================================
 # 3. CONVERSIÓN DE UNIDADES DE ω_m (Sec. 0.4)
 # ==============================================================================
 def omega_m_desde_hz(f_hz: float, nu_ticks_por_anio: float) -> float:

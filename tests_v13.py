@@ -566,9 +566,21 @@ def test_D_w_ang_publicado_aparte_y_w_m_intacto():
     # c2_vol sigue con w_m.
     linea_c2 = [l for l in fuente.splitlines() if "c2_vol = par_arr[P_K_VOL]" in l][0]
     assert "w_m" in linea_c2 and "w_ang" not in linea_c2
-    # Y A_arm usa w_ang, no w_m.
-    assert "conmutador.matriz(dt_ciclo, w_ang)" in fuente
-    return "rho_k y c2_vol con w_m [1/Ticks]; A_arm con w_ang [rad/s]"
+    # v2.0 §4.1: A_arm ya no usa w_ang [rad/s] sino omega_ang_rad_tick
+    # [rad/Tick], porque el filtro corre bajo Delta_n = 1. Sigue siendo una
+    # variable PROPIA publicada aparte, que es lo que este test protege: la
+    # conversion no ocurre en el punto de uso.
+    assert 'omega_ang_rad_tick = float(mic["omega_ang_rad_tick"])' in fuente, (
+        "A_arm debe leer omega_ang_rad_tick del bloque compartido, no derivarla"
+    )
+    assert "omega_ang_rad_tick" in Micelio.MICELIO_DTYPE.names
+    # Y las tres variantes de omega siguen siendo campos DISTINTOS.
+    for campo in ("w_m", "w_ang", "omega_ang_rad_tick"):
+        assert campo in Micelio.MICELIO_DTYPE.names, campo
+    return (
+        "rho_k y c2_vol con w_m [ciclos/Tick]; A_arm con omega_ang_rad_tick "
+        "[rad/Tick]; w_ang [rad/s] para el reloj de pared"
+    )
 
 
 def test_D_equivalencia_con_omega_cero():
@@ -789,8 +801,21 @@ def test_E_correccion_solo_con_paquete_nuevo():
     import Micelio
 
     fuente = open(Micelio.__file__, encoding="utf-8").read()
-    assert "paquete_nuevo = n_tick_actual != ultimo_n_tick" in fuente
-    assert "or not paquete_nuevo" in fuente, "la novedad no entra en hay_medicion"
+    # v2.0 §4: la deteccion de novedad por `n_ticks` DESAPARECE porque deja de
+    # hacer falta. Bajo Delta_n = 1 el filtro da un paso POR TRANSACCION leida
+    # del anillo, asi que corregir dos veces con la misma medicion ya no es algo
+    # que se evite: es algo IMPOSIBLE DE EXPRESAR. Esta garantia es estrictamente
+    # mas fuerte que la de la v1.3, y el test comprueba la nueva.
+    assert "for trade in lote_trades:" in fuente, (
+        "el filtro debe iterar sobre el lote del anillo, no muestrear P_spot"
+    )
+    assert "lote_trades = consumidor.leer_lote()" in fuente
+    assert "paquete_nuevo" not in fuente, (
+        "queda la deteccion de novedad de la v1.3: con Delta_n = 1 es redundante "
+        "y tener dos mecanismos para lo mismo invita a que uno se desincronice"
+    )
+    # La deduplicacion, que es la otra mitad de la garantia, vive en el productor.
+    assert 'estado["n_duplicados"] += 1' in fuente
     assert "hay_medicion" in Micelio.TELEM_DTYPE.names, (
         "sin la bandera, Ljung-Box y el NIS corren sobre una serie de ceros de relleno"
     )
@@ -867,6 +892,261 @@ def test_E_telemetria_lleva_las_dos_innovaciones():
     for campo in ("y0", "y1", "nis", "y0_sombra", "y1_sombra", "nis_sombra", "rama_A"):
         assert campo in Micelio.TELEM_DTYPE.names, campo
     return f"{len(Micelio.TELEM_DTYPE.names)} campos, incluidos los 3 del sombra"
+
+
+# ==============================================================================
+# ORDEN_TRABAJO_RELOJES_2_0 — §8, criterios de aceptación de la v2.0
+# ==============================================================================
+def test_v20_periodo_implicito_ticks():
+    """[F/v2.0 §4.1] La trampa del 2pi REAPARECE en espacio de ticks."""
+    periodo_ticks_real = 795.0
+    omega_m_ciclos_tick = 1.0 / periodo_ticks_real
+
+    A_ok = dinamica.matriz_A_armonica(
+        CTE.omega_ang_rad_tick_desde_ciclos(omega_m_ciclos_tick), 1.0
+    )
+    p_ok = dinamica.periodo_implicito_ticks(A_ok)
+    assert abs(p_ok - periodo_ticks_real) / periodo_ticks_real < 0.05, p_ok
+
+    # Trampa: usar omega_m (ordinaria, ciclos/tick) como si fuera angular.
+    p_mal = dinamica.periodo_implicito_ticks(
+        dinamica.matriz_A_armonica(omega_m_ciclos_tick, 1.0)
+    )
+    assert p_mal / periodo_ticks_real > 5.0, (
+        f"la trampa del 2pi en ticks no se detecta: {p_mal:.0f} contra "
+        f"{periodo_ticks_real:.0f} ticks"
+    )
+    ida = CTE.omega_ang_rad_tick_desde_ciclos(omega_m_ciclos_tick)
+    assert math.isclose(
+        CTE.omega_m_ciclos_tick_desde_ang(ida), omega_m_ciclos_tick, rel_tol=1e-12
+    )
+    return f"correcto {p_ok:.1f} ticks (real {periodo_ticks_real:.0f}); sin 2pi {p_mal:.0f}"
+
+
+def test_v20_taylor_delta_n_uno():
+    """[F/v2.0 §4.1] omega = 0 exacto reproduce [[1,1],[0,1]] bit a bit."""
+    A = dinamica.matriz_A_armonica(0.0, 1.0)
+    esperado = np.array([[1.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+    assert np.array_equal(A, esperado), A
+    assert not np.isnan(A).any()
+    return "identidad exacta con Delta_n = 1"
+
+
+def test_v20_invariancia_a_la_tasa():
+    """[F/v2.0 §4.2] N pasos de Dn=1 == un paso de Dn=N. Cierra el defecto de §1.3."""
+    w = CTE.omega_ang_rad_tick_desde_ciclos(1.0 / 795.0)
+    A1 = dinamica.matriz_A_armonica(w, 1.0)
+    Q_tick = np.diag([1e-3, 1e-5, 1e-4])
+    x = np.array([[64_000.0], [3.0], [63_900.0]])
+    P = np.diag([2.0, 5.0, 7.0])
+    S_ref = 63_900.0
+    N = 12
+
+    xa, Pa = x, P
+    for _ in range(N):
+        xa, Pa = dinamica.predecir_afin(A1, xa, Pa, Q_tick, S_ref)
+
+    A_N = dinamica.matriz_A_armonica(w, float(N))
+    Q_N = dinamica.acumular_Q(A1, Q_tick, N)
+    xb, Pb = dinamica.predecir_afin(A_N, x, P, Q_N, S_ref)
+
+    assert np.allclose(xa, xb, rtol=1e-10, atol=1e-8), (xa.ravel(), xb.ravel())
+    assert np.allclose(Pa, Pb, rtol=1e-9, atol=1e-9), np.abs(Pa - Pb).max()
+    # La version ingenua N*Q NO coincide: por eso `acumular_Q` existe.
+    _, P_naive = dinamica.predecir_afin(A_N, x, P, N * Q_tick, S_ref)
+    assert not np.allclose(Pa, P_naive, rtol=1e-6), (
+        "N*Q coincidio con la suma exacta: el test no discrimina y no vale"
+    )
+    return f"{N} pasos == 1 paso de Dn={N}; N*Q se desvia {np.abs(Pa-P_naive).max():.3e}"
+
+
+def test_v20_conversiones_de_reloj_tienen_inversa():
+    """[F/v2.0 §2.4] Cada conversion entre relojes se invierte exactamente."""
+    nu_s = 26.0
+    s_tick = CTE.sigma_rel_tick_desde_s(2.22e-6, nu_s)
+    assert math.isclose(CTE.sigma_rel_s_desde_tick(s_tick, nu_s), 2.22e-6, rel_tol=1e-12)
+    # La raiz cuadrada: la VARIANZA es lo aditivo, no la desviacion.
+    assert math.isclose(s_tick, 2.22e-6 / math.sqrt(nu_s), rel_tol=1e-12)
+    nu_anio = CTE.nu_ticks_por_anio_desde_s(nu_s)
+    assert math.isclose(CTE.nu_ticks_por_s_desde_anio(nu_anio), nu_s, rel_tol=1e-12)
+    return f"sigma_rel_tick = sigma_s/sqrt(nu) = {s_tick:.3e} con nu={nu_s}/s"
+
+
+def test_v20_regla_6_5_omega_de_ticks_para_Omega():
+    """[F/v2.0 §6.5] Phi, Psi y Omega leen omega_m_ciclos_tick, NUNCA la de volumen."""
+    assert CTE.CONSUMIDOR_DE_OMEGA["Phi_Psi_Omega"] == "omega_m_ciclos_tick"
+    assert CTE.CONSUMIDOR_DE_OMEGA["rho_k"] == "omega_m_ciclos_tick"
+    assert CTE.CONSUMIDOR_DE_OMEGA["A_arm"] == "omega_ang_rad_tick"
+
+    # El test NO es vacuo: forzarlo a la variante equivocada da otro resultado.
+    # Con reloj de volumen, omega ya lleva dentro la informacion de volumen que
+    # Phi = SigmaQ*omega vuelve a multiplicar, y el error se propaga al costo del
+    # NMPC AL CUADRADO (kappa*Omega^2) sin sintoma local.
+    suma_Q, omega_tick = 1.0e5, 1.26e-3
+    omega_volumen = omega_tick * 2.7
+    Phi_correcto = suma_Q * omega_tick
+    Phi_erroneo = suma_Q * omega_volumen
+    assert abs(Phi_erroneo / Phi_correcto - 1.0) > 0.5, "el contraste no discrimina"
+
+    assert CTE.reloj_desde_codigo(1.0) == CTE.RELOJ_VOLUMEN
+    assert CTE.reloj_desde_codigo(0.0) == CTE.RELOJ_TICKS
+    assert CTE.reloj_desde_codigo(99.0) == CTE.RELOJ_TICKS, "degradacion insegura"
+    return f"Phi con la omega equivocada se desvia {100*abs(Phi_erroneo/Phi_correcto-1):.0f}%"
+
+
+def test_v20_avance_de_reloj():
+    """[F/v2.0 §6.3] El reloj de volumen avanza con el INCREMENTO dQ, no con SigmaQ."""
+    n = 40
+    dq_tipico = n * CTE.DELTA_Q_ESTRELLA
+    a_ticks = CTE.avance_de_reloj(n, dq_tipico, CTE.RELOJ_TICKS)
+    a_vol = CTE.avance_de_reloj(n, dq_tipico, CTE.RELOJ_VOLUMEN)
+    # Con DELTA_Q* = mediana por transaccion, a actividad tipica coinciden.
+    assert math.isclose(a_ticks, a_vol, rel_tol=1e-9), (a_ticks, a_vol)
+    # Lo que los separa es la PONDERACION POR TAMANO.
+    a_vol_grande = CTE.avance_de_reloj(n, 3 * dq_tipico, CTE.RELOJ_VOLUMEN)
+    assert math.isclose(a_vol_grande, 3 * a_ticks, rel_tol=1e-9)
+    assert CTE.avance_de_reloj(n, 3 * dq_tipico, CTE.RELOJ_TICKS) == n
+    return f"a actividad tipica coinciden ({a_ticks:.0f}); con 3x volumen el de volumen va 3x"
+
+
+def test_v20_deduplicacion_y_huecos():
+    """[F/v2.0 §3.3 y §3.4] Lotes solapados no se reprocesan; un salto de id se detecta."""
+    import Micelio
+
+    assert "trade_id" in Micelio.MERCADO_DTYPE.names
+    assert "n_huecos" in Micelio.ENV_DTYPE.names
+    assert "Q_acumulado_total" in Micelio.ENV_DTYPE.names
+
+    env = np.zeros(1, dtype=Micelio.ENV_DTYPE)
+    mer = np.zeros(Micelio.RING_MERCADO_SIZE, dtype=Micelio.MERCADO_DTYPE)
+    estado = {
+        "mer_arr": mer, "seq_mercado": 1, "ultimo_trade_id": 0,
+        "n_duplicados": 0, "n_huecos": 0, "trades_perdidos": 0,
+        "n_ticks": 0, "ultimo_precio": 0.0,
+    }
+    T = mercado.TickMercado
+
+    for i in range(1, 6):
+        Micelio.publicar_trade(env, estado, T(64000.0 + i, 0.01, 1e9, trade_id=i))
+    # Lote SOLAPADO: el sondeo REST devuelve ventanas que se pisan.
+    for i in range(3, 9):
+        Micelio.publicar_trade(env, estado, T(64000.0 + i, 0.01, 1e9, trade_id=i))
+
+    assert estado["n_duplicados"] == 3, estado["n_duplicados"]
+    assert estado["n_ticks"] == 8, estado["n_ticks"]
+    assert estado["n_huecos"] == 0
+
+    # Hueco: de 8 a 15 -> se perdieron 6 transacciones sin que el feed fallara.
+    Micelio.publicar_trade(env, estado, T(64100.0, 0.01, 1e9, trade_id=15))
+    assert estado["n_huecos"] == 1
+    assert estado["trades_perdidos"] == 6, estado["trades_perdidos"]
+    assert int(env[0]["trades_perdidos"]) == 6
+    assert float(env[0]["ts_ultimo_hueco"]) > 0.0, "sin marca no se puede excluir el tramo"
+
+    cons = Micelio.ConsumidorMercado(mer, "test")
+    lote = cons.leer_lote()
+    assert len(lote) == 9, len(lote)
+    assert [int(t["trade_id"]) for t in lote] == [1, 2, 3, 4, 5, 6, 7, 8, 15]
+    assert cons.leer_lote() == [], "el consumidor releyo slots ya consumidos"
+    return "3 duplicados descartados, hueco de 6 detectado, 9 publicados sin relectura"
+
+
+def test_v20_sobrepaso_del_anillo_se_contabiliza():
+    """[F/v2.0 §3] Si el productor lapea al consumidor se cuenta; no se finge completo."""
+    import Micelio
+
+    mer = np.zeros(Micelio.RING_MERCADO_SIZE, dtype=Micelio.MERCADO_DTYPE)
+    env = np.zeros(1, dtype=Micelio.ENV_DTYPE)
+    estado = {
+        "mer_arr": mer, "seq_mercado": 1, "ultimo_trade_id": 0,
+        "n_duplicados": 0, "n_huecos": 0, "trades_perdidos": 0,
+        "n_ticks": 0, "ultimo_precio": 0.0,
+    }
+    n = Micelio.RING_MERCADO_SIZE + 500
+    for i in range(1, n + 1):
+        Micelio.publicar_trade(
+            env, estado, mercado.TickMercado(64000.0, 0.001, 1e9, trade_id=i)
+        )
+    cons = Micelio.ConsumidorMercado(mer, "test")
+    lote = cons.leer_lote(maximo=Micelio.RING_MERCADO_SIZE)
+    assert cons.n_sobrepasos >= 1, "no detecto el lapeo"
+    assert cons.perdidos_por_sobrepaso >= 400, cons.perdidos_por_sobrepaso
+    assert len(lote) <= Micelio.RING_MERCADO_SIZE
+    return (
+        f"lapeo de 500 detectado: {cons.perdidos_por_sobrepaso} perdidos en "
+        f"{cons.n_sobrepasos} sobrepaso(s)"
+    )
+
+
+def test_v20_contaminacion_emd_reloj_de_pared():
+    """[F/v2.0 §5.2] Tamizar la MISMA serie por reloj de pared y por ticks no da lo mismo.
+
+    Version DETERMINISTA del test que decide si el A/B de la v1.3 queda anulado
+    por una segunda causa independiente. La medicion sobre mercado REAL vive en
+    `test_contaminacion_emd.py`; esta reproduce el mecanismo con verdad conocida.
+
+    Construccion: el ciclo estructural vive en TIEMPO DE TRANSACCION —que es lo
+    que el modelo supone, porque los nodos los produce el flujo de ordenes y no
+    el reloj— y la tasa de llegada VARIA (medido en mercado real: 26 -> 518 tx/s
+    el mismo dia). Con tasa variable, muestrear por reloj de pared deforma el
+    ciclo: los tramos de mercado rapido se comprimen y los lentos se estiran.
+
+    Las dos vias usan EL MISMO tramo de mercado, EL MISMO numero de muestras y el
+    MISMO dt medio. Lo unico que cambia es el ESPACIO de muestreo, asi que
+    cualquier diferencia es atribuible a el y solo a el.
+    """
+    import hht
+
+    rng = np.random.default_rng(20)
+    n_trades = 8000
+    periodo_ticks = 300.0  # el ciclo dura 300 transacciones, POR CONSTRUCCION
+    idx = np.arange(n_trades)
+    precios = 64_000 + 150 * np.sin(2 * np.pi * idx / periodo_ticks)
+    precios += rng.normal(0, 2.0, n_trades)
+    precios = np.round(precios / 0.10) * 0.10  # tickSize real de BTCUSDT
+
+    # Tasa de llegada alternando rafaga y calma.
+    tasa = np.where((idx // 700) % 2 == 0, 60.0, 8.0)  # tx/s
+    tiempos = np.cumsum(1.0 / tasa)
+
+    W, k = 256, 4  # 300/4 = 75 muestras por ciclo: la zona buena medida en la v1.2
+
+    # --- Via C (v2.0): una muestra cada K transacciones ---
+    i_tick = np.arange(0, W * k, k)[:W]
+    m_ticks = precios[i_tick]
+    span = tiempos[i_tick[-1]] - tiempos[i_tick[0]]
+
+    # --- Via A (v1.3): reloj de pared sobre el MISMO span y con el MISMO W ---
+    dt_pared = span / (W - 1)
+    t_muestras = tiempos[i_tick[0]] + dt_pared * np.arange(W)
+    m_pared = precios[np.searchsorted(tiempos, t_muestras, side="right") - 1]
+
+    # dt = 1.0 en ambas: asi `f_hz` sale en CICLOS POR MUESTRA y la verdad no
+    # depende de ninguna conversion de unidades mia. Esa contabilidad es
+    # precisamente donde este proyecto se ha equivocado dos veces.
+    r_ticks = hht.analizar_ventana(m_ticks, 1.0)
+    r_pared = hht.analizar_ventana(m_pared, 1.0)
+    assert r_ticks["valido"] and r_pared["valido"]
+
+    f_verdadera = k / periodo_ticks  # ciclos por muestra en la via de ticks
+    err_ticks = abs(r_ticks["f_hz"] - f_verdadera) / f_verdadera
+    assert err_ticks < 0.35, (
+        f"el muestreo por ticks deberia recuperar el ciclo: periodo "
+        f"{1/r_ticks['f_hz']:.1f} contra {periodo_ticks/k:.1f} muestras "
+        f"(error {err_ticks:.1%})"
+    )
+    dif = abs(r_ticks["f_hz"] - r_pared["f_hz"]) / max(
+        r_ticks["f_hz"], r_pared["f_hz"]
+    )
+    assert dif > 0.20, (
+        f"las dos vias coincidieron ({dif:.1%}): el test no discrimina y por "
+        f"tanto no prueba nada sobre la contaminacion"
+    )
+    return (
+        f"ticks recupera {1/r_ticks['f_hz']:.0f} muestras/ciclo (verdad "
+        f"{periodo_ticks/k:.0f}, error {err_ticks:.0%}); pared da "
+        f"{1/r_pared['f_hz']:.0f} y difiere {dif:.0%}"
+    )
 
 
 # ==============================================================================

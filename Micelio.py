@@ -159,6 +159,15 @@ ENV_DTYPE = np.dtype(
         # `verificar_instancia_unica`). Escrito por `main()` una vez por segundo.
         ("latido", np.float64),
         ("pid_orquestador", np.uint64),
+        # --- v2.0 §3.4: huecos del feed. Modo de fallo NUEVO y distinto del
+        # socket mudo: el feed funciona y aun asi falta informacion.
+        ("n_huecos", np.uint64),
+        ("trades_perdidos", np.uint64),
+        ("ts_ultimo_hueco", np.float64),
+        # --- v2.0 §6.3: reloj de volumen. MONOTONO y distinto de Q_transado/ΣQ,
+        # que se reinicia en cada nodo de fase (Sec. 6.3 del PDF). Un reloj que
+        # retrocede a cero varias veces por hora no es un reloj.
+        ("Q_acumulado_total", np.float64),
     ]
 )
 
@@ -184,7 +193,59 @@ MICELIO_DTYPE = np.dtype(
         # dos trampas de la Sec. D (el 2π y el factor 125) son errores de
         # conversión en el consumidor, y ambas fallan en silencio.
         ("w_ang", np.float64),  # ω_ang = 2π·f_hz              [rad/s]
+        # v2.0 §4.1: ω ANGULAR en rad/TICK, que es lo que consume A_arm bajo
+        # Δn = 1. Se publica APARTE de w_ang [rad/s] y de w_m [ciclos/Tick]
+        # por la regla del §2.4: cada reloj su nombre, y prohibido convertir en
+        # el punto de uso — ahi es donde el 2π se ha colado ya dos veces.
+        ("omega_ang_rad_tick", np.float64),
         ("C_espectral", np.float64),  # Concentración de la IMF dominante [0,1]
+    ]
+)
+
+# ------------------------------------------------------------------------------
+# Ring Buffer de DATOS DE MERCADO (§3.1 de ORDEN_TRABAJO_RELOJES_2_0)
+# ------------------------------------------------------------------------------
+# ⚠ EL CAMBIO ESTRUCTURAL DE LA v2.0. Hasta ahora `ENV_DTYPE` tenia una UNICA
+# casilla escalar `P_spot`, asi que el bloque de entorno no podia transportar un
+# lote: de cada sondeo de `aggTrades` —que devuelve TODAS las transacciones del
+# intervalo— sobrevivia la ultima y el resto se perdia sin dejar rastro.
+#
+# MEDIDO EL 2026-08-04, sondeando a 1 Hz durante 61 s:
+#     transacciones nuevas por lote: p50=3, p95=6, max=1000 (el limite del API)
+#     tasa real de transacciones:    18.8 tx/s por REST, 26 tx/s por WebSocket
+#     el bot registraba:             0.76 "mediciones"/s
+#     -> FACTOR DE LOTE 24.9x, o sea que se DESCARTABA EL 96.0 % de lo recibido.
+#
+# Las "0.76 mediciones/s" del reporte de la v1.3 eran la tasa de PAQUETES, no la
+# de informacion. El sistema no estaba escaso de datos: estaba tirandolos.
+#
+# Espejo del anillo de actuacion: SPSC lock-free, un productor (Motor de Red) y
+# dos consumidores (Hilos Rapido y Lento).
+# ⚠ DIMENSIONADO: LA TASA DE TRANSACCIONES VARIA POR UN FACTOR 20.
+# Medido el mismo dia, sobre el mismo par:
+#     18.8 tx/s  (REST, sondeo a 1 Hz, momento tranquilo)
+#     26-32 tx/s (WebSocket @trade, momento tranquilo)
+#    517.9 tx/s  (WebSocket @trade, media hora despues)
+# Cualquier constante calibrada contra "la tasa tipica" es por tanto sospechosa
+# de origen. Las que dependen de ν —el K de muestreo del EMD (§5.1) y el avance
+# del reloj (§6.3)— se derivan de ν en ejecucion y no se fijan aqui.
+# El anillo se dimensiona contra el PICO, no contra la mediana: 16384 entradas
+# son ~31 s de colchon a 518 tx/s, y ~10 min en mercado tranquilo. El coste es
+# 16384 x 41 bytes = 0.7 MB de memoria compartida, que es irrelevante frente a
+# perder transacciones en la primera rafaga fuerte.
+RING_MERCADO_SIZE = 16384
+MERCADO_DTYPE = np.dtype(
+    [
+        # Identidad del trade. Es lo que permite DEDUPLICAR (§3.3) y DETECTAR
+        # HUECOS (§3.4), y hasta la v2.0 el sistema sencillamente no la tenia.
+        ("trade_id", np.uint64),
+        ("precio", np.float64),  # [USD/BTC]
+        ("cantidad", np.float64),  # [BTC]
+        # Hora del trade EN EL EXCHANGE, no de recepcion. Usar el reloj local
+        # falsearia tau_d de la Sec. 6.5, que es precisamente lo que mide.
+        ("T_trade", np.float64),  # [s] epoch
+        ("es_maker", np.uint8),  # lado del taker, para el desbalance de flujo
+        ("seq", np.uint64),  # Secuencia global monotona; 0 = slot vacio
     ]
 )
 
@@ -243,6 +304,15 @@ TELEM_DTYPE = np.dtype(
 )
 
 DIR_TELEMETRIA = "telemetria"
+
+# ⚠ VOLCADO TAMBIEN POR TIEMPO, no solo por bloque lleno.
+# Desde la v2.0 hay una fila de telemetria por TRANSACCION, y la tasa de
+# transacciones varia por un factor 20 con la actividad del mercado (medido:
+# 26 -> 518 tx/s el mismo dia). Con volcado solo al llenar el bloque, el retardo
+# hasta tener datos en disco pasa de ~20 s a ~6 min sin previo aviso, y una
+# parada no limpia se lleva TODO lo acumulado desde el ultimo volcado. Eso hizo
+# perder varias corridas de verificacion enteras.
+PERIODO_VOLCADO_TELEMETRIA = 60.0  # [s]
 
 # ------------------------------------------------------------------------------
 # 1.1 Bloque de parámetros de HOT-RELOADING
@@ -354,7 +424,15 @@ P_OFFSET_RELOJ_MAX = 52  # guarda 7  [s]
 P_C_ON = 53  # C_ON   -> entra al armónico
 P_C_OFF = 54  # C_OFF  -> vuelve a velocidad constante (C_OFF < C_ON: histéresis)
 
-TOTAL_PARAMS = 55
+# --- v2.0 §6.6: selector de reloj del sistema ---
+# 0 = TICKS (transacciones, primario), 1 = VOLUMEN (cuantos de DELTA_Q*).
+# Vive en el bloque de hot-reloading para poder alternarlo entre episodios sin
+# reiniciar: es un experimento, no una configuracion, y la v2.0 NO decide cual
+# gana — eso se decide con datos que aun no existen.
+P_RELOJ = 55
+P_DELTA_Q_ESTRELLA = 56  # [USD] cuanto de volumen, medido (§6.3)
+
+TOTAL_PARAMS = 57
 
 # Discretización de la malla de Loeper (Sec. 7.4.1).
 N_S_MALLA = 61  # Impar: garantiza que S_k caiga exactamente en un nodo
@@ -505,6 +583,14 @@ def initialize_default_parameters() -> np.ndarray:
     # --- v1.3 Sec. D.4.2: histéresis de la rama de A ---
     params[P_C_ON] = CTE.C_ON_ARMONICO
     params[P_C_OFF] = CTE.C_OFF_ARMONICO
+
+    # --- v2.0 §6.6: reloj vigente ---
+    params[P_RELOJ] = CTE.CODIGO_RELOJ[
+        CTE.reloj_desde_codigo(
+            CTE.CODIGO_RELOJ.get(os.environ.get("MICELIO_RELOJ", CTE.RELOJ_TICKS), 0.0)
+        )
+    ]
+    params[P_DELTA_Q_ESTRELLA] = CTE.DELTA_Q_ESTRELLA
     return params
 
 
@@ -644,6 +730,53 @@ def verificar_instancia_unica(nombre_shm: str = "shm_ent") -> None:
             )
     finally:
         previo.close()
+
+
+class ConsumidorMercado:
+    """Lector SPSC del anillo de mercado, con deteccion de sobrepaso. §3.
+
+    Cada consumidor (Hilo Rapido, Hilo Lento) mantiene su propia secuencia, de
+    modo que van a su ritmo sin bloquearse entre si — que es la razon de que el
+    anillo tenga un solo productor y varios lectores independientes.
+
+    ⚠ EL SOBREPASO NO SE PUEDE IGNORAR. El productor publica a ~26 tx/s en
+    rafagas de hasta 203; si un consumidor se retrasa mas de RING_MERCADO_SIZE
+    entradas, el productor lo lapea y esas transacciones se pierden. Eso es
+    indistinguible de un hueco del exchange (§3.4) salvo porque este es CULPA
+    NUESTRA, y por eso se cuenta aparte: confundirlos haria buscar el problema en
+    Binance.
+    """
+
+    def __init__(self, mer_arr, nombre: str = ""):
+        self.mer_arr = mer_arr
+        self.nombre = nombre
+        self.seq_esperada = 1  # 0 queda reservado como "slot vacio"
+        self.perdidos_por_sobrepaso = 0
+        self.n_sobrepasos = 0
+
+    def leer_lote(self, maximo: int = RING_MERCADO_SIZE):
+        """Devuelve la lista de trades nuevos, en orden. Puede venir vacia."""
+        lote = []
+        for _ in range(maximo):
+            slot = int(self.seq_esperada % RING_MERCADO_SIZE)
+            seq_slot = int(self.mer_arr[slot]["seq"])
+            if seq_slot == self.seq_esperada:
+                lote.append(self.mer_arr[slot].copy())
+                self.seq_esperada += 1
+                continue
+            if seq_slot > self.seq_esperada:
+                # Lapeado: se resincroniza al mas antiguo AUN VIVO, no al mas
+                # nuevo. Aqui, a diferencia del anillo de actuacion, los datos
+                # viejos SI valen: son mediciones de mercado, no ordenes que
+                # caducan por horizonte recedente (Sec. 8.2.3).
+                seq_max = int(self.mer_arr["seq"].max())
+                seq_min_viva = max(1, seq_max - RING_MERCADO_SIZE + 1)
+                self.perdidos_por_sobrepaso += seq_min_viva - self.seq_esperada
+                self.n_sobrepasos += 1
+                self.seq_esperada = seq_min_viva
+                continue
+            break  # seq_slot < esperada -> slot aun sin escribir: no hay mas
+        return lote
 
 
 def escribir_micelio_seqlock(mic_arr, campos: dict) -> None:
@@ -1139,20 +1272,84 @@ async def ingesta_mercado(env_arr, modo, estado):
         feed = mercado.FeedPublico(modo, SYMBOL)
         estado["feed"] = feed
 
-    def al_recibir(tick):
-        estado["n_ticks"] += 1
-        env_arr[0]["P_spot"] = tick.precio
-        # ΣQ en USD: la Sec. 1.1 lo define como volumen transado, y aggTrade lo
-        # entrega en BTC, así que se convierte con el precio del propio trade.
-        env_arr[0]["Q_transado"] += tick.cantidad * tick.precio
-        env_arr[0]["n_ticks"] = estado["n_ticks"]
-        # Reloj del EXCHANGE, no el local: τ_d de la Sec. 6.5 es precisamente la
-        # latencia entre ambos, y usar el local la haría idénticamente cero.
-        env_arr[0]["timestamp"] = tick.ts_evento
-        env_arr[0]["flag_dropout"] = 0
-        estado["ultimo_precio"] = tick.precio
+    await feed.escuchar(lambda tick: publicar_trade(env_arr, estado, tick))
 
-    await feed.escuchar(al_recibir)
+
+def publicar_trade(env_arr, estado, tick) -> None:
+    """Publica UNA transaccion en el anillo de mercado. §3.2, §3.3 y §3.4.
+
+    Reemplaza al `env_arr[0]["P_spot"] = tick.precio` de la v1.3, que sobrescribia
+    la casilla escalar y perdia el 96 % del lote.
+    """
+    mer_arr = estado["mer_arr"]
+
+    # --- §3.3 DEDUPLICACION OBLIGATORIA ---------------------------------------
+    # El sondeo REST devuelve ventanas SOLAPADAS: sin deduplicar, los mismos
+    # trades entran al filtro varias veces. Eso es exactamente el bug de las 90
+    # correcciones con otro disfraz, y seria la tercera aparicion de la misma
+    # familia en tres sesiones.
+    # El contador NO se reinicia entre reconexiones, a proposito: reiniciarlo
+    # reintroduciria el duplicado justo despues de cada caida del feed, que es
+    # cuando menos se mira.
+    tid = int(tick.trade_id)
+    if tid != 0 and tid <= estado["ultimo_trade_id"]:
+        estado["n_duplicados"] += 1
+        return
+
+    # --- §3.4 DETECCION DE HUECOS ---------------------------------------------
+    # Si el id salta mas de 1, hubo transacciones que NO se vieron. Es un modo de
+    # fallo distinto del socket mudo: el feed funciona y aun asi falta
+    # informacion, y hasta la v2.0 el sistema no podia detectarlo porque no tenia
+    # identidad de trade.
+    if tid != 0 and estado["ultimo_trade_id"] > 0:
+        salto = tid - estado["ultimo_trade_id"]
+        if salto > 1:
+            estado["trades_perdidos"] += salto - 1
+            estado["n_huecos"] += 1
+            env_arr[0]["n_huecos"] = estado["n_huecos"]
+            env_arr[0]["trades_perdidos"] = estado["trades_perdidos"]
+            # Marca el instante para que el analisis offline pueda EXCLUIR el
+            # tramo: un rho_1 calculado sobre una serie con huecos silenciosos es
+            # basura con apariencia de dato, misma razon que `hay_medicion`.
+            env_arr[0]["ts_ultimo_hueco"] = time.time()
+    if tid != 0:
+        estado["ultimo_trade_id"] = tid
+
+    # --- Publicacion en el anillo (ultimo write: `seq`) -----------------------
+    seq = estado["seq_mercado"]
+    slot = int(seq % RING_MERCADO_SIZE)
+    mer_arr[slot]["trade_id"] = tid
+    mer_arr[slot]["precio"] = tick.precio
+    mer_arr[slot]["cantidad"] = tick.cantidad
+    mer_arr[slot]["T_trade"] = tick.ts_evento
+    mer_arr[slot]["es_maker"] = 1 if getattr(tick, "es_maker", False) else 0
+    mer_arr[slot]["seq"] = seq  # publicacion: debe ser la ULTIMA escritura
+    estado["seq_mercado"] = seq + 1
+
+    # --- §3.2 n_ticks incrementa POR TRANSACCION, no por paquete --------------
+    # Con esto ν pasa a ser la tasa real de transacciones y se corrigen a la vez
+    # todas las filas de la tabla del §1.2: omega_m dejaba de estar sobreestimada
+    # por el factor de lote, rho_k dejaba de inflar Q por esa via, y el piso de
+    # Nyquist deja de aplicarse sobre el tick equivocado.
+    estado["n_ticks"] += 1
+    env_arr[0]["n_ticks"] = estado["n_ticks"]
+
+    # Se conserva P_spot como "ultimo precio conocido" para los consumidores de
+    # reloj de pared (guardas de riesgo, clamps, NMPC), que no quieren un lote.
+    env_arr[0]["P_spot"] = tick.precio
+    # ΣQ en USD: la Sec. 1.1 lo define como volumen transado, y el feed lo
+    # entrega en BTC, así que se convierte con el precio del propio trade.
+    dq_usd = tick.cantidad * tick.precio
+    env_arr[0]["Q_transado"] += dq_usd
+    # §6.3: acumulador MONOTONO de volumen, DISTINTO de ΣQ_T̄. Este no se
+    # reinicia en los nodos de fase, porque un reloj debe ser monotono y ΣQ
+    # retrocede a cero varias veces por hora.
+    env_arr[0]["Q_acumulado_total"] += dq_usd
+    # Reloj del EXCHANGE, no el local: τ_d de la Sec. 6.5 es precisamente la
+    # latencia entre ambos, y usar el local la haría idénticamente cero.
+    env_arr[0]["timestamp"] = tick.ts_evento
+    env_arr[0]["flag_dropout"] = 0
+    estado["ultimo_precio"] = tick.precio
 
 
 async def _ingesta_mock(env_arr, estado):
@@ -1535,7 +1732,7 @@ async def exchange_websocket_handler(env_arr, act_arr, par_arr, modo, filtros, c
             t.cancel()
 
 
-def network_engine_process(shm_env_name, shm_act_name, shm_par_name):
+def network_engine_process(shm_env_name, shm_act_name, shm_par_name, shm_mer_name):
     log("[INIT] Proc 1 (Motor de Red) — afinidad núcleo 0")
     if hasattr(os, "sched_setaffinity"):  # No existe en Windows
         os.sched_setaffinity(0, {0})
@@ -1543,7 +1740,9 @@ def network_engine_process(shm_env_name, shm_act_name, shm_par_name):
     shm_env = shared_memory.SharedMemory(name=shm_env_name)
     shm_act = shared_memory.SharedMemory(name=shm_act_name)
     shm_par = shared_memory.SharedMemory(name=shm_par_name)
+    shm_mer = shared_memory.SharedMemory(name=shm_mer_name)
     env_arr = np.ndarray((1,), dtype=ENV_DTYPE, buffer=shm_env.buf)
+    mer_arr = np.ndarray((RING_MERCADO_SIZE,), dtype=MERCADO_DTYPE, buffer=shm_mer.buf)
     act_arr = np.ndarray((RING_BUFFER_SIZE,), dtype=ACTUATOR_DTYPE, buffer=shm_act.buf)
     par_arr = np.ndarray((TOTAL_PARAMS,), dtype=np.float64, buffer=shm_par.buf)
 
@@ -1581,6 +1780,15 @@ def network_engine_process(shm_env_name, shm_act_name, shm_par_name):
         "cuenta": None,
         "modo_lectura": modo is Modo.LECTURA,
         "feed": None,
+        # --- v2.0 §3: estado del productor del anillo de mercado ---
+        "mer_arr": mer_arr,
+        "seq_mercado": 1,  # 0 queda reservado como "slot vacio"
+        # El contador de deduplicacion NO se reinicia entre reconexiones (§3.3):
+        # reiniciarlo reintroduciria el duplicado justo despues de cada caida.
+        "ultimo_trade_id": 0,
+        "n_duplicados": 0,
+        "n_huecos": 0,
+        "trades_perdidos": 0,
     }
 
     try:
@@ -1593,6 +1801,7 @@ def network_engine_process(shm_env_name, shm_act_name, shm_par_name):
         shm_env.close()
         shm_act.close()
         shm_par.close()
+        shm_mer.close()
 
 
 # ==============================================================================
@@ -1621,7 +1830,7 @@ def volcar_telemetria(bloque: np.ndarray, etiqueta: str) -> None:
         log(f"[TELEMETRIA] volcado fallido ({etiqueta}): {err}")
 
 
-def fast_thread_process(shm_env_name, shm_mic_name, shm_act_name, shm_par_name):
+def fast_thread_process(shm_env_name, shm_mic_name, shm_act_name, shm_par_name, shm_mer_name):
     log("[INIT] Proc 2 (EAKF + NMPC + Telemetría) — afinidad núcleo 1")
     if hasattr(os, "sched_setaffinity"):
         os.sched_setaffinity(0, {1})
@@ -1630,8 +1839,11 @@ def fast_thread_process(shm_env_name, shm_mic_name, shm_act_name, shm_par_name):
     shm_mic = shared_memory.SharedMemory(name=shm_mic_name)
     shm_par = shared_memory.SharedMemory(name=shm_par_name)
     shm_act = shared_memory.SharedMemory(name=shm_act_name)
+    shm_mer = shared_memory.SharedMemory(name=shm_mer_name)
 
     env_arr = np.ndarray((1,), dtype=ENV_DTYPE, buffer=shm_env.buf)
+    mer_arr = np.ndarray((RING_MERCADO_SIZE,), dtype=MERCADO_DTYPE, buffer=shm_mer.buf)
+    consumidor = ConsumidorMercado(mer_arr, "rapido")
     mic_arr = np.ndarray((1,), dtype=MICELIO_DTYPE, buffer=shm_mic.buf)
     par_arr = np.ndarray((TOTAL_PARAMS,), dtype=np.float64, buffer=shm_par.buf)
     act_arr = np.ndarray((RING_BUFFER_SIZE,), dtype=ACTUATOR_DTYPE, buffer=shm_act.buf)
@@ -1663,6 +1875,7 @@ def fast_thread_process(shm_env_name, shm_mic_name, shm_act_name, shm_par_name):
 
     telem_buffer = np.zeros(TELEMETRY_SIZE, dtype=TELEM_DTYPE)
     telem_idx = 0
+    t_ultimo_volcado = time.time()
     n_volcado = 0
 
     is_burnt_in = False
@@ -1672,8 +1885,25 @@ def fast_thread_process(shm_env_name, shm_mic_name, shm_act_name, shm_par_name):
 
     seq_emision = 1  # 0 queda reservado como "slot vacío"
     ultimo_seq_fill = 0
-    ultimo_n_tick = -1  # Novedad del paquete: ver el bloque de correccion
     ultimo_id_episodio = -1  # Reset limpio entre episodios (Sec. C.5)
+    # --- v2.0 §4: estado del filtro en reloj de transacciones ---
+    # Con Δn = 1 la matriz de velocidad constante es literalmente [[1,1],[0,1]]:
+    # un tick de avance, no un Δt. Se construye una vez.
+    A_VEL_CONSTANTE_TICK = dinamica.matriz_A_velocidad_constante(1.0)
+    A_cacheada = A_VEL_CONSTANTE_TICK
+    omega_cacheada = -1.0  # fuerza la primera construccion de A_arm
+    n_trades_procesados = 0
+    tr_P = float(np.trace(P_k))
+    deriv_tr = 0.0
+    eps_nis = float('nan')
+    innov = np.zeros((2, 1))
+    innov_sombra = np.zeros((2, 1))
+    ultima_seq_mic = -1  # frescura de R_n: actualizacion secuencial multi-tasa
+    # Fila de H que observa SOLO el precio, para los ticks en que R_n es viejo.
+    H_SOLO_PRECIO = np.array([[1.0, 0.0, 0.0]])
+    nis_sombra = float('nan')
+    hay_medicion = False
+    paquete_valido = False
     muestras_episodio = 0  # Compuerta de muestras minimas de la Sec. C.3
     inventario = 0.0
     n_ciclos = 0
@@ -1812,19 +2042,45 @@ def fast_thread_process(shm_env_name, shm_mic_name, shm_act_name, shm_par_name):
 
             dropout = int(env_arr[0]["flag_dropout"])
 
-            # ================= EAKF: PREDICCIÓN (Sec. 7.3.5) =================
-            # Δt medido por ciclo: el 0.001 hardcodeado en A no coincidía con el
-            # sleep de 0.01, y desde Colombia la señal tarda ~300 ms (Sec. 8), así
-            # que ningún valor fijo es defendible.
+            # ================================================================
+            # v2.0 §4 — EL FILTRO BAJO Δn = 1
+            # ================================================================
+            # UN TICK = UN PASO DE PREDICCION + UNA CORRECCION. Es la condicion
+            # prioritaria de la v2.0 y sustituye al muestreo de `P_spot` por
+            # ciclo de reloj.
             #
-            # v1.3 Sec. D: la matriz de transición deja de ser fija. Con un ciclo
-            # dominante nítido (C >= C_ON) se usa el oscilador armónico, que es la
-            # solución exacta de s̈ = −ω²s; si la energía se reparte (C <= C_OFF) se
-            # vuelve a velocidad constante. La histéresis evita el chatter, y la
-            # rama activa se registra en telemetría para poder condicionar el
-            # análisis del A/B sobre ella (Sec. D.4.3).
+            # Lo que esto ELIMINA estructuralmente —no parchea: vuelve imposible
+            # de expresar— es:
+            #   - corregir varias veces con la misma medicion (v1.3),
+            #   - descartar el resto del lote (v2.0 §1.2: era el 96 %),
+            #   - meter al planificador dentro de Q (§1.3),
+            #   - la inconsistencia de Δt arrastrada desde la v1.1: se disuelve,
+            #     porque deja de haber Δt DENTRO del filtro.
+            #
+            # ⚠ x[1] CAMBIA DE UNIDADES: de USD/BTC por SEGUNDO a USD/BTC por
+            # TRANSACCION. Auditoria de consumidores hecha: el unico es la
+            # telemetria (`reg["x1"]`). Ninguna formula la consume, asi que el
+            # cambio es seguro. La constante que la escala, `q_base*1e-2`, si
+            # queda mal calibrada y pasa a ser [CALIBRAR] de la Fase 2.
+            lote_trades = consumidor.leer_lote()
+
+            # Rama de A: se decide UNA VEZ por ciclo, no por trade. `C` y `w_ang`
+            # los publica el Hilo Lento a su cadencia, asi que dentro de un lote
+            # no cambian y reevaluarlos por trade solo gastaria tiempo.
             rama = conmutador.actualizar(C_esp, w_ang)
-            A = conmutador.matriz(dt_ciclo, w_ang)
+            # §4.1: ω ANGULAR en rad/TICK. La conversion vive en el sitio unico
+            # de `constantes_micelio` (§2.4) y NO se hace aqui: este es
+            # exactamente el punto de uso donde la trampa del 2π se cuela.
+            omega_ang_rad_tick = float(mic["omega_ang_rad_tick"])
+            if rama == dinamica.RAMA_ARMONICO:
+                # Δn = 1: `A_arm` es CONSTANTE entre cambios de regimen y se
+                # cachea; solo se reconstruye cuando ω_m cambia (§4.1).
+                if omega_ang_rad_tick != omega_cacheada:
+                    A_cacheada = dinamica.matriz_A_armonica(omega_ang_rad_tick, 1.0)
+                    omega_cacheada = omega_ang_rad_tick
+                A = A_cacheada
+            else:
+                A = A_VEL_CONSTANTE_TICK
 
             # Q_k = ρ_k·diag(q_S, q_v, q_Rn),  ρ_k = 1 + γ_ω|ω_m| + γ_Q|ΣQ|  (7.3.3)
             # ρ_k va con ω_m (frecuencia de mercado), NO con Ω (estabilidad).
@@ -1837,14 +2093,42 @@ def fast_thread_process(shm_env_name, shm_mic_name, shm_act_name, shm_par_name):
             # que ya tenía — el álgebra del filtro no cambia. Con q_S absoluto, un
             # movimiento de BTC de 45k a 90k lo dejaba mal escalado por 4×.
             q_base = par_arr[P_Q_BASE]
-            q_S = CTE.q_S_relativa(float(x_k[0, 0]), par_arr[P_SIGMA_REL])
             rho_k = (
                 1.0
                 + CTE.gamma_omega(par_arr[P_OMEGA_M_MAX]) * abs(w_m)
                 + CTE.gamma_Q(par_arr[P_SUMA_Q_MAX], par_arr[P_K_USD])
                 * abs(vol_sum_Q)
             )
-            Q_k = rho_k * np.diag([q_S, q_base * 1e-2, q_base])
+
+            # --- §4.2: Q POR TICK, no por paso de bucle ---------------------
+            # ⚠ ESTO ERA UN DEFECTO REAL, no una mejora cosmetica. `Q` no
+            # dependia de Δt, asi que Σ AⁱQAⁱᵀ crecia con el NUMERO DE PASOS y no
+            # con el tiempo transcurrido: la tasa del bucle cambiaba el filtro.
+            # El ruido de proceso inyectado era proporcional a cuantas veces
+            # desperto el planificador, y `q_base` estaba calibrada en silencio
+            # contra ~90 Hz — mover `PERIODO_HILO_RAPIDO` recalibraba el filtro
+            # sin que nada lo dijera.
+            #
+            # `Q` por tick es varianza inyectada POR TRANSACCION, que es una
+            # propiedad del mercado. `Q` por paso de bucle era varianza por
+            # despertar del planificador, que es una propiedad del sistema
+            # operativo. El reloj de ticks lo saca del presupuesto de ruido.
+            #
+            # NOTA DE INTERPRETACION: el §4.2 solo especifica `q_S_tick`. Se
+            # aplica el mismo principio a las otras dos entradas —varianza por
+            # tick = varianza por segundo / ν, porque los incrementos entre ticks
+            # se suponen iid y la VARIANZA es lo aditivo— para que la diagonal
+            # entera quede en el mismo reloj. Mezclar relojes dentro de una misma
+            # matriz de covarianza seria peor que tenerla mal escalada entera.
+            nu_ticks_por_s = CTE.nu_ticks_por_s_desde_anio(nu)
+            sigma_rel_tick = CTE.sigma_rel_tick_desde_s(
+                par_arr[P_SIGMA_REL], nu_ticks_por_s
+            )
+            q_S_tick = CTE.q_S_relativa(float(x_k[0, 0]), sigma_rel_tick)
+            escala_tick = 1.0 / nu_ticks_por_s if nu_ticks_por_s > 0.0 else 1.0
+            Q_k = rho_k * np.diag(
+                [q_S_tick, q_base * 1e-2 * escala_tick, q_base * escala_tick]
+            )
 
             # FORMA AFÍN (Sec. D.3): x_pred = x_ref + A·(x_k − x_ref), con
             # x_ref = [S_ref, 0, 0]ᵀ. Conserva x[0] = S ABSOLUTO, así que no hay
@@ -1902,73 +2186,177 @@ def fast_thread_process(shm_env_name, shm_mic_name, shm_act_name, shm_par_name):
             # Sin paquete nuevo, z_k = ∅ y aplica la Sec. 8.3.1 tal cual: K = 0 y
             # la incertidumbre crece con Q_k. Es la semántica correcta, no un
             # apaño: entre dos observaciones el filtro efectivamente no sabe más.
-            n_tick_actual = int(env_arr[0]["n_ticks"])
-            paquete_nuevo = n_tick_actual != ultimo_n_tick
-            ultimo_n_tick = n_tick_actual
-
-            hay_medicion = not (dropout == 1 or not paquete_valido or not paquete_nuevo)
-            if hay_medicion:
-                R_k_ab = np.diag(
-                    [
-                        par_arr[P_R_S_BASE]
-                        * math.exp(par_arr[P_BETA_JITTER] * retardo_sensor),
-                        par_arr[P_R_EMD],
-                    ]
+            # ================= BUCLE POR TRANSACCION (§4) ====================
+            # Cada trade del lote produce EXACTAMENTE un paso de prediccion y una
+            # correccion. Si el lote viene vacio el filtro NO avanza, y eso es lo
+            # correcto en reloj de transacciones: sin transacciones no hay
+            # informacion nueva NI evolucion del estado. El tiempo del filtro es
+            # el mercado, no el reloj de pared.
+            for trade in lote_trades:
+                # τ_d por TRANSACCION, con el reloj del exchange (Sec. 6.5). Antes
+                # se leia un unico `timestamp` del bloque escalar y todo el lote
+                # compartia el mismo retardo, que es falso: el primer trade de una
+                # rafaga de 203 es bastante mas viejo que el ultimo.
+                ts_trade = float(trade["T_trade"])
+                retardo_sensor = (
+                    max(0.0, t_ahora - ts_trade) if ts_trade > 0.0 else float("inf")
                 )
-                z_k_ab = np.array([[float(env_arr[0]["P_spot"])], [R_n_med]])
-            else:
-                R_k_ab = np.eye(2)
-                z_k_ab = np.zeros((2, 1))
+                paquete_valido = retardo_sensor <= par_arr[P_TAU_MAX]
+                hay_medicion = not (dropout == 1 or not paquete_valido)
 
-            # ---------- Sec. E.1: EAKF SOMBRA sobre el MISMO flujo -----------
-            # Solo uno alimenta el control; el otro corre en sombra. Es la única
-            # comparación honesta, porque dos corridas distintas verían mercados
-            # distintos y sobre un mercado real el experimento no se repite.
-            # El sombra usa la rama CONTRARIA a la vigente: así el A/B tiene datos
-            # en ambas ramas sin importar cuál esté gobernando.
-            sombra.usa_armonico = rama == dinamica.RAMA_VELOCIDAD_CONSTANTE
-            t_sombra = time.perf_counter()
-            innov_sombra, nis_sombra = sombra.paso(
-                z_k_ab, R_k_ab, Q_k, dt_ciclo, w_ang, S_ref_pred, hay_medicion
-            )
-            coste_sombra_acum += time.perf_counter() - t_sombra
-            n_coste_sombra += 1
+                # --- Prediccion afin con Δn = 1 (Sec. D.3 de la v1.3) -------
+                x_pred, P_pred = dinamica.predecir_afin(A, x_k, P_k, Q_k, S_ref_pred)
 
-            if not hay_medicion:
-                # Sec. 8.3.1: K = 0, la incertidumbre crece con Q_k (z_k = ∅).
-                x_k = x_pred
-                P_k = P_pred
-                # Sin medición no hay innovación que evaluar: el NIS de este ciclo
-                # no existe (no es 0, que sería "perfectamente consistente"). Se
-                # deja fuera de la ventana móvil para no sesgarla durante un
-                # dropout, que es justo cuando el filtro NO está siendo validado.
-                eps_nis = float("nan")
-            else:
-                # R_eff^(1,1) = r_S,base · e^(β·τ_d)   (Sec. 6.5 / 7.3.3)
-                R_k = R_k_ab
-                z_k = z_k_ab
-                innov = z_k - (H @ x_pred)
+                # --- ACTUALIZACION SECUENCIAL MULTI-TASA -------------------
+                # ⚠ EL Δn = 1 DEL §4 ARREGLA EL CANAL DE PRECIO PERO NO EL DE
+                # R_n, y medirlo lo delata: con el filtro a ~94 ticks/s y el Hilo
+                # Lento publicando `R_n` a 2 Hz, `y1` se repetia 11.6 veces y su
+                # ρ₁ salia +0.82. Es EXACTAMENTE el bug de las 90 correcciones de
+                # la v1.3, desplazado de canal — la tercera aparicion de la misma
+                # familia, que es justo lo que el §3.3 advierte.
+                #
+                # El vector de medicion tiene DOS componentes con cadencias
+                # distintas, asi que la correccion tiene que ser secuencial:
+                #   R_n FRESCO  -> H completa (2 filas), m = 2
+                #   R_n VIEJO   -> solo la fila del precio, m = 1
+                # Asimilar un R_n retenido como si fuera nuevo contrae P por
+                # informacion que no existe.
+                #
+                # La frescura se detecta con el contador del seqlock, que el Hilo
+                # Lento incrementa en cada publicacion: no hace falta comparar
+                # valores, que confundiria "no cambio" con "no llego".
+                seq_mic = int(mic["seq"])
+                R_n_fresco = seq_mic != ultima_seq_mic
+                if R_n_fresco:
+                    ultima_seq_mic = seq_mic
 
-                S_cov = H @ P_pred @ H.T + R_k
-                # Se evita np.linalg.inv: solve es más estable si S_cov se degrada.
-                K = (P_pred @ H.T) @ np.linalg.solve(S_cov, np.eye(S_cov.shape[0]))
+                if hay_medicion:
+                    r_precio = par_arr[P_R_S_BASE] * math.exp(
+                        par_arr[P_BETA_JITTER] * retardo_sensor
+                    )
+                    if R_n_fresco:
+                        H_ef = H
+                        R_k_ab = np.diag([r_precio, par_arr[P_R_EMD]])
+                        # El precio de ESTE trade, no el ultimo del bloque.
+                        z_k_ab = np.array([[float(trade["precio"])], [R_n_med]])
+                    else:
+                        H_ef = H_SOLO_PRECIO
+                        R_k_ab = np.array([[r_precio]])
+                        z_k_ab = np.array([[float(trade["precio"])]])
+                else:
+                    H_ef = H
+                    R_k_ab = np.eye(2)
+                    z_k_ab = np.zeros((2, 1))
 
-                x_k = x_pred + (K @ innov)
-                joseph = I3 - K @ H
-                P_k = (joseph @ P_pred @ joseph.T) + (K @ R_k @ K.T)  # Forma de Joseph
+                # ------ Sec. E.1: EAKF SOMBRA sobre el MISMO flujo ----------
+                # Solo uno alimenta el control; el otro corre en sombra. Es la
+                # unica comparacion honesta, porque dos corridas distintas verian
+                # mercados distintos y sobre un mercado real el experimento no se
+                # repite. El sombra usa la rama CONTRARIA a la vigente, asi que
+                # el A/B tiene datos de ambas sin importar cual gobierne.
+                sombra.usa_armonico = rama == dinamica.RAMA_VELOCIDAD_CONSTANTE
+                t_sombra = time.perf_counter()
+                innov_sombra, nis_sombra = sombra.paso(
+                    z_k_ab, R_k_ab, Q_k, 1.0, omega_ang_rad_tick, S_ref_pred,
+                    hay_medicion, H_ef,
+                )
+                coste_sombra_acum += time.perf_counter() - t_sombra
+                n_coste_sombra += 1
 
-                # FASE 1.1: ε_k se calcula AQUÍ, que es donde S_cov ya existe.
-                eps_nis = nis_escalar(innov, S_cov)
-                if math.isfinite(eps_nis):
-                    buffer_nis[idx_nis] = eps_nis
-                    idx_nis = (idx_nis + 1) % n_ventana_nis
-                    n_nis += 1
-                    # Publicado para el Hilo Lento (ventana adaptativa, Sec. 2.2.1).
-                    env_arr[0]["nis_eps"] = eps_nis
+                if not hay_medicion:
+                    # Sec. 8.3.1: K = 0, la incertidumbre crece con Q_k (z_k = ∅).
+                    x_k, P_k = x_pred, P_pred
+                    innov = np.zeros((2, 1))
+                    # Sin medicion no hay innovacion que evaluar: el NIS de este
+                    # tick NO EXISTE (no es 0, que seria "perfectamente
+                    # consistente"). Se deja fuera de la ventana movil para no
+                    # sesgarla durante un dropout, que es justo cuando el filtro
+                    # NO esta siendo validado.
+                    eps_nis = float("nan")
+                else:
+                    # R_eff^(1,1) = r_S,base · e^(β·τ_d)   (Sec. 6.5 / 7.3.3)
+                    innov = z_k_ab - (H_ef @ x_pred)
+                    S_cov = H_ef @ P_pred @ H_ef.T + R_k_ab
+                    # np.linalg.solve y no inv: mas estable si S_cov se degrada.
+                    K = (P_pred @ H_ef.T) @ np.linalg.solve(
+                        S_cov, np.eye(S_cov.shape[0])
+                    )
+                    x_k = x_pred + (K @ innov)
+                    joseph = I3 - K @ H_ef
+                    P_k = (joseph @ P_pred @ joseph.T) + (K @ R_k_ab @ K.T)  # Joseph
 
-            tr_P = float(np.trace(P_k))
-            deriv_tr = abs(tr_P - last_tr_P) / dt_ciclo
-            last_tr_P = tr_P
+                    eps_nis = nis_escalar(innov, S_cov)
+                    if math.isfinite(eps_nis):
+                        buffer_nis[idx_nis] = eps_nis
+                        idx_nis = (idx_nis + 1) % n_ventana_nis
+                        n_nis += 1
+                        # Para la ventana adaptativa del EMD (Sec. 2.2.1).
+                        env_arr[0]["nis_eps"] = eps_nis
+
+                tr_P = float(np.trace(P_k))
+                deriv_tr = abs(tr_P - last_tr_P) / max(dt_ciclo, 1e-6)
+                last_tr_P = tr_P
+
+                # --- TELEMETRIA POR TICK (Sec. 8.6.1) -----------------------
+                # Una fila por TRANSACCION, no por ciclo de control. Con esto la
+                # tasa de observaciones del reporte pasa a ser la tasa real de
+                # mercado, y `hay_medicion` deja de marcar el 99 % de relleno.
+                reg = telem_buffer[telem_idx]
+                reg["t_wall"] = t_ahora
+                reg["tr_P"] = tr_P
+                reg["x0"] = x_k[0, 0]
+                reg["x1"] = x_k[1, 0]  # ⚠ ahora en USD/BTC por TRANSACCION
+                reg["x2"] = x_k[2, 0]
+                reg["y0"] = innov[0, 0] if innov.size else float("nan")
+                # ⚠ `y1` va a NaN cuando R_n NO se asimilo en este tick. No es
+                # cero: cero significaria "innovacion nula", que es lo contrario.
+                # `diagnostico.ljung_box` descarta los no finitos, asi que la
+                # serie de y1 queda con las ~2 observaciones/s REALES en vez de
+                # con las 94 retenidas — que es lo que inflaba su rho_1 a +0.82.
+                reg["y1"] = innov[1, 0] if innov.shape[0] > 1 else float("nan")
+                reg["nis"] = eps_nis
+                reg["dtr_dt"] = deriv_tr
+                reg["id_episodio"] = int(env_arr[0]["id_episodio"])
+                reg["rama_A"] = int(rama)
+                # Mismo criterio que en el canal de control: cuando la
+                # actualizacion fue de una sola fila, la componente de R_n no se
+                # observo y va a NaN, no a cero.
+                reg["y0_sombra"] = (
+                    innov_sombra[0, 0] if innov_sombra.size else float("nan")
+                )
+                reg["y1_sombra"] = (
+                    innov_sombra[1, 0] if innov_sombra.shape[0] > 1 else float("nan")
+                )
+                reg["nis_sombra"] = nis_sombra
+                reg["hay_medicion"] = 1 if hay_medicion else 0
+                reg["C_espectral"] = C_esp
+                reg["w_ang"] = omega_ang_rad_tick
+                telem_idx += 1
+                muestras_episodio += 1
+                env_arr[0]["muestras_episodio"] = muestras_episodio
+                lleno = telem_idx >= TELEMETRY_SIZE
+                vencido = (
+                    telem_idx > 0
+                    and (t_ahora - t_ultimo_volcado) >= PERIODO_VOLCADO_TELEMETRIA
+                )
+                if lleno or vencido:
+                    # Se delega una COPIA a un hilo de I/O; el ciclo de control no
+                    # se detiene. Al volcar por tiempo el bloque va PARCIAL, que
+                    # es lo correcto: mejor un bloque corto en disco que un bloque
+                    # largo que se pierde en el proximo corte.
+                    threading.Thread(
+                        target=volcar_telemetria,
+                        args=(
+                            telem_buffer[:telem_idx].copy(),
+                            f"{os.getpid()}_{n_volcado:05d}",
+                        ),
+                        daemon=True,
+                    ).start()
+                    n_volcado += 1
+                    telem_idx = 0
+                    t_ultimo_volcado = t_ahora
+
+            n_trades_procesados += len(lote_trades)
 
             # ================= BURN-IN: CRITERIO NIS (Fase 1.2) ==============
             # DIVERGE DEL PDF (Sec. 7.1): el PDF cierra el burn-in cuando la
@@ -2046,44 +2434,10 @@ def fast_thread_process(shm_env_name, shm_mic_name, shm_act_name, shm_par_name):
                     f"{coste_ms:.4f} ms/ciclo (max 0.3)"
                 )
 
-            # ================= TELEMETRÍA (Sec. 8.6.1) =======================
-            reg = telem_buffer[telem_idx]
-            reg["t_wall"] = t_ahora
-            reg["tr_P"] = tr_P
-            reg["x0"] = x_k[0, 0]
-            reg["x1"] = x_k[1, 0]
-            reg["x2"] = x_k[2, 0]
-            # ỹ_k sigue siendo necesario: cambia el MÉTODO que lo consume (ALS en
-            # vez de Covariance Matching, Fase 2.1), no el dato.
-            reg["y0"] = innov[0, 0]
-            reg["y1"] = innov[1, 0]
-            reg["nis"] = eps_nis  # Escalar, no la matriz S_k (Fase 1.1)
-            reg["dtr_dt"] = deriv_tr  # Criterio legacy, para contrastarlo offline
-            # v1.3 Sec. C.5: separa los ~30 episodios en el análisis offline.
-            reg["id_episodio"] = int(env_arr[0]["id_episodio"])
-            # v1.3 Sec. D.4.3: rama activa de A, para condicionar el A/B.
-            reg["rama_A"] = int(rama)
-            # v1.3 Sec. E.1: innovaciones del filtro sombra, mismo flujo.
-            reg["y0_sombra"] = innov_sombra[0, 0]
-            reg["y1_sombra"] = innov_sombra[1, 0]
-            reg["nis_sombra"] = nis_sombra
-            reg["hay_medicion"] = 1 if hay_medicion else 0
-            reg["C_espectral"] = C_esp
-            reg["w_ang"] = w_ang
-            telem_idx += 1
-            muestras_episodio += 1
-            env_arr[0]["muestras_episodio"] = muestras_episodio
-            if telem_idx >= TELEMETRY_SIZE:
-                # Se delega una COPIA a un hilo de I/O; el ciclo de control no se
-                # detiene y no se pierden datos (antes el buffer se vaciaba sin
-                # escribir nada a disco).
-                threading.Thread(
-                    target=volcar_telemetria,
-                    args=(telem_buffer.copy(), f"{os.getpid()}_{n_volcado:05d}"),
-                    daemon=True,
-                ).start()
-                n_volcado += 1
-                telem_idx = 0
+            # La TELEMETRIA ya no vive aqui: paso al bucle por transaccion (§4),
+            # porque desde la v2.0 hay una fila por TICK y no una por ciclo de
+            # control. Registrar por ciclo volveria a llenar la serie de ceros de
+            # relleno, que es justo lo que `hay_medicion` existe para evitar.
 
             # ================= SINCRONIZACIÓN DE INVENTARIO (Sec. 4.5) =======
             seq_fill = int(env_arr[0]["seq_fill"])
@@ -2180,12 +2534,13 @@ def fast_thread_process(shm_env_name, shm_mic_name, shm_act_name, shm_par_name):
         shm_mic.close()
         shm_par.close()
         shm_act.close()
+        shm_mer.close()
 
 
 # ==============================================================================
 # 6. PROCESO 3: HILO LENTO (MICELIO, OU DE LIQUIDEZ, ESTRUCTURA)
 # ==============================================================================
-def slow_thread_process(shm_env_name, shm_mic_name, shm_par_name):
+def slow_thread_process(shm_env_name, shm_mic_name, shm_par_name, shm_mer_name):
     log("[INIT] Proc 3 (Micelio / EMD / OU) — afinidad núcleo 2")
     if hasattr(os, "sched_setaffinity"):
         os.sched_setaffinity(0, {2})
@@ -2194,9 +2549,12 @@ def slow_thread_process(shm_env_name, shm_mic_name, shm_par_name):
     shm_mic = shared_memory.SharedMemory(name=shm_mic_name)
     shm_par = shared_memory.SharedMemory(name=shm_par_name)
 
+    shm_mer = shared_memory.SharedMemory(name=shm_mer_name)
     env_arr = np.ndarray((1,), dtype=ENV_DTYPE, buffer=shm_env.buf)
     mic_arr = np.ndarray((1,), dtype=MICELIO_DTYPE, buffer=shm_mic.buf)
     par_arr = np.ndarray((TOTAL_PARAMS,), dtype=np.float64, buffer=shm_par.buf)
+    mer_arr = np.ndarray((RING_MERCADO_SIZE,), dtype=MERCADO_DTYPE, buffer=shm_mer.buf)
+    consumidor_lento = ConsumidorMercado(mer_arr, "lento")
 
     modo = mercado.modo_desde_codigo(par_arr[P_MODO])
     lam_ruido = float(par_arr[P_MU_OU])  # Arranca en la media: evita transitorio
@@ -2212,13 +2570,24 @@ def slow_thread_process(shm_env_name, shm_mic_name, shm_par_name):
     # Ventana deslizante de precios que alimenta la EMD (Sec. 2.2).
     buffer_precios = []
     t_ultima_muestra = 0.0
+    ticks_desde_muestra = 0  # §5.1: muestreo del EMD cada K transacciones
+    # --- v2.0 §6: reloj de volumen y factor phi' ---
+    # `phi_prima_acum` es el acumulador MONOTONO del reloj vigente. Distinto de
+    # SigmaQ (`sum_Q`), que se reinicia en cada nodo de fase: un reloj que
+    # retrocede a cero varias veces por hora no es un reloj.
+    reloj_vigente = CTE.reloj_desde_codigo(par_arr[P_RELOJ])
+    phi_prima_acum = 0.0
+    phi_prima_ultimo_nodo = 0.0
+    Q_acum_prev = float(env_arr[0]["Q_acumulado_total"])
+    n_ticks_prev_phi = int(env_arr[0]["n_ticks"])
     dt_muestreo = 0.0  # Intervalo real de muestreo, suavizado por EMA
     w_m = 0.0  # [1/Ticks] hasta que el HHT produzca la primera estimación
     R_n = 0.0  # [USD/BTC] residuo macro de la EMD
     f_hz_actual = 0.0  # Frecuencia dominante en Hz, para el refractario
     # --- v1.3 Sec. D: frecuencia angular y concentración espectral ---
     f_hz_ema = 0.0  # f suavizada por EMA (Sec. D.4.1), antes de derivar ω_ang
-    w_ang = 0.0  # [rad/s] = 2π·f_hz_ema. SOLO para A_arm (Sec. D.2)
+    w_ang = 0.0  # [rad/s] = 2π·f_hz_ema. Para el reloj de pared (Sec. D.2)
+    omega_ang_rad_tick = 0.0  # [rad/Tick] = 2π·ω_m. Para A_arm bajo Δn=1 (§4.1)
     C_espectral = 0.0  # Fracción de energía de la IMF dominante, [0,1]
 
     # Historia para las derivadas respecto a T̄ de la Sec. 1.4
@@ -2250,6 +2619,11 @@ def slow_thread_process(shm_env_name, shm_mic_name, shm_par_name):
                 if id_ep > 0:
                     buffer_precios.clear()
                     t_ultima_muestra = 0.0
+                    ticks_desde_muestra = 0
+                    phi_prima_acum = 0.0
+                    phi_prima_ultimo_nodo = 0.0
+                    Q_acum_prev = float(env_arr[0]["Q_acumulado_total"])
+                    n_ticks_prev_phi = int(env_arr[0]["n_ticks"])
                     S_ref = 0.0
                     Q_ref = float(env_arr[0]["Q_transado"])
                     t_ultimo_nodo = 0.0
@@ -2258,6 +2632,7 @@ def slow_thread_process(shm_env_name, shm_mic_name, shm_par_name):
                     w_m = 0.0
                     f_hz_ema = 0.0
                     w_ang = 0.0
+                    omega_ang_rad_tick = 0.0
                     C_espectral = 0.0
                     R_n = 0.0
                     log(
@@ -2294,27 +2669,65 @@ def slow_thread_process(shm_env_name, shm_mic_name, shm_par_name):
             # R_n fuera un coseno puro, el NIS y el Ljung-Box estaban midiendo el
             # generador de mocks y no el filtro, porque R_n entra directamente en
             # el vector de medición z_k (Sec. 7.3.1).
-            # El buffer se muestrea a PERIODO_MUESTREO_EMD, no a la cadencia del
-            # Hilo Lento: la ventana tiene que cubrir varios ciclos estructurales.
-            # Tolerancia del 10 %: el Hilo Lento corre a PERIODO_HILO_LENTO y el
-            # objetivo de muestreo es del mismo orden, así que exigir el período
-            # exacto hace que el jitter del scheduler descarte ~la mitad de las
-            # muestras de forma IRREGULAR. Un buffer con espaciado irregular
-            # rompe la EMD (los splines asumen malla uniforme) y era la causa de
-            # que no se detectara ningún nodo de fase en ejecución.
-            if (t_now - t_ultima_muestra) >= 0.9 * PERIODO_MUESTREO_EMD:
-                if t_ultima_muestra > 0.0:
-                    intervalo = t_now - t_ultima_muestra
-                    # Intervalo real, no el nominal (EMA para absorber el jitter).
-                    dt_muestreo = (
-                        0.9 * dt_muestreo + 0.1 * intervalo
-                        if dt_muestreo > 0
-                        else intervalo
-                    )
-                t_ultima_muestra = t_now
-                buffer_precios.append(S_actual)
-                if len(buffer_precios) > int(par_arr[P_W_MAX]):
-                    buffer_precios.pop(0)
+            # ================================================================
+            # v2.0 §5 — EL EMD DEJA DE TAMIZAR UNA ESCALERA
+            # ================================================================
+            # ⚠ EL DEFECTO QUE ESTO CORRIGE. Hasta la v1.3 el buffer se llenaba
+            # con RELOJ DE PARED: se tomaba `P_spot` cada 0.5 s "estuviera o no
+            # cambiado". Con el feed a 0.76 Hz, cerca de la mitad de las muestras
+            # eran DUPLICADOS LITERALES.
+            #
+            # El comentario que habia aqui se preocupaba de que el espaciado
+            # IRREGULAR rompiera los splines de la EMD — y resolvio la
+            # uniformidad de la malla TEMPORAL justo mientras la malla de VALORES
+            # se volvia una escalera: uniforme en t, constante a trozos en S. Y la
+            # transformada de Hilbert de un escalon tiene contenido en TODO el
+            # espectro, que es la singularidad que el propio docstring de `hht.py`
+            # advierte. O sea que ω_m y C podian estar contaminados EN ORIGEN.
+            #
+            # La solucion satisface a la vez las dos exigencias que estaban en
+            # conflicto: se muestrea CADA K TRANSACCIONES, lo que da malla
+            # uniforme (en ticks) Y ausencia de duplicados. En reloj de
+            # transacciones el jitter del planificador sencillamente no existe,
+            # asi que la preocupacion original desaparece en vez de resolverse.
+            #
+            # K conserva la cobertura de ventana actual: con W = 384 muestras y
+            # periodos modales de ~795 ticks, K ≈ ν · PERIODO_MUESTREO_EMD es el
+            # punto de partida. [CALIBRAR] contra la distribucion real de ν.
+            nu_ticks_por_s_lento = CTE.nu_ticks_por_s_desde_anio(nu)
+
+            # --- §6.3: avance del reloj phi' en este ciclo -------------------
+            # dphi' = dQ es el INCREMENTO, nunca el acumulado SigmaQ. Se lee del
+            # acumulador monotono `Q_acumulado_total`, que el Motor de Red
+            # incrementa por transaccion y que NO se reinicia en los nodos.
+            Q_acum_ahora = float(env_arr[0]["Q_acumulado_total"])
+            dq_usd = max(0.0, Q_acum_ahora - Q_acum_prev)
+            Q_acum_prev = Q_acum_ahora
+            dn_ticks = max(0, n_ticks - n_ticks_prev_phi)
+            n_ticks_prev_phi = n_ticks
+            phi_prima_acum += CTE.avance_de_reloj(dn_ticks, dq_usd, reloj_vigente)
+
+            k_muestreo = max(1, int(round(nu_ticks_por_s_lento * PERIODO_MUESTREO_EMD)))
+            lote_lento = consumidor_lento.leer_lote()
+            for trade in lote_lento:
+                ticks_desde_muestra += 1
+                if ticks_desde_muestra >= k_muestreo:
+                    ticks_desde_muestra = 0
+                    buffer_precios.append(float(trade["precio"]))
+                    if len(buffer_precios) > int(par_arr[P_W_MAX]):
+                        buffer_precios.pop(0)
+            # `dt_muestreo` pasa a ser el espaciado de la malla EN SEGUNDOS que
+            # corresponde a K ticks, que es lo que `hht.analizar_ventana` necesita
+            # para devolver f en Hz. La malla es uniforme en TICKS; esta es su
+            # traduccion al reloj de pared, y por eso se calcula aqui y no se
+            # mide con un cronometro.
+            if nu_ticks_por_s_lento > 0.0:
+                dt_muestreo_nuevo = k_muestreo / nu_ticks_por_s_lento
+                dt_muestreo = (
+                    0.9 * dt_muestreo + 0.1 * dt_muestreo_nuevo
+                    if dt_muestreo > 0
+                    else dt_muestreo_nuevo
+                )
 
             hht_ok = False
             if len(buffer_precios) >= max(32, min(W_k, int(par_arr[P_W_MAX]))):
@@ -2357,6 +2770,12 @@ def slow_thread_process(shm_env_name, shm_mic_name, shm_par_name):
                     # distintos, sin conversión en el punto de uso — que es donde
                     # el 2π y el factor 125 se cuelan sin dar síntoma.
                     w_ang = dinamica.omega_angular_desde_hz(f_hz_ema)
+                    # §4.1: la variante en rad/TICK, para A_arm bajo Δn = 1. La
+                    # conversion pasa por `omega_m_desde_hz` (ciclos/tick) y
+                    # luego por el 2π, cada una en su funcion unica del §2.4.
+                    omega_ang_rad_tick = CTE.omega_ang_rad_tick_desde_ciclos(
+                        CTE.omega_m_desde_hz(f_hz_ema, nu) if nu > 0.0 else 0.0
+                    )
                     C_espectral = float(res_hht.get("C", 0.0))
 
             # --- Nodo de fase y ΔS (Sec. 2.6) -------------------------------
@@ -2374,21 +2793,45 @@ def slow_thread_process(shm_env_name, shm_mic_name, shm_par_name):
                 imf_t0 = res_hht["imf_dom_t0"]
                 signo_imf = 1 if imf_t0 > 0 else (-1 if imf_t0 < 0 else 0)
                 if signo_imf != 0 and signo_imf_prev != 0 and signo_imf != signo_imf_prev:
-                    # Período refractario derivado de la frecuencia estimada: el
-                    # modelo dice que los nodos ocurren cada medio ciclo, así que
-                    # se exige al menos 0.8 medios ciclos entre dos nodos. Sin
-                    # esto, el ruido alrededor del cruce reinicia S_ref y ΣQ
-                    # varias veces seguidas.
-                    if f_hz_actual > 0.0:
-                        refractario = 0.8 * (0.5 / f_hz_actual)
+                    # ------------------------------------------------------------
+                    # v2.0 §6.4 — REFRACTARIO EN φ', NO EN SEGUNDOS
+                    # ------------------------------------------------------------
+                    # El principio: "para ponderar no uses el transcurso del
+                    # tiempo, usa el mercado que pasó". Este es el caso más claro
+                    # de todos: no quieres dos nodos de fase separados por poco
+                    # TIEMPO, quieres que estén separados por poco MERCADO.
+                    #
+                    # Con un refractario temporal, en un mercado muerto disparas
+                    # nodos espurios —pasa el tiempo sin que pase nada— y en una
+                    # ráfaga los suprimes justo cuando son reales. Medir la
+                    # separación en transacciones (o en cuantos de volumen)
+                    # elimina las dos fallas a la vez.
+                    #
+                    # El umbral se deriva del mismo criterio de antes —0.8 medios
+                    # ciclos— pero expresado en el reloj vigente: medio ciclo son
+                    # (0.5/f_hz) segundos, que a ν ticks/s son (0.5/f_hz)·ν ticks.
+                    if f_hz_actual > 0.0 and nu_ticks_por_s_lento > 0.0:
+                        medio_ciclo_s = 0.5 / f_hz_actual
+                        umbral_refractario = 0.8 * CTE.avance_de_reloj(
+                            dn_ticks=int(medio_ciclo_s * nu_ticks_por_s_lento),
+                            dq_usd=medio_ciclo_s * nu_ticks_por_s_lento * CTE.DELTA_Q_ESTRELLA,
+                            reloj=reloj_vigente,
+                        )
                     else:
-                        refractario = 5.0 * PERIODO_HILO_LENTO
-                    if (t_now - t_ultimo_nodo) >= refractario:
+                        # Sin estimación de frecuencia todavía: se cae al criterio
+                        # temporal de la v1.3, convertido al reloj vigente.
+                        umbral_refractario = CTE.avance_de_reloj(
+                            dn_ticks=int(5.0 * PERIODO_HILO_LENTO * max(nu_ticks_por_s_lento, 1.0)),
+                            dq_usd=5.0 * PERIODO_HILO_LENTO * max(nu_ticks_por_s_lento, 1.0) * CTE.DELTA_Q_ESTRELLA,
+                            reloj=reloj_vigente,
+                        )
+                    if (phi_prima_acum - phi_prima_ultimo_nodo) >= umbral_refractario:
                         nodo = True
                 if signo_imf != 0:
                     signo_imf_prev = signo_imf
 
             if nodo:
+                phi_prima_ultimo_nodo = phi_prima_acum
                 S_ref = S_actual  # Sec. 2.6: S_ref = S(T̄_nodo)
                 Q_ref = Q_bruto  # ΣQ se reinicia a cero (Sec. 6.3)
                 t_ultimo_nodo = t_now
@@ -2475,6 +2918,7 @@ def slow_thread_process(shm_env_name, shm_mic_name, shm_par_name):
                     "vol_sum_Q": sum_Q,
                     "W_k": float(W_k),
                     "w_ang": w_ang,
+                    "omega_ang_rad_tick": omega_ang_rad_tick,
                     "C_espectral": C_espectral,
                 },
             )
@@ -2487,12 +2931,13 @@ def slow_thread_process(shm_env_name, shm_mic_name, shm_par_name):
         shm_env.close()
         shm_mic.close()
         shm_par.close()
+        shm_mer.close()
 
 
 # ==============================================================================
 # 7. ORQUESTADOR (Sec. 7.7)
 # ==============================================================================
-NOMBRES_SHM = ("shm_ent", "shm_mic", "shm_act", "shm_par")
+NOMBRES_SHM = ("shm_ent", "shm_mic", "shm_act", "shm_par", "shm_mer")
 
 
 def main():
@@ -2546,10 +2991,15 @@ def main():
         shm_act = allocate_shared_memory(
             "shm_act", ACTUATOR_DTYPE.itemsize * RING_BUFFER_SIZE
         )
+        # v2.0 §3.1: anillo de datos de mercado. Es el bloque que sustituye a la
+        # casilla escalar P_spot y deja de tirar el 96 % de las transacciones.
+        shm_mer = allocate_shared_memory(
+            "shm_mer", MERCADO_DTYPE.itemsize * RING_MERCADO_SIZE
+        )
         shm_par = allocate_shared_memory(
             "shm_par", TOTAL_PARAMS * np.dtype(np.float64).itemsize
         )
-        mem_refs.extend([shm_env, shm_mic, shm_act, shm_par])
+        mem_refs.extend([shm_env, shm_mic, shm_act, shm_par, shm_mer])
 
         p_array = np.ndarray((TOTAL_PARAMS,), dtype=np.float64, buffer=shm_par.buf)
         p_array[:] = initialize_default_parameters()
@@ -2580,14 +3030,16 @@ def main():
             )
 
         p1 = mp.Process(
-            target=network_engine_process, args=("shm_ent", "shm_act", "shm_par")
+            target=network_engine_process,
+            args=("shm_ent", "shm_act", "shm_par", "shm_mer"),
         )
         p2 = mp.Process(
             target=fast_thread_process,
-            args=("shm_ent", "shm_mic", "shm_act", "shm_par"),
+            args=("shm_ent", "shm_mic", "shm_act", "shm_par", "shm_mer"),
         )
         p3 = mp.Process(
-            target=slow_thread_process, args=("shm_ent", "shm_mic", "shm_par")
+            target=slow_thread_process,
+            args=("shm_ent", "shm_mic", "shm_par", "shm_mer"),
         )
         procesos.extend([p1, p2, p3])
         for pr in procesos:

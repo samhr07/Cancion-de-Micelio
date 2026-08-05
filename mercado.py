@@ -340,16 +340,64 @@ def leer_mmr(lector_firmado=None) -> tuple[float, bool]:
 
 @dataclass
 class TickMercado:
-    """Un tick real. `es_sintetico` marca los que no vienen del exchange."""
+    """Una transaccion real. `es_sintetico` marca las que no vienen del exchange.
+
+    v2.0 §3.1: lleva IDENTIDAD (`trade_id`) y lado del taker (`es_maker`). Sin la
+    identidad no se puede deduplicar (§3.3) ni detectar huecos (§3.4), y hasta la
+    v1.3 el sistema sencillamente no la tenia.
+    """
 
     precio: float  # [USD/BTC]
-    cantidad: float  # [BTC] volumen del trade agregado
+    cantidad: float  # [BTC] volumen de la transaccion
     ts_evento: float  # [s] reloj del EXCHANGE, no el local
+    trade_id: int = 0  # 'a' de aggTrade o 't' de trade; 0 = sin identidad
+    es_maker: bool = False  # 'm': el comprador es maker -> el taker vendio
     es_sintetico: bool = False
 
 
 class EstancamientoFeed(RuntimeError):
     """El socket está conectado pero no entrega datos. Ver `FeedPublico`."""
+
+
+# ------------------------------------------------------------------------------
+# ⚠ EL STREAM DE TRANSACCIONES: POR QUE `@trade` Y NO `@aggTrade`
+# ------------------------------------------------------------------------------
+# La v1.3 concluyó que el WebSocket de futuros estaba filtrado por la red, porque
+# `btcusdt@aggTrade` conectaba y callaba mientras el de spot funcionaba. **Esa
+# conclusión era incorrecta**, y sondearlo en serio (2026-08-04) lo demuestra:
+#
+#   EN EL MISMO HOST fstream.binance.com, EN EL MISMO TIPO DE SOCKET:
+#     btcusdt@bookTicker    ->  91-288 msgs/s   HABLA
+#     btcusdt@trade         ->    26-32 msgs/s  HABLA
+#     btcusdt@depth@100ms   ->      9.8 msgs/s  HABLA
+#     btcusdt@aggTrade      ->        0         MUDO
+#     btcusdt@markPrice     ->        0         MUDO
+#     btcusdt@kline_1m      ->        0         MUDO
+#     btcusdt@ticker        ->        0         MUDO
+#
+# Y con suscripción explícita por mensaje al mismo socket, el servidor
+# **CONFIRMA** la suscripción — `{"result":["btcusdt@aggTrade"],"id":99}` — y aun
+# así no manda un solo dato. Es decir: el socket es bidireccional, la ruta no está
+# bloqueada, Binance nos oye y nos contesta. Descartado el filtrado de ISP, y con
+# él la necesidad de montar un VPS.
+#
+# Los certificados son legítimos (DigiCert/GeoTrust de Binance) y no hay proxy en
+# el entorno, así que tampoco es inspección TLS. La causa última del silencio de
+# `@aggTrade` queda SIN EXPLICAR, y se deja anotada como tal en vez de inventarle
+# una: lo que importa operativamente es que hay un stream equivalente que sí
+# fluye.
+#
+# `@trade` da todo lo que `@aggTrade` daba, sin agregar: precio, cantidad, hora
+# del exchange, identidad (`t`) y lado del taker (`m`). Medido sobre 45 s:
+#     26.0 transacciones/s, tau_d p50 = 0.198 s (p90 0.274, max 0.522)
+#     0 huecos en 1170 ids consecutivos
+#     cobertura 0.99x -> tiempo real, no replay
+# Contra las 0.76 "mediciones"/s de la v1.3, son **34x mas datos**.
+#
+# TODO(revisar): si algun dia `@aggTrade` vuelve a fluir, `@trade` sigue siendo
+# preferible para el reloj de transacciones — agregar trades es justo lo que
+# `aggTrade` hace y lo que §1.2 quiere deshacer.
+STREAM_TRANSACCIONES = "trade"
 
 
 # Segundos sin un solo mensaje que bastan para declarar el socket muerto.
@@ -390,7 +438,7 @@ class FeedPublico:
         self.modo = modo
         self.symbol = symbol.lower()
         self.symbol_mayus = symbol.upper()
-        self.url_ws = f"{WS_BASE[modo]}/{self.symbol}@aggTrade"
+        self.url_ws = f"{WS_BASE[modo]}/{self.symbol}@{STREAM_TRANSACCIONES}"
         self.url_precio = (
             f"{REST_BASE[modo]}/fapi/v1/ticker/price?symbol={self.symbol_mayus}"
         )
@@ -447,9 +495,12 @@ class FeedPublico:
                         if mensaje.type is not aiohttp.WSMsgType.TEXT:
                             continue
                         dato = json.loads(mensaje.data)
-                        if dato.get("e") != "aggTrade":
+                        if dato.get("e") not in ("trade", "aggTrade"):
                             continue
                         self.estancamientos = 0
+                        # 't' en `@trade`, 'a' en `@aggTrade`: mismo papel de
+                        # identidad para deduplicar y detectar huecos (§3.3/§3.4).
+                        tid = int(dato.get("t", dato.get("a", 0)))
                         al_recibir(
                             TickMercado(
                                 precio=float(dato["p"]),
@@ -459,6 +510,8 @@ class FeedPublico:
                                 # Sec. 6.5, que es precisamente la latencia que se
                                 # quiere medir.
                                 ts_evento=float(dato["T"]) / 1000.0,
+                                trade_id=tid,
+                                es_maker=bool(dato.get("m", False)),
                             )
                         )
         finally:
@@ -526,6 +579,8 @@ class FeedPublico:
                             precio=float(tr["p"]),
                             cantidad=float(tr["q"]),
                             ts_evento=float(tr["T"]) / 1000.0,
+                            trade_id=int(tr["a"]),
+                            es_maker=bool(tr.get("m", False)),
                             # No es sintético: precio y volumen son reales. Lo
                             # degradado es la resolución temporal, no la
                             # procedencia del dato.
@@ -551,6 +606,8 @@ class FeedPublico:
                         precio=float(tr["p"]),
                         cantidad=float(tr["q"]),
                         ts_evento=float(tr["T"]) / 1000.0,
+                        trade_id=int(tr["a"]),
+                        es_maker=bool(tr.get("m", False)),
                         es_sintetico=True,  # el retardo extra sí es artefacto
                     )
                 )

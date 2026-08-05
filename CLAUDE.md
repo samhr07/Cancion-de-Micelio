@@ -9,9 +9,9 @@ IPOPT y qpOASES). No se han validado contra CUDA ni acados.**
 
 ---
 
-## ESTADO ACTUAL (2026-08-04)
+## ESTADO ACTUAL (2026-08-05)
 
-Cuatro tandas de trabajo aplicadas, en este orden:
+Cinco tandas de trabajo aplicadas, en este orden:
 
 1. **Correcciones estructurales** — el orden de trabajo de abajo, ejecutado en su totalidad.
    Detalle en "Sesión 2026-08-02".
@@ -28,8 +28,11 @@ el estado *anterior* del código.
 
 4. **Riesgo de cuenta y modelo oscilatorio v1.3** — `ORDEN_TRABAJO_RIESGO_1_3.md`, completo:
    precondición (Modo LECTURA) y Secciones A, B, C, D, E y F. Detalle en
-   "Sesión 2026-08-04". Los 31 criterios de aceptación de la Sección F pasan
-   (`python tests_v13.py`).
+   "Sesión 2026-08-04".
+5. **Relojes y acoplamiento con el mercado v2.0** — `ORDEN_TRABAJO_RELOJES_2_0.md`, completo:
+   §2 a §8. Detalle en "Sesión 2026-08-05". Reorganización estructural: el filtro y el
+   EMD pasan a **reloj de transacciones** (Δn = 1) y el sistema deja de descartar el
+   **96 %** de los datos que ya recibía. **42/42** criterios (`python tests_v13.py`).
 
 **Las Fases 2 y 3 siguen sin ejecutar.** La 3 necesita Testnet. La 2 sigue tras su
 compuerta, pero la v1.3 cambió el terreno: el ρ₁ = 0.87 de `y1` resultó ser artefacto de
@@ -47,7 +50,10 @@ corregir el filtro 90 veces con la misma medición, y eso está corregido en ori
 - `episodios.py` — **v1.3**: máquina de episodios y adaptador de faucet.
 - `dinamica.py` — **v1.3**: matrices `A`, conmutador de rama, EAKF sombra.
 - `diagnostico.py` — reporte offline (`python diagnostico.py [--episodio=N]`).
-- `tests_v13.py` — criterios de aceptación de la Sec. F (`python tests_v13.py`).
+- `tests_v13.py` — criterios de aceptación de la Sec. F de la v1.3 **y del §8 de la v2.0**
+  (`python tests_v13.py`). El nombre se conserva para no romper referencias.
+- `test_contaminacion_emd.py` — **v2.0 §5.2** sobre mercado real
+  (`python test_contaminacion_emd.py --capturar=440`).
 
 ### Cómo se arranca
 
@@ -654,7 +660,7 @@ más abajo con el detalle y el porqué.
 | B — riesgo de cuenta | ✔ completa | las 7 guardas + disparo forzado probado |
 | C — episodios y faucet | ✔ completa | 6 compuertas, `DETENIDO` terminal |
 | D — matriz `A` oscilatoria | ✔ completa | ambas trampas verificadas por test |
-| E — protocolo A/B | ⚠ infraestructura sí, **veredicto no** | el feed degradado lo invalida |
+| E — protocolo A/B | ⚠ infraestructura sí, **veredicto no** | el feed degradado lo invalida; y la v2.0 §5.2 lo anula por segunda causa |
 | F — criterios de aceptación | ✔ **33/33** | `python tests_v13.py` |
 
 **Constantes y guardas al arranque, con S real de 63 920 USD**
@@ -1039,6 +1045,315 @@ disparara. Un test que falla por su propia culpa gasta el mismo tiempo que uno r
    de `A` si ambos modelos siguen con ρ₁ ≥ 0.20.
 4. Testnet con credenciales → Fase 3 (`Ω_crit`) y las 30 corridas, con el test de disparo
    forzado ejecutado en cada una (Sec. G).
+
+## Sesión 2026-08-05 — Relojes y reconstrucción del acoplamiento (v2.0)
+
+Ejecuta `ORDEN_TRABAJO_RELOJES_2_0.md`: precondición de medición y §2 a §8. Es una tanda de
+**reorganización estructural**, no de calibración: cambia dónde vive el tiempo en el sistema.
+Suite: **42/42** (`python tests_v13.py`), los 33 de la v1.3 más 9 nuevos.
+
+### RESULTADOS DE UN VISTAZO
+
+**La tesis del documento, confirmada por medición**
+
+| | valor |
+|---|---|
+| lotes de `aggTrades` a 1 Hz | p50 = 3, p95 = 6, máx = 1000 (el límite del API saturando) |
+| factor de lote | **24.9×** |
+| **transacciones descartadas por tener `P_spot` escalar** | **96.0 %** |
+
+Las "0.76 mediciones/s" de la v1.3 eran la tasa de **paquetes**, no la de información. El
+sistema no estaba escaso de datos: los estaba tirando.
+
+**Observaciones que llegan al filtro, por etapa**
+
+| etapa | obs/s | % de ticks con medición |
+|---|---|---|
+| v1.3 | 0.76 | 0.90 % |
+| anillo publicando, sin consumir | 2.95 | 3.2 % |
+| **§4 completo (Δn = 1)** | **24–94** (sigue al mercado) | **100 %** |
+
+**Autocorrelación de la innovación, antes y después**
+
+| canal | v1.3 | v2.0 §4 | v2.0 + multi-tasa |
+|---|---|---|---|
+| `y0` (precio) | +0.268 | **−0.164** | −0.164 (*rechazo no material*) |
+| `y1` (residuo) | +0.819 | +0.819 | **+0.476** |
+| repetición de `y1` | 11.6× | 11.6× | **1.5×** |
+
+### ⚠ El WebSocket de futuros NO estaba filtrado — la v1.3 concluyó mal
+
+La v1.3 dio por filtrada la ruta porque `btcusdt@aggTrade` conectaba y callaba mientras spot
+funcionaba. Sondeado en serio, en el **mismo host y el mismo socket**:
+
+| stream en `fstream.binance.com` | |
+|---|---|
+| `@bookTicker` | 91–288 msg/s |
+| `@trade` | 26–518 msg/s |
+| `@depth@100ms` | 9.8 msg/s |
+| `@aggTrade`, `@markPrice`, `@kline`, `@ticker` | **mudos** |
+
+Y con suscripción explícita por mensaje el servidor **confirma**
+`{"result":["btcusdt@aggTrade"],"id":99}` y aun así no manda un dato. El socket es
+bidireccional, Binance nos oye y nos contesta; los certificados son legítimos (DigiCert) y no
+hay proxy. **Descartado el filtrado de ISP, y con él la necesidad de montar un VPS.**
+
+La causa última del silencio de `@aggTrade` **queda sin explicar**, y se deja anotada como
+tal. Lo operativo es que `@trade` da lo mismo sin agregar —precio, cantidad, hora del
+exchange, identidad y lado del taker— con τ_d = 0.198 s (p90 0.274) y **cero huecos en 1170
+ids consecutivos**. Es ahora el stream primario (`mercado.STREAM_TRANSACCIONES`).
+
+### ⚠ La tasa de transacciones varía por un factor 20 — cuidado con "lo típico"
+
+Medido el mismo día sobre el mismo par: **18.8 tx/s** (REST, momento tranquilo), **26–32 tx/s**
+(WS), **517.9 tx/s** media hora después. Cualquier constante calibrada contra "la tasa típica"
+es sospechosa de origen. Por eso `K` (muestreo del EMD) y el avance del reloj se derivan de ν
+en ejecución, y el anillo se dimensiona contra el **pico**: 16 384 entradas ≈ 31 s de colchón
+a 518 tx/s.
+
+### §3 — La ingesta por lotes
+
+`MERCADO_DTYPE` es un Ring Buffer SPSC con **identidad de trade**, que es lo que hasta ahora
+faltaba y lo que habilita las dos cosas siguientes:
+
+- **Deduplicación por `aggTradeId`** (§3.3). El sondeo REST devuelve ventanas solapadas; sin
+  deduplicar, los mismos trades entran al filtro varias veces — el bug de las 90 correcciones
+  con otro disfraz. El contador **no se reinicia entre reconexiones**, a propósito.
+- **Detección de huecos** (§3.4). Un modo de fallo nuevo y distinto del socket mudo: el feed
+  funciona y aun así falta información. Se publican `n_huecos` y `trades_perdidos`, y se marca
+  el instante para poder excluir el tramo del análisis.
+
+### §4 — El filtro bajo Δn = 1, y lo que elimina estructuralmente
+
+Un tick = un paso de predicción + una corrección. No parchea: vuelve **imposible de
+expresar** corregir dos veces con la misma medición, descartar el resto del lote, y —lo más
+sutil— meter al planificador dentro de `Q`.
+
+Ese último era un defecto real: `Q` no dependía de Δt, así que `Σ AⁱQAⁱᵀ` crecía con el
+**número de pasos** y no con el tiempo. El ruido de proceso era proporcional a cuántas veces
+despertó el planificador, y `q_base` estaba calibrada en silencio contra ~90 Hz. Ahora
+`q_S_tick = (σ_rel_tick·S)²` con `σ_rel_tick = σ_rel_s/√ν` — varianza por **transacción**,
+que es una propiedad del mercado. El test de invariancia a la tasa lo cierra: N pasos de
+Δn=1 dan el mismo `x` y la misma `P` que un paso de Δn=N.
+
+⚠ Ese test exige `Q_N = Σ AⁱQAⁱᵀ`, **no `N·Q`**. Solo coinciden si `A = I`; en cuanto `A`
+propaga, suponer `N·Q` sobreestima la certeza en la posición. `dinamica.acumular_Q` existe
+para eso, y el test comprueba explícitamente que la versión ingenua **no** pasa — si pasara,
+el test no discriminaría y no valdría.
+
+**La trampa del 2π reaparece en espacio de ticks**, intacta. Medida con
+`periodo_implicito_ticks` sobre un ciclo de 795 ticks: correcto **795.0**, sin el 2π **4995**.
+
+**Auditoría de `x[1]` tras el cambio de unidades** (USD/BTC por segundo → por transacción):
+el único consumidor es la telemetría (`reg["x1"]`). Ninguna fórmula la consume, así que el
+cambio es seguro. La constante que la escala, `q_base·1e-2`, sí queda mal calibrada y pasa a
+ser `[CALIBRAR]` de la Fase 2.
+
+### ⚠ El §4 arregló medio problema — y medirlo lo delató
+
+Con Δn = 1, `y0` bajó a ρ₁ = −0.164. Pero `y1` seguía en **+0.819**, y el propio reporte
+explicaba por qué: `R_n` cambiaba en el 8.6 % de los pasos y se repetía **11.6×**. Era el bug
+de las 90 correcciones **desplazado de canal** — el filtro pasó a decenas de ticks/s mientras
+el Hilo Lento sigue publicando `R_n` a 2 Hz. Tercera aparición de la misma familia en tres
+sesiones, que es justo contra lo que advierte el §3.3.
+
+Cerrado con **actualización secuencial multi-tasa**: si `R_n` es fresco, `H` completa y m = 2;
+si no, solo la fila del precio y m = 1. Asimilar un `R_n` retenido contrae `P` con información
+que no existe. La frescura se detecta con el contador del seqlock, no comparando valores —
+comparar valores confundiría "no cambió" con "no llegó".
+
+En telemetría, `y1` va a **NaN** cuando no se observó, no a cero: cero significaría
+"innovación nula", que es lo contrario. Resultado: ρ₁ de 0.819 → **0.476** y repetición de
+11.6× → 1.5×. Lo que queda es la correlación genuina de `R_n` por ventanas EMD solapadas, que
+la Sec. E.3 de la v1.3 ya excluye de la compuerta.
+
+### El signo de ρ₁ cambió, y eso dice algo
+
+`y0` pasó de **+0.268 a −0.164**, con decaimiento rápido (ρ₁₀ = −0.022). Un ρ₁ negativo a
+rezago 1 es la firma del **rebote bid-ask**: microestructura, no desajuste de `A`. Es
+exactamente lo que el §4.3 anticipa al procesar por transacción, y —como manda— **se registra,
+no se compensa**. La Fase 2 (ALS) sigue siendo la dueña de `r_S,base`, ahora con un objetivo
+bien definido: ruido de observación **por transacción**, que sí es una cantidad con
+significado físico.
+
+Dato relacionado: la curtosis de `y0` es **+207**. Con datos por transacción la mayoría de los
+trades no mueven el precio y unos pocos saltan, así que la cola es enorme. Refuerza la nota de
+la v1.2 sobre ALS-IRLS (Huber) — pero primero el ALS estándar, que sin baseline no hay mejora
+que medir.
+
+### §5 — El EMD dejaba de tamizar una escalera
+
+El buffer se llenaba con reloj de pared: `P_spot` cada 0.5 s "hubiera cambiado o no". Con el
+feed lento, media ventana eran **duplicados literales**. El comentario que había ahí se
+preocupaba del espaciado irregular y resolvió la uniformidad de la malla *temporal* justo
+mientras la de *valores* se volvía escalera — y la transformada de Hilbert de un escalón tiene
+contenido en todo el espectro. Ahora se muestrea **cada K transacciones**, lo que da malla
+uniforme en ticks y cero duplicados a la vez; en reloj de ticks el jitter del planificador no
+existe, así que la preocupación original desaparece en vez de resolverse.
+
+### ⚠ §5.2 — CONTAMINACIÓN CONFIRMADA: la sincronización era LOCAL, no global
+
+Ejecutado sobre **11 870 transacciones reales** capturadas en 439 s (ν = 27.0 tx/s,
+K = 14 ticks/muestra), tamizando la misma serie por tres vías con W = 384 en las tres.
+Se añadió una tercera vía a las dos que pide el documento, precisamente para poder
+**separar las dos causas posibles**:
+
+| vía | duplicados | f_hz | período | C |
+|---|---|---|---|---|
+| **A** escalera (v1.3): pared 0.5 s sobre precio a 1 Hz | 74.2 % | 0.01051 | 95.2 s | **0.917** |
+| **B** pared 0.5 s con precio siempre fresco | 50.1 % | 0.00381 | 262.6 s | 0.737 |
+| **C** ticks (v2.0): una muestra cada K transacciones | 44.1 % | 0.07587 | **13.2 s** | 0.624 |
+
+```
+A vs C (v1.3 contra v2.0):  f_hz difiere  86.2 %    C difiere 0.294
+A vs B (efecto DUPLICADOS): f_hz difiere  63.8 %
+B vs C (efecto ESPACIO):    f_hz difiere  95.0 %    C difiere 0.114
+```
+
+**Veredicto: contaminación material, y la causa dominante es el ESPACIO de muestreo**
+(95.0 %), no los duplicados (63.8 %). Sin la vía B esto no se podría afirmar — un
+resultado positivo A-vs-C no diría cuál de las dos cosas hay que arreglar.
+
+Consecuencias, en orden de gravedad:
+
+1. **El A/B de la v1.3 queda anulado por una segunda causa independiente.** No solo
+   corría con 0.76 mediciones/s: además `ω_m` venía de tamizar una escalera. Un período
+   de 95 s donde el tiempo de transacción dice 13 s es un factor **7**.
+2. **`C` estaba inflada por la escalera, y `C` es lo que decide la rama de `A`.** La
+   escalera suprime las IMFs rápidas donde el valor se repite, así que la energía se
+   concentra en el modo lento y `C` sube: 0.917 con 74 % de duplicados contra 0.624 con
+   44 %. Los `C` de 0.94–1.00 que en la v1.3 mantenían enganchado el oscilador armónico
+   **eran en buena parte artefacto**. Con muestreo limpio `C` sigue por encima de
+   `C_ON = 0.50`, pero con mucho menos margen — y alimentando una frecuencia 7× distinta.
+3. **Respuesta a la pregunta de fondo: la sincronización era LOCAL.** El §4 puso el
+   filtro en reloj de transacciones, pero el EMD —el otro consumidor de datos de mercado,
+   y el productor de `ω_m` y `C`— seguía en reloj de pared. La cadena estaba sincronizada
+   a medias. Ahora lo está de extremo a extremo.
+
+⚠ **Lo que el muestreo por ticks NO arregla:** la vía C conserva un **44.1 %** de
+duplicados. No son artificiales: a 27 tx/s y K = 14, el precio de BTC genuinamente no se
+mueve en 14 transacciones (tickSize 0.10 USD). El muestreo por ticks elimina los
+duplicados por *sobremuestrear una variable rancia*, no los que trae el mercado. Queda
+como límite conocido del estimador, no como defecto pendiente.
+
+Reproducible con `python test_contaminacion_emd.py --capturar=440`; la captura queda en
+`telemetria/captura_trades.npz`. La versión determinista, con verdad conocida y sin red,
+está en la suite (`test_v20_contaminacion_emd_reloj_de_pared`).
+
+**Un solo tramo de mercado no generaliza.** Conviene repetirlo en régimen agitado antes
+de dar por cerrada la magnitud del efecto.
+
+### §6 — El reloj de volumen
+
+`ΔQ*` **medido**: mediana de volumen por transacción = 0.0060 BTC ≈ **386 USD** a S ≈ 64 400.
+Con eso, a actividad típica el reloj de volumen y el de ticks avanzan a la misma tasa media y
+lo único que los separa es la ponderación por tamaño — que es la propiedad a poner a prueba.
+
+`Q_acumulado_total` es monótono y **distinto de ΣQ**, que se reinicia en cada nodo de fase.
+φ' se aplica al refractario de nodos, el caso que el documento llama más claro: no quieres dos
+nodos separados por poco *tiempo*, quieres que lo estén por poco *mercado*.
+
+La regla §6.5 está codificada en `CONSUMIDOR_DE_OMEGA` y tiene test propio que **no es vacuo**:
+fuerza la variante equivocada y comprueba que el resultado difiere (170 %).
+
+### Defecto operativo que la v2.0 introdujo, y su arreglo
+
+Con una fila de telemetría por transacción y la tasa variando 20×, el volcado solo-al-llenar
+hacía impredecible cuándo hay datos en disco (20 s a 518 tx/s, 6 min a 26 tx/s) y una parada
+no limpia se llevaba todo lo acumulado. Costó varias corridas de verificación enteras. Añadido
+volcado **también por tiempo** (60 s), con bloque parcial.
+
+### TABLA DE MEDICIONES — todos los números crudos de la v2.0
+
+Recogidos aquí para poder analizarlos sin releer la narrativa. Todos son de ejecución real
+salvo donde diga sintético.
+
+**Feed y latencia** (WebSocket `btcusdt@trade`, Mainnet, 45 s)
+
+| magnitud | valor |
+|---|---|
+| τ_d | p10 0.189 s · **p50 0.198 s** · p90 0.274 s · max 0.522 s |
+| fracción que supera τ_max = 2.0 s | **0.0 %** |
+| huecos en ids consecutivos | **0 de 1170** |
+| cobertura temporal | 44.8 s de mercado en 45 s de reloj = **0.99×** (tiempo real, no replay) |
+| llegada en ráfagas | 85.7 % de los mensajes a < 2 ms del anterior; ráfaga p90 = 35, max = 203 |
+| separación real entre trades | p50 0.0 ms · p90 74.0 ms |
+| offset de reloj vs `/fapi/v1/time` | 0.279 s |
+
+**Endpoints REST comparados** (sesión reutilizada, `τ_d` = local al recibir − timestamp del dato)
+
+| endpoint | peso | τ_d mediana | trae volumen |
+|---|---|---|---|
+| `ticker/price` | 1 | **7.64 s** ← el obvio, y el equivocado | no |
+| `ticker/bookTicker` | 2 | 1.54 s | no |
+| **`aggTrades`** | 20 | **0.70 s** | **sí** |
+
+Latencia por llamada: **0.27 s** con sesión `aiohttp` reutilizada contra **~0.9 s** abriendo
+socket nuevo con `urllib` en cada sondeo.
+
+**Lote y volumen** (`aggTrades` a 1 Hz, 46 llamadas en 61 s)
+
+| magnitud | valor |
+|---|---|
+| transacciones nuevas por lote | p50 = 3 · p95 = 6 · **max = 1000** (el límite del API saturando) |
+| media por lote | 24.9 |
+| tasa real | 18.8 tx/s |
+| **descarte por `P_spot` escalar** | **96.0 %** |
+| volumen por transacción | mediana **0.0060 BTC** · p95 1.0050 · max 30.1420 |
+| ΔQ* resultante a S ≈ 64 400 | **386.40 USD** |
+
+**Ljung-Box tras Δn = 1 + multi-tasa** (5857 ticks, 240.9 s, 24.3 ticks/s)
+
+| canal | ρ₁ | ρ₂ | ρ₃ | ρ₁₀ | ρ₄₅ | cambia en | veredicto |
+|---|---|---|---|---|---|---|---|
+| `y0` precio | **−0.164** | −0.077 | −0.097 | −0.022 | −0.001 | 100.0 % | rechazo NO material |
+| `y1` residuo | +0.476 | +0.220 | −0.100 | +0.111 | +0.004 | 66.4 % | rechaza blancura |
+
+Antes de la multi-tasa, `y1` daba ρ₁ = +0.819, ρ₂ = +0.723, ρ₃ = +0.555, cambiando en el
+8.6 % de los pasos (repetición **11.6×**).
+
+**Shapiro-Wilk** — colas, y por qué importan para la Fase 2
+
+| canal | W | curtosis exceso | asimetría |
+|---|---|---|---|
+| `y0` precio | 0.09993 | **+207.8** | −9.52 |
+| `y1` residuo | 0.54108 | +14.09 | +0.79 |
+
+Con datos por transacción la mayoría de los trades no mueven el precio y unos pocos saltan:
+esa cola es real, no un outlier a recortar.
+
+**Latencia del lazo**
+
+| magnitud | v1.3 | v2.0 |
+|---|---|---|
+| cadencia del Hilo Rápido | 11.0–11.9 ms/ciclo | **41.1 ms/ciclo** |
+| sobrecosto del EAKF sombra | 0.046–0.11 ms/ciclo | 0.10–0.11 ms/ciclo (presupuesto 0.3) |
+
+⚠ La cadencia subió 3.7× porque cada ciclo drena el lote de transacciones. Sigue por debajo
+del presupuesto para el trabajo útil, pero **hay que vigilarlo en régimen de 518 tx/s**: es el
+número que decide si el drenado necesita su propio hilo.
+
+**Salidas de los tests que llevan número**
+
+| test | resultado |
+|---|---|
+| `periodo_implicito_ticks` | correcto **795.0** ticks · sin 2π **4995** (ciclo real de 795) |
+| invariancia a la tasa | 12 pasos ≡ 1 paso de Δn=12; la versión ingenua `N·Q` se desvía 5.02e-03 |
+| regla §6.5 | Φ con la ω equivocada se desvía **170 %** |
+| sobrepaso del anillo | lapeo de 500 detectado y contabilizado en 1 sobrepaso |
+| §5.2 sintético | ticks recupera 100 muestras/ciclo (verdad 75, error 25 %); pared da 194 y difiere **48 %** |
+| σ_rel por tick | σ_s/√ν = 4.354e-07 con ν = 26 tx/s |
+
+### Pendiente tras esta fase
+
+- **El A/B sigue sin veredicto.** El test de contaminación del §5.2 ya está ejecutado y salió
+  POSITIVO (ver arriba), así que el resultado de la v1.3 queda anulado por partida doble.
+  Falta la corrida de ≥ 24 h (§E.2), ahora sobre la cadena ya sincronizada de extremo a extremo.
+- **Fase 2 (ALS)** sigue tras su compuerta, pero el terreno cambió: `y0` ya está por debajo del
+  umbral material y lo que queda es microestructura, que es lo que ALS debe estimar.
+- El silencio de `@aggTrade` en fstream sigue **sin explicación**. No bloquea nada.
+- `C_ON`/`C_OFF`, `ω_m,max`, `ΔS_ref`, `ΔQ*` y `q_base·1e-2` siguen `[CALIBRAR]`.
+- Fase 3 (`Ω_crit`) y las 30 corridas de Testnet, sin cambios.
 
 ## Convenciones
 
