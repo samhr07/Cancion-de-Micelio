@@ -168,8 +168,117 @@ def analizar(nombre, muestras, dt, span_referencia=None):
     }
 
 
+def barrido_banda(precios, tiempos, k):
+    """§2.1 de la v2.1: elegir `ciclos_min` y `muestras_por_ciclo_min` POR EVIDENCIA.
+
+    El documento los propone en 3.0 y 5.0 "de la literatura de EMD, no una
+    medicion de este sistema", y exige barrerlos contra esta captura.
+
+    Criterio de eleccion, en este orden:
+      1. DEBE rechazar las vias A y B (el defecto de tres sesiones) y aceptar C.
+         Sin esto la guarda no sirve para lo que se creo.
+      2. Entre las que cumplen 1, preferir la que ACEPTE MAS ventanas reales de
+         la via C: una guarda que rechaza todo es trivialmente segura e inutil.
+    """
+    print()
+    print("=" * 92)
+    print("BARRIDO DE LA BANDA DE RESOLUBILIDAD (§2.1 de la v2.1)")
+    print("=" * 92)
+
+    # Las tres vias, con su periodo y su espaciado.
+    m_a, dt_a = muestrear_escalera(
+        precios, tiempos, W_VENTANA, PERIODO_PARED, CADENCIA_PAQUETE_V13
+    )
+    m_b, dt_b = muestrear_pared_sin_huecos(precios, tiempos, W_VENTANA, PERIODO_PARED)
+    m_c, dt_c = muestrear_ticks(precios, tiempos, W_VENTANA, k)
+    vias = []
+    for nombre, m, dt in (("A", m_a, dt_a), ("B", m_b, dt_b), ("C", m_c, dt_c)):
+        r = hht.analizar_ventana(m, dt)
+        vias.append((nombre, r["periodo_s"], dt, len(m)))
+
+    # Ventanas independientes de la via C, para medir cuantas sobreviven.
+    ventanas = []
+    paso = W_VENTANA * k // 2  # 50 % de solape entre ventanas consecutivas
+    for ini in range(0, max(1, len(precios) - W_VENTANA * k), paso):
+        idx = np.arange(ini, ini + W_VENTANA * k, k)[:W_VENTANA]
+        if len(idx) < W_VENTANA or idx[-1] >= len(precios):
+            continue
+        dt_v = float((tiempos[idx[-1]] - tiempos[idx[0]]) / (len(idx) - 1))
+        r = hht.analizar_ventana(precios[idx], dt_v)
+        if r["valido"]:
+            ventanas.append((r["periodo_s"], dt_v))
+
+    print(f"  Ventanas independientes de la via C evaluadas: {len(ventanas)}")
+    print()
+    print(f"  {'ciclos_min':>10} {'m/ciclo_min':>12} | {'A':>6} {'B':>6} {'C':>6} | "
+          f"{'ventanas C aceptadas':>22} | veredicto")
+    print("  " + "-" * 88)
+
+    mejores = []
+    for ciclos_min in (2.0, 2.5, 3.0, 3.5, 4.0, 5.0):
+        for mpc_min in (3.0, 4.0, 5.0, 6.0, 8.0):
+            acepta = {}
+            for nombre, periodo, dt, W in vias:
+                acepta[nombre] = hht.omega_en_banda(periodo, dt, W, ciclos_min, mpc_min)
+            n_ok = sum(
+                1 for p, d in ventanas
+                if hht.omega_en_banda(p, d, W_VENTANA, ciclos_min, mpc_min)
+            )
+            frac = n_ok / max(1, len(ventanas))
+            cumple = (not acepta["A"]) and (not acepta["B"]) and acepta["C"]
+            marca = "CUMPLE" if cumple else ""
+            print(
+                f"  {ciclos_min:10.1f} {mpc_min:12.1f} | "
+                f"{'si' if acepta['A'] else 'NO':>6} {'si' if acepta['B'] else 'NO':>6} "
+                f"{'si' if acepta['C'] else 'NO':>6} | {n_ok:6d}/{len(ventanas):<6d} "
+                f"({frac:5.1%})      | {marca}"
+            )
+            if cumple:
+                mejores.append((frac, ciclos_min, mpc_min))
+
+    print()
+    if not mejores:
+        print("  >> NINGUNA combinacion rechaza A y B aceptando C.")
+        print("     La guarda de banda no basta por si sola sobre esta captura.")
+        return None
+
+    fracs = {round(f, 6) for f, _, _ in mejores}
+    print(f"  {len(mejores)} combinaciones cumplen el criterio 1 (rechazar A y B, aceptar C).")
+    if len(fracs) == 1:
+        # ⚠ HONESTIDAD DEL BARRIDO. Con pocas ventanas independientes el criterio
+        # 2 no separa: todas empatan. Elegir "la mejor" de un empate seria elegir
+        # por el orden del desempate y llamarlo evidencia — exactamente el tipo de
+        # conclusion sin sustento que este proyecto persigue.
+        print("  >> EL CRITERIO 2 NO DISCRIMINA: todas las que cumplen 1 empatan en")
+        print(f"     {mejores[0][0]:.1%} de ventanas aceptadas. Con "
+              f"{len(ventanas)} ventanas independientes no hay resolucion para")
+        print("     separarlas. Se CONSERVAN los valores propuestos por el documento")
+        print(f"     (ciclos_min={hht.CICLOS_MIN_VENTANA}, "
+              f"muestras_por_ciclo_min={hht.MUESTRAS_POR_CICLO_MIN}), que estan")
+        print("     dentro de la region valida, en vez de elegir un extremo del empate.")
+        print("     Para discriminar hace falta una captura mucho mas larga.")
+        elegido = (hht.CICLOS_MIN_VENTANA, hht.MUESTRAS_POR_CICLO_MIN)
+        dentro = any(
+            abs(c - elegido[0]) < 1e-9 and abs(m - elegido[1]) < 1e-9
+            for _, c, m in mejores
+        )
+        if not dentro:
+            print("     [!] Pero la propuesta del documento NO esta entre las que")
+            print("         cumplen el criterio 1. Hay que revisarla.")
+        return elegido
+
+    mejores.sort(reverse=True)
+    frac, ciclos_min, mpc_min = mejores[0]
+    print(f"  >> ELECCION POR EVIDENCIA: ciclos_min={ciclos_min}, "
+          f"muestras_por_ciclo_min={mpc_min}")
+    print(f"     Rechaza A y B, acepta C, y deja pasar el {frac:.1%} de las ventanas")
+    print(f"     reales de la via C, contra {sorted(fracs)[0]:.1%} de la peor que cumple.")
+    return ciclos_min, mpc_min
+
+
 def main(argv):
     segundos = 0.0
+    hacer_barrido = "--barrido" in argv
     for a in argv[1:]:
         if a.startswith("--capturar="):
             segundos = float(a.split("=", 1)[1])
@@ -251,6 +360,9 @@ def main(argv):
     print()
     print("  Nota: un solo tramo de mercado no generaliza. Repetir en regimenes")
     print("  distintos antes de dar la contaminacion por descartada del todo.")
+
+    if hacer_barrido:
+        barrido_banda(precios, tiempos, k)
     return 0
 
 

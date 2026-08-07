@@ -202,6 +202,18 @@ ENFRIAMIENTO_EPISODIO = 60.0  # [s] evita bucles apretados
 C_ON_ARMONICO = 0.50
 C_OFF_ARMONICO = 0.35
 
+# T_OMEGA_RANCIA — cuanto puede conservarse el ultimo Omega valido (§2.2 v2.1).
+#   Unidades: s
+#   Conservar el ultimo valor valido es correcto durante un hueco corto de la
+#   cadena EMD; conservarlo indefinidamente seria operar con una foto vieja de la
+#   estabilidad del modelo y llamarla medida. Pasado este umbral, Omega se degrada
+#   a 0 y el NMPC pasa a su comportamiento de burn-in.
+#   [CALIBRAR EN ENTORNO REAL] 120 s son ~2-3 ventanas de EMD a la cadencia
+#   actual, o sea "he perdido la medida durante varios intentos seguidos". Debe
+#   revisarse contra la distribucion real de huecos de validez, y podria tener que
+#   ser dinamico: en mercado agitado las ventanas se llenan mas rapido.
+T_OMEGA_RANCIA = 120.0  # [s]
+
 
 def nocional_max_posicion(
     S: float, i_max: float = I_MAX, eps: float = EPS_HOLGURA_POSICION

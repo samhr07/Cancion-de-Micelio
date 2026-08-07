@@ -28,6 +28,8 @@ Los mensajes que se imprimen van en ASCII (consola cp1252); los comentarios y
 docstrings sí llevan acentos y símbolos.
 """
 
+import math
+
 import numpy as np
 from scipy.interpolate import CubicSpline
 from scipy.signal import hilbert
@@ -302,6 +304,58 @@ def colapso_espectral(analiticas, n_prom: int = N_PROMEDIO_TERMINAL) -> float:
     return numerador / denominador
 
 
+# ==============================================================================
+# BANDA DE RESOLUBILIDAD (§2 de ORDEN_TRABAJO_OMEGA_2_1)
+# ==============================================================================
+# [CALIBRAR] Punto de partida de la literatura de EMD, NO una medicion de este
+# sistema. El §2.1 exige barrerlos contra la captura del §5.2 y elegir por
+# evidencia; el barrido vive en `test_banda_omega.py`.
+CICLOS_MIN_VENTANA = 3.0  # ciclos minimos en la ventana para una IMF fiable
+MUESTRAS_POR_CICLO_MIN = 5.0  # muestras minimas por ciclo para localizar extremos
+
+
+def banda_resoluble(dtau: float, W: int, ciclos_min: float = CICLOS_MIN_VENTANA,
+                    muestras_por_ciclo_min: float = MUESTRAS_POR_CICLO_MIN):
+    """Periodos [T_min, T_max] que la EMD puede resolver con esta rejilla.
+
+        T_min = muestras_por_ciclo_min · Δτ
+        T_max = W · Δτ / ciclos_min
+
+    COTA SUPERIOR: hacen falta al menos `ciclos_min` ciclos dentro de la ventana
+    para que el tamizado aisle una IMF. Por encima, lo que se devuelve no es un
+    ciclo sino una TENDENCIA — precisamente lo que el residuo `R_n` debe absorber.
+    COTA INFERIOR: hacen falta al menos `muestras_por_ciclo_min` muestras por
+    ciclo para localizar extremos. Dos (Nyquist) NO bastan, porque la EMD
+    interpola envolventes por splines cubicos, no reconstruye por Shannon.
+    """
+    if dtau <= 0.0 or W <= 0 or ciclos_min <= 0.0:
+        return (float("inf"), 0.0)  # banda vacia: nada es resoluble
+    return (muestras_por_ciclo_min * dtau, W * dtau / ciclos_min)
+
+
+def omega_en_banda(periodo: float, dtau: float, W: int,
+                   ciclos_min: float = CICLOS_MIN_VENTANA,
+                   muestras_por_ciclo_min: float = MUESTRAS_POR_CICLO_MIN) -> bool:
+    """¿El periodo medido cae dentro de lo que esta rejilla puede resolver? §2.1.
+
+    ⚠ ESTA GUARDA ES LA ADICION MAS VALIOSA DE LA v2.1, y su ausencia es la razon
+    de que un `ω_m` estructuralmente invalido circulara durante TRES SESIONES sin
+    que nada protestara. Aplicada a las tres vias del §5.2 de la v2.0:
+
+        via A  Δτ=0.500 s  banda 2.50-64.00 s  periodo  95.2 s  -> FUERA
+        via B  Δτ=0.500 s  banda 2.50-64.00 s  periodo 262.6 s  -> FUERA (0.73
+                                                ciclos: mas largo que la ventana)
+        via C  Δτ=0.519 s  banda 2.59-66.37 s  periodo  13.2 s  -> dentro
+
+    Tres lineas habrian rechazado las dos respuestas de reloj de pared sin
+    necesidad de la comparacion a tres bandas.
+    """
+    if not math.isfinite(periodo) or periodo <= 0.0:
+        return False
+    t_min, t_max = banda_resoluble(dtau, W, ciclos_min, muestras_por_ciclo_min)
+    return t_min <= periodo <= t_max
+
+
 def concentracion_espectral(analiticas, n_prom: int = N_PROMEDIO_TERMINAL) -> float:
     """C ∈ [0,1]: fracción de la energía estructural que aporta la IMF dominante.
 
@@ -420,6 +474,10 @@ def analizar_ventana(precios: np.ndarray, dt: float, usar_ar: bool = True) -> di
         # C = 0 sin descomposición: sin evidencia de ciclo, la conmutación de la
         # Sec. D.4.2 debe quedarse en velocidad constante, que es la rama segura.
         "C": 0.0,
+        # §2 de la v2.1: la validez de banda viaja CON la medida, no aparte.
+        "omega_valida": False,
+        "periodo_s": 0.0,
+        "banda": (0.0, 0.0),
     }
     if n < 16:
         return vacio
@@ -446,6 +504,7 @@ def analizar_ventana(precios: np.ndarray, dt: float, usar_ar: bool = True) -> di
     residuo = residuo_ext[ini:fin]
 
     f_hz = colapso_espectral(analiticas)
+    periodo_s = 1.0 / f_hz if f_hz > 0.0 else float("inf")
 
     # Nodo de fase sobre la IMF dominante (la de mayor energía, excluyendo IMF1).
     i_dom = imf_dominante(analiticas, indice=-1)
@@ -472,5 +531,12 @@ def analizar_ventana(precios: np.ndarray, dt: float, usar_ar: bool = True) -> di
         # de la v1.3). Se devuelve aquí y no se recalcula en el Hilo Lento porque
         # depende de las mismas `analiticas` que ya se descompusieron.
         "C": float(concentracion_espectral(analiticas)),
+        # --- §2 de la v2.1: BANDA DE RESOLUBILIDAD ---
+        # Se evalua AQUI, donde se conocen a la vez el periodo medido, el
+        # espaciado y el tamano de ventana. Evaluarlo en el consumidor obligaria
+        # a transportar los tres, y ya sabemos como acaba eso en este proyecto.
+        "omega_valida": bool(omega_en_banda(periodo_s, dt, n)),
+        "periodo_s": float(periodo_s),
+        "banda": banda_resoluble(dt, n),
         "valido": True,
     }

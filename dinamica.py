@@ -42,6 +42,26 @@ RAMA_ARMONICO = 1
 # dígitos significativos por cancelación catastrófica y en ω = 0 exacto es 0/0.
 UMBRAL_TAYLOR = 1.0e-6
 
+# ⚠ El jacobiano necesita un umbral MAYOR que `A_arm`, y el valor está MEDIDO.
+# `sin(ω)/ω` pierde poca precisión cerca de cero (numerador y denominador son
+# ambos O(ω)), pero su derivada `(ω·cos ω − sin ω)/ω²` resta dos cantidades casi
+# iguales de orden ω para dar un resultado de orden ω³: cancelación catastrófica.
+# La rama de Taylor tiene el problema opuesto — su error de truncamiento crece
+# con ω. El umbral óptimo es donde ambos se cruzan, y eso no se razona, se mide:
+#
+#     ω       error relativo de la fórmula exacta   error relativo de Taylor
+#     1e-6            7.8e-05                              1.0e-13
+#     1e-5            1.4e-06                              1.0e-11
+#     1e-4            1.1e-08                              1.0e-09
+#     3e-4            ~1e-08                               ~3e-08   <- cruce
+#     1e-3            5.6e-11                              1.0e-07
+#     1e-2            8.5e-13                              1.0e-05
+#
+# Se toma 3e-4: el peor de los dos errores queda en ~1e-8 relativo. Un intento
+# previo de fijarlo en 1e-3 "porque ahí se cruzan" era razonamiento sin medición,
+# y dejaba un salto del 0.2 % en el umbral.
+UMBRAL_TAYLOR_JACOBIANO = 3.0e-4
+
 
 # ==============================================================================
 # D.1 y D.2 — LAS DOS TRAMPAS DE UNIDADES
@@ -174,6 +194,73 @@ def matriz_A_armonica(w_ang: float, dt: float) -> np.ndarray:
         ],
         dtype=np.float64,
     )
+
+
+def jacobiano_A_respecto_omega(w_ang_rad_tick: float) -> np.ndarray:
+    """J = ∂A_arm/∂ω evaluada en Δn = 1.  §4.3 de la v2.1.
+
+        ∂cos(ω)/∂ω      = −sin(ω)
+        ∂(sin(ω)/ω)/∂ω  = (ω·cos(ω) − sin(ω))/ω²
+        ∂(−ω·sin(ω))/∂ω = −sin(ω) − ω·cos(ω)
+
+    ⚠ RAMA DE TAYLOR OBLIGATORIA, misma disciplina que `matriz_A_armonica` pero
+    con umbral PROPIO Y MAYOR (ver `UMBRAL_TAYLOR_JACOBIANO`): el término central
+    es 0/0 en ω = 0 y sufre cancelación catastrófica mucho antes de llegar ahí.
+    Para |ω| < UMBRAL_TAYLOR_JACOBIANO (medido en 3e-4, ver la constante):
+        −sin(ω)                ≈ −ω
+        (ω·cos ω − sin ω)/ω²   ≈ −ω/3
+        −sin ω − ω·cos ω       ≈ −2ω
+
+    Los tres tienden a CERO cuando ω → 0, luego `Q_omega → 0`: **sin ciclo, no
+    hay incertidumbre de ciclo.** Esa es la comprobación de coherencia de toda la
+    construcción, y tiene test propio.
+    """
+    w = float(w_ang_rad_tick)
+    if not math.isfinite(w):
+        return np.zeros((3, 3), dtype=np.float64)
+    if abs(w) < UMBRAL_TAYLOR_JACOBIANO:
+        d_cos = -w
+        d_sinc = -w / 3.0
+        d_menos_w_sin = -2.0 * w
+    else:
+        d_cos = -math.sin(w)
+        d_sinc = (w * math.cos(w) - math.sin(w)) / (w * w)
+        d_menos_w_sin = -math.sin(w) - w * math.cos(w)
+    return np.array(
+        [
+            [d_cos, d_sinc, 0.0],
+            [d_menos_w_sin, d_cos, 0.0],
+            [0.0, 0.0, 0.0],  # R_n no depende de ω
+        ],
+        dtype=np.float64,
+    )
+
+
+def Q_omega(w_ang_rad_tick: float, x: np.ndarray, sigma_omega: float,
+            S_ref: float = 0.0) -> np.ndarray:
+    """Ruido de proceso por INCERTIDUMBRE EN ω.  §4.3 de la v2.1.
+
+        Q_ω = (J·x)(J·x)ᵀ · σ_ω²        con  J = ∂A_arm/∂ω
+
+    `DIVERGE DEL PDF (Sec. 7.3.3)`. Hoy `ρ_k = 1 + γ_ω·|ω_m| + γ_Q·|ΣQ|` infla `Q`
+    con la MAGNITUD de ω — dice "los ciclos rápidos son más inciertos". Lo que se
+    quiere es que infle con la INCERTIDUMBRE — "los ciclos mal conocidos son más
+    inciertos". Con ω promovida a determinante de la dinámica en `A_arm`, lo
+    segundo es lo físicamente correcto, y además es propagación de incertidumbre
+    paramétrica derivable **sin ninguna constante libre**.
+
+    Se evalúa sobre la DESVIACIÓN `x − x_ref`, coherente con la forma afín de la
+    predicción (Sec. D.3 de la v1.3): es esa desviación la que `A_arm` propaga.
+
+    ⚠ NO SUSTITUYE a `ρ_k` todavía. El §4.3 pide implementar AMBAS variantes,
+    registrarlas en paralelo y **no decidir aquí**: decide el dato.
+    """
+    if not math.isfinite(sigma_omega) or sigma_omega <= 0.0:
+        return np.zeros((3, 3), dtype=np.float64)
+    J = jacobiano_A_respecto_omega(w_ang_rad_tick)
+    x_ref = np.array([[S_ref], [0.0], [0.0]], dtype=np.float64)
+    v = J @ (np.asarray(x, dtype=np.float64).reshape(3, 1) - x_ref)
+    return (v @ v.T) * (sigma_omega * sigma_omega)
 
 
 def acumular_Q(A_un_paso: np.ndarray, Q_tick: np.ndarray, n_pasos: int) -> np.ndarray:

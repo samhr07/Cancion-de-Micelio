@@ -46,3 +46,4 @@ corrida_*.log
 
 # Capturas de mercado para el test §5.2: se regeneran
 captura_*.npz
+captura_*.log

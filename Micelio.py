@@ -199,6 +199,16 @@ MICELIO_DTYPE = np.dtype(
         # el punto de uso — ahi es donde el 2π se ha colado ya dos veces.
         ("omega_ang_rad_tick", np.float64),
         ("C_espectral", np.float64),  # Concentración de la IMF dominante [0,1]
+        # --- v2.1 §2: validez de banda de ω_m ---
+        # ⚠ La guarda tiene que alcanzar a Φ, Ψ y Ω, no solo a la rama de A. Un
+        # ω_m fuera de banda que se cuele en Φ = ΣQ·ω_m propaga a Ω, y Ω entra AL
+        # CUADRADO en el costo del NMPC (κΩ², μΩ²) y en Ω_crit: es la via por la
+        # que un artefacto de la rejilla de muestreo llega a mover dinero.
+        ("omega_valida", np.uint8),
+        ("edad_omega", np.float64),  # [s] desde la ultima omega VALIDA
+        ("periodo_s", np.float64),  # periodo medido, para auditar la banda
+        ("banda_min_s", np.float64),
+        ("banda_max_s", np.float64),
     ]
 )
 
@@ -300,6 +310,9 @@ TELEM_DTYPE = np.dtype(
         # un régimen que cambia de verdad.
         ("C_espectral", np.float64),
         ("w_ang", np.float64),
+        # --- v2.1 §2 ---
+        ("omega_valida", np.uint8),
+        ("edad_omega", np.float64),
     ]
 )
 
@@ -2039,6 +2052,9 @@ def fast_thread_process(shm_env_name, shm_mic_name, shm_act_name, shm_par_name, 
             # las dos trampas (el 2π y el factor 125) se cuelan sin dar síntoma.
             w_ang = float(mic["w_ang"])
             C_esp = float(mic["C_espectral"])
+            # --- v2.1 §2.2: validez de banda de omega ---
+            omega_valida = bool(int(mic["omega_valida"]))
+            edad_omega = float(mic["edad_omega"])
 
             dropout = int(env_arr[0]["flag_dropout"])
 
@@ -2067,7 +2083,12 @@ def fast_thread_process(shm_env_name, shm_mic_name, shm_act_name, shm_par_name, 
             # Rama de A: se decide UNA VEZ por ciclo, no por trade. `C` y `w_ang`
             # los publica el Hilo Lento a su cadencia, asi que dentro de un lote
             # no cambian y reevaluarlos por trade solo gastaria tiempo.
-            rama = conmutador.actualizar(C_esp, w_ang)
+            # §2.2: con omega invalida, velocidad constante INCONDICIONALMENTE.
+            # No es una preferencia del conmutador: es que no hay frecuencia que
+            # meter en A_arm, y meter una invalida es peor que no oscilar.
+            rama = conmutador.actualizar(
+                C_esp if omega_valida else 0.0, w_ang if omega_valida else 0.0
+            )
             # §4.1: ω ANGULAR en rad/TICK. La conversion vive en el sitio unico
             # de `constantes_micelio` (§2.4) y NO se hace aqui: este es
             # exactamente el punto de uso donde la trampa del 2π se cuela.
@@ -2093,9 +2114,17 @@ def fast_thread_process(shm_env_name, shm_mic_name, shm_act_name, shm_par_name, 
             # que ya tenía — el álgebra del filtro no cambia. Con q_S absoluto, un
             # movimiento de BTC de 45k a 90k lo dejaba mal escalado por 4×.
             q_base = par_arr[P_Q_BASE]
+            # §2.2: con omega invalida su termino va a CERO y los demas siguen.
+            # Anular rho_k entero seria tirar la informacion de volumen, que es
+            # valida; dejar el termino de omega seria inflar Q con un artefacto.
+            termino_omega = (
+                CTE.gamma_omega(par_arr[P_OMEGA_M_MAX]) * abs(w_m)
+                if omega_valida
+                else 0.0
+            )
             rho_k = (
                 1.0
-                + CTE.gamma_omega(par_arr[P_OMEGA_M_MAX]) * abs(w_m)
+                + termino_omega
                 + CTE.gamma_Q(par_arr[P_SUMA_Q_MAX], par_arr[P_K_USD])
                 * abs(vol_sum_Q)
             )
@@ -2330,7 +2359,15 @@ def fast_thread_process(shm_env_name, shm_mic_name, shm_act_name, shm_par_name, 
                 reg["nis_sombra"] = nis_sombra
                 reg["hay_medicion"] = 1 if hay_medicion else 0
                 reg["C_espectral"] = C_esp
-                reg["w_ang"] = omega_ang_rad_tick
+                # ⚠ w_ang a NaN cuando omega NO es valida, nunca a cero. Cero es
+                # un valor CON significado —"sin ciclo"— y confundirlo con "sin
+                # medida" es el defecto que este proyecto persigue desde la
+                # primera sesion. Mismo criterio que `y1` en la v2.0.
+                reg["w_ang"] = (
+                    omega_ang_rad_tick if omega_valida else float("nan")
+                )
+                reg["omega_valida"] = 1 if omega_valida else 0
+                reg["edad_omega"] = edad_omega
                 telem_idx += 1
                 muestras_episodio += 1
                 env_arr[0]["muestras_episodio"] = muestras_episodio
@@ -2589,6 +2626,13 @@ def slow_thread_process(shm_env_name, shm_mic_name, shm_par_name, shm_mer_name):
     w_ang = 0.0  # [rad/s] = 2π·f_hz_ema. Para el reloj de pared (Sec. D.2)
     omega_ang_rad_tick = 0.0  # [rad/Tick] = 2π·ω_m. Para A_arm bajo Δn=1 (§4.1)
     C_espectral = 0.0  # Fracción de energía de la IMF dominante, [0,1]
+    # --- v2.1 §2: validez de banda ---
+    omega_valida = False  # arranque conservador: sin tamizado no hay medida
+    edad_omega = float("inf")
+    t_ultima_omega_valida = 0.0
+    periodo_medido = 0.0
+    banda_min, banda_max = 0.0, 0.0
+    aviso_banda_emitido = False
 
     # Historia para las derivadas respecto a T̄ de la Sec. 1.4
     T_prev = 0.0
@@ -2634,6 +2678,10 @@ def slow_thread_process(shm_env_name, shm_mic_name, shm_par_name, shm_mer_name):
                     w_ang = 0.0
                     omega_ang_rad_tick = 0.0
                     C_espectral = 0.0
+                    omega_valida = False
+                    edad_omega = float("inf")
+                    t_ultima_omega_valida = 0.0
+                    aviso_banda_emitido = False
                     R_n = 0.0
                     log(
                         f"[EPISODIO {id_ep:03d}] Hilo Lento reiniciado: SigmaQ, "
@@ -2778,6 +2826,35 @@ def slow_thread_process(shm_env_name, shm_mic_name, shm_par_name, shm_mer_name):
                     )
                     C_espectral = float(res_hht.get("C", 0.0))
 
+                    # --- v2.1 §2: GUARDA DE BANDA --------------------------
+                    # La EMD solo resuelve periodos dentro de la banda que fijan
+                    # la ventana y el espaciado. Fuera de ella la respuesta es un
+                    # artefacto de la rejilla, no una medida del mercado — y eso
+                    # es lo que circulo tres sesiones sin que nada protestara.
+                    omega_valida = bool(res_hht.get("omega_valida", False))
+                    periodo_medido = float(res_hht.get("periodo_s", 0.0))
+                    banda_min, banda_max = res_hht.get("banda", (0.0, 0.0))
+                    if omega_valida:
+                        t_ultima_omega_valida = t_now
+                    elif not aviso_banda_emitido:
+                        aviso_banda_emitido = True
+                        log(
+                            f"[BANDA] w_m FUERA DE BANDA: periodo medido "
+                            f"{periodo_medido:.1f} s contra banda resoluble "
+                            f"[{banda_min:.1f}, {banda_max:.1f}] s "
+                            f"(W={len(ventana)}, dtau={dt_muestreo:.3f} s). "
+                            f"Se propaga la invalidez; no se fabrica un valor."
+                        )
+
+            # `edad_omega` se mide SIEMPRE, haya habido tamizado o no: es el
+            # tiempo desde la ultima omega VALIDA, y su crecimiento durante un
+            # warm-up largo es informacion, no un fallo.
+            edad_omega = (
+                (t_now - t_ultima_omega_valida)
+                if t_ultima_omega_valida > 0.0
+                else float("inf")
+            )
+
             # --- Nodo de fase y ΔS (Sec. 2.6) -------------------------------
             if S_ref <= 0.0:
                 S_ref = S_actual
@@ -2846,8 +2923,21 @@ def slow_thread_process(shm_env_name, shm_mic_name, shm_par_name, shm_mer_name):
             #   Ω = (1/ΔS)(ω_m·∂ΣQ/∂T̄ + ΣQ·∂ω_m/∂T̄) - (ΣQ·ω_m/ΔS²)·∂ΔS/∂T̄
             # Sustituye al `random.uniform(0.1,5.0)*sin(t)` que hacía de Ω ruido
             # puro y dejaba muerto todo el acoplamiento endógeno.
+            #
+            # ⚠ v2.1 §2.2 — LA GUARDA DE BANDA ALCANZA HASTA AQUI, Y ESTO ES LO
+            # QUE MAS IMPORTA DE ELLA. Con `omega_valida = 0` se CONSERVA el
+            # ultimo Ω valido en vez de recalcularlo con un ω_m que es un
+            # artefacto de la rejilla. Recalcularlo propagaria el artefacto a Φ y
+            # Ψ, y de ahi a Ω, que entra AL CUADRADO en el costo del NMPC (κΩ²,
+            # μΩ²) y en Ω_crit: es la via por la que un error de muestreo llega a
+            # mover dinero, y no da ningun sintoma local.
             dT = T_actual - T_prev
-            if dT > 0.0 and abs(delta_S) > 1e-9:
+            if not omega_valida:
+                # Se congela Ω y se deja envejecer. El historial de derivadas SI
+                # se avanza, para que al recuperar la validez la derivada no
+                # salte por comparar contra un instante lejano.
+                pass
+            elif dT > 0.0 and abs(delta_S) > 1e-9:
                 d_sumQ = (sum_Q - sumQ_prev) / dT
                 d_w_m = (w_m - w_m_prev) / dT
                 d_dS = (delta_S - dS_prev) / dT
@@ -2857,6 +2947,20 @@ def slow_thread_process(shm_env_name, shm_mic_name, shm_par_name, shm_mer_name):
                 if not math.isfinite(Omega):
                     Omega = 0.0
             T_prev, sumQ_prev, w_m_prev, dS_prev = T_actual, sum_Q, w_m, delta_S
+
+            # --- Degradacion por RANCIDEZ (§2.2) ----------------------------
+            # Conservar el ultimo Ω valido es correcto durante un hueco corto;
+            # conservarlo indefinidamente seria operar con una foto vieja de la
+            # estabilidad del modelo y llamarla medida. Pasado `T_OMEGA_RANCIA`
+            # se degrada a Ω = 0, que es el valor que lleva al NMPC a su
+            # comportamiento de burn-in: cajas simetricas y sin aversion extra.
+            if edad_omega > CTE.T_OMEGA_RANCIA and Omega != 0.0:
+                log(
+                    f"[BANDA] Omega RANCIA: {edad_omega:.0f} s sin una w_m valida "
+                    f"(umbral {CTE.T_OMEGA_RANCIA:.0f} s). Se degrada a Omega=0 "
+                    f"-> el NMPC pasa al comportamiento de burn-in."
+                )
+                Omega = 0.0
 
             # --- λ_sim: fricción sintética (Sec. 8.1.1 / 8.1.2) -------------
             # v1.3 Sec. B.6: en TESTNET λ sigue viniendo del proceso OU, y es
@@ -2920,6 +3024,11 @@ def slow_thread_process(shm_env_name, shm_mic_name, shm_par_name, shm_mer_name):
                     "w_ang": w_ang,
                     "omega_ang_rad_tick": omega_ang_rad_tick,
                     "C_espectral": C_espectral,
+                    "omega_valida": 1 if omega_valida else 0,
+                    "edad_omega": edad_omega if math.isfinite(edad_omega) else 1e9,
+                    "periodo_s": periodo_medido,
+                    "banda_min_s": banda_min,
+                    "banda_max_s": banda_max,
                 },
             )
 

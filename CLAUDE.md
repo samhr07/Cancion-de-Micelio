@@ -9,9 +9,9 @@ IPOPT y qpOASES). No se han validado contra CUDA ni acados.**
 
 ---
 
-## ESTADO ACTUAL (2026-08-05)
+## ESTADO ACTUAL (2026-08-07)
 
-Cinco tandas de trabajo aplicadas, en este orden:
+Seis tandas de trabajo aplicadas, en este orden:
 
 1. **Correcciones estructurales** — el orden de trabajo de abajo, ejecutado en su totalidad.
    Detalle en "Sesión 2026-08-02".
@@ -33,6 +33,16 @@ el estado *anterior* del código.
    §2 a §8. Detalle en "Sesión 2026-08-05". Reorganización estructural: el filtro y el
    EMD pasan a **reloj de transacciones** (Δn = 1) y el sistema deja de descartar el
    **96 %** de los datos que ya recibía. **42/42** criterios (`python tests_v13.py`).
+6. **Convergencia de la cadena de medición de ω_m v2.1** — `ORDEN_TRABAJO_OMEGA_2_1.md`,
+   **PARCIAL**: §2 (prioridad 1) y §4 completos, más las mediciones del §3. Detalle en
+   "Sesión 2026-08-07". Quedan §5, §6 y §7.
+7. **¿Existe ω_m? v2.2** — `ORDEN_TRABAJO_EXISTE_OMEGA_2_2.md`, experimentos §2, §3 y §5.
+   Detalle en "Sesión 2026-08-07 (b)". **Ningún cambio al modelo.** Veredicto: **(A) dentro de
+   la banda medida** — `ω_m` es salida del algoritmo, no del mercado — y **(C) fuera de ella**,
+   pendiente de la captura de 48 h. **53/53** criterios.
+
+⚠ **Lee la sesión 2026-08-07 (b) antes de tocar nada que dependa de `ω_m`.** Está en duda si
+`ω_m`, `Φ`, `Ψ`, `Ω`, `Ω_crit`, `A_arm` y los nodos de fase siguen en el diseño.
 
 **Las Fases 2 y 3 siguen sin ejecutar.** La 3 necesita Testnet. La 2 sigue tras su
 compuerta, pero la v1.3 cambió el terreno: el ρ₁ = 0.87 de `y1` resultó ser artefacto de
@@ -53,7 +63,12 @@ corregir el filtro 90 veces con la misma medición, y eso está corregido en ori
 - `tests_v13.py` — criterios de aceptación de la Sec. F de la v1.3 **y del §8 de la v2.0**
   (`python tests_v13.py`). El nombre se conserva para no romper referencias.
 - `test_contaminacion_emd.py` — **v2.0 §5.2** sobre mercado real
-  (`python test_contaminacion_emd.py --capturar=440`).
+  (`python test_contaminacion_emd.py --capturar=440`), con `--barrido` para el §2.1 de la v2.1.
+- `captura_dual.py` / `analisis_v21.py` — **v2.1**: captura simultánea de `@trade` y
+  `@bookTicker` y las mediciones de §3, §4.2 y las condiciones del §8.
+- `captura_larga.py` — **v2.2**: captura continua por bloques (48 h) con escritura atómica.
+- `experimento_v22.py` — **v2.2**: nulos por sustitutos, histograma de banda y árbitro
+  multitaper. `python experimento_v22.py`.
 
 ### Cómo se arranca
 
@@ -1354,6 +1369,335 @@ número que decide si el drenado necesita su propio hilo.
 - El silencio de `@aggTrade` en fstream sigue **sin explicación**. No bloquea nada.
 - `C_ON`/`C_OFF`, `ω_m,max`, `ΔS_ref`, `ΔQ*` y `q_base·1e-2` siguen `[CALIBRAR]`.
 - Fase 3 (`Ω_crit`) y las 30 corridas de Testnet, sin cambios.
+
+## Sesión 2026-08-07 — Convergencia de la cadena de medición de ω_m (v2.1, §2 y §4)
+
+Ejecuta `ORDEN_TRABAJO_OMEGA_2_1.md`. **Parcial**: §2 (prioridad 1) y §4 completos, más
+las mediciones del §3. Quedan §5, §6 y §7. Suite: **51/51**.
+
+### ⚠ LO QUE HAY QUE LEER PRIMERO: ω_m no tiene todavía anchura de mercado
+
+Medido sobre 91 931 transacciones y 606 082 actualizaciones de libro en 899 s (ν = 102 tx/s):
+
+| observable | σ_total² | σ_instr² | σ_genuina² | fracción instrumental |
+|---|---|---|---|---|
+| precio de transacción | 3.94e-05 | 7.70e-05 | **−3.76e-05** | **195 %** |
+| `mid` de bookTicker | 1.88e-04 | 1.16e-04 | +7.14e-05 | 62 % |
+
+Con el precio de transacción, **σ_genuina² sale NEGATIVA**. El §4.2 anticipa exactamente este
+caso: "es un resultado con contenido, no un fallo — significa que toda la anchura observada es
+del aparato". Dicho de otro modo: **la dispersión de `ω_m` entre rejillas es MAYOR que su
+dispersión en el tiempo.** Cambiar la rejilla mueve `ω_m` más que cambiar de tramo de mercado.
+
+Eso justifica por sí solo que el A/B siga congelado, y lo justifica con un número.
+
+⚠ **Con la reserva del tamaño de muestra.** Son 8 ventanas temporales contra 9 rejillas: una
+razón de varianzas con esos grados de libertad tiene un intervalo de confianza enorme. Lo
+robusto es el signo y el orden de magnitud (instrumental ≥ total), no el 195 % exacto.
+
+### ⚠ §3 REFUTADO POR MEDICIÓN: `mid` es MÁS pegajoso, no menos
+
+El §3 propone pasar la cadena EMD al `mid` de `@bookTicker` por tener "resolución de medio
+tick" y actualizarse "cuando se mueve cualquiera de los dos lados". La segunda mitad es cierta
+para la tasa de MENSAJES y falsa para el movimiento real:
+
+| | valor |
+|---|---|
+| actualizaciones de libro | 674.2 msg/s (**6.6×** la tasa de transacciones) |
+| updates que **mueven** el mid | **1.1 %** → solo **7.7 cambios/s** |
+| transacciones | 102.3 tx/s |
+| duplicados a igual K — precio de transacción | p10 2.5 % · **mediana 9.1 %** · p90 15.8 % |
+| duplicados a igual K — `mid` | p10 18.0 % · **mediana 23.8 %** · p90 29.0 % |
+
+**`mid` da 2.6× MÁS duplicados que el precio de transacción.** La explicación es la
+microestructura: con `tickSize = 0.10` el spread suele ser de un tick exacto, así que el mid se
+queda clavado mientras las transacciones alternan entre bid y ask — el mismo rebote bid-ask que
+la v2.0 detectó como ρ₁ negativo hace que el precio de transacción se mueva MÁS.
+
+El propio §3.4 fija el criterio: "Si `mid` no baja de forma material, el observable no era el
+problema y hay que volver sobre §1.3 con otra hipótesis." **Así que NO se cambia el observable.**
+La cadena EMD sigue sobre el precio de transacción.
+
+`§3.3`: el **49.9 %** de los cambios de `mid` no tiene transacción detrás — justo en la frontera
+del "si domina, reconsiderar".
+
+Dato que obliga a releer la v2.0: el 44.1 % de duplicados que se midió entonces era con
+ν = 27 tx/s y K = 14. Con ν = 102 y K = 51 el mismo observable da **9.1 %**. La fracción de
+duplicados **no es una propiedad del observable, es una propiedad de ν** — otra confirmación
+del §1.4.
+
+### §2 — La guarda de banda, y cuánto tiempo `ω_m` no es medible
+
+`hht.omega_en_banda(periodo, dtau, W)` con la banda `[m_min·Δτ, W·Δτ/ciclos_min]`.
+
+**Test de regresión histórica** (el que cierra el defecto de tres sesiones), con las tres vías
+medidas en la v2.0 y W = 384:
+
+| vía | Δτ | banda | período medido | veredicto |
+|---|---|---|---|---|
+| A escalera | 0.500 s | [2.5, 64.0] s | 95.2 s | **RECHAZA** |
+| B pared fresca | 0.500 s | [2.5, 64.0] s | 262.6 s | **RECHAZA** (0.73 ciclos en ventana) |
+| C ticks | 0.519 s | [2.6, 66.4] s | 13.2 s | acepta |
+
+Y el dato que duele: sobre mercado real, `omega_valida` sale cierta en **12.5 %** de las
+ventanas con precio de transacción y **25.0 %** con `mid`. La condición 3 del §8 pide > 90 %.
+O sea que **tres cuartas partes del tiempo `ω_m` no es una medida**, y hasta ahora se usaba
+igual.
+
+La invalidez **alcanza a Φ, Ψ y Ω**, que es lo que el §2.2 marca como lo que más importa: con
+`omega_valida = 0` se congela `Ω` en su último valor válido en vez de recalcularlo con un
+artefacto. Test que lo fuerza: con los datos de prueba, `Ω` habría saltado de 1.5 a 0.13 y el
+costo `κΩ²` del NMPC con ella. Más `edad_omega`, degradación a `Ω = 0` pasados
+`T_OMEGA_RANCIA = 120 s`, y `w_ang` a **NaN**, nunca a cero.
+
+⚠ **Lo que la guarda NO hace, y conviene tenerlo escrito:** comprueba RESOLUBILIDAD, no
+EXISTENCIA. Una rampa con ruido produce una IMF dominante de ~20 s que cae dentro de banda y se
+acepta, aunque no sea un ciclo de mercado. Detectar "no hay ciclo" es el papel de `C` y, según
+el §4.4, de `σ_ω/ω`.
+
+**El barrido del §2.1 no discrimina**, y el reporte lo dice en vez de fingir. Las 25
+combinaciones que rechazan A y B aceptando C empatan todas en ventanas aceptadas: con 3
+ventanas independientes no hay resolución para separarlas. Se conservan los valores del
+documento (3.0 y 5.0) por estar dentro de la región válida, en vez de elegir un extremo del
+empate y llamarlo evidencia.
+
+### §4 — `Q_ω`, y una corrección numérica encontrada al testear
+
+`Q_ω = (J·x)(J·x)ᵀ·σ_ω²` con `J = ∂A_arm/∂ω`, implementada sobre la desviación `x − x_ref`
+coherente con la forma afín. Verificada contra derivada numérica a **4.5e-10**, simétrica,
+semidefinida positiva, escalando con σ², y **exactamente cero con ω = 0** — la comprobación de
+coherencia del §4.3: sin ciclo, no hay incertidumbre de ciclo.
+
+⚠ **El jacobiano necesita su propio umbral de Taylor, y el valor estaba mal por razonarlo en
+vez de medirlo.** `(ω·cos ω − sin ω)/ω²` resta dos cantidades de orden ω para dar una de orden
+ω³: cancelación catastrófica. La rama de Taylor tiene el error opuesto. Medido:
+
+| ω | error relativo de la fórmula exacta | error relativo de Taylor |
+|---|---|---|
+| 1e-6 | 7.8e-05 | 1.0e-13 |
+| 1e-4 | 1.1e-08 | 1.0e-09 |
+| **3e-4** | **~1e-08** | **~3e-08** ← cruce |
+| 1e-3 | 5.6e-11 | 1.0e-07 |
+| 1e-2 | 8.5e-13 | 1.0e-05 |
+
+`UMBRAL_TAYLOR_JACOBIANO = 3e-4`. Un primer intento puso 1e-3 "porque ahí se cruzan", sin
+medir, y dejaba una discrepancia del 0.2 %. Con 3e-4 queda en **3.0e-08**.
+
+⚠ **Esto NO es un límite de convergencia del modelo armónico.** Ni `sin(ω)/ω` ni
+`(ω·cos ω − sin ω)/ω²` divergen: tienen singularidades REMOVIBLES con límite finito (Δt y 0).
+El umbral es una conmutación NUMÉRICA entre dos formas de evaluar la misma función, elegida
+donde se cruzan sus curvas de error en float64. El único límite de validez real es la guarda
+de banda del §2, y depende de la rejilla, no de la dinámica.
+
+### Tres tests míos que estaban mal
+
+Se anotan porque el patrón se repite: un test que falla por su propia culpa cuesta lo mismo
+que uno real.
+
+1. Le pedía a la guarda de banda que detectara **ausencia** de ciclo, cuando solo promete
+   resolubilidad.
+2. Medía el salto entre ramas de Taylor evaluando en **dos ω distintos**, así que medía la
+   pendiente propia de la función (0.2 %) y no la discrepancia entre ramas (3e-8).
+3. El sobrecosto del EAKF sombra fallaba por **carga de máquina** con una captura corriendo en
+   paralelo. Corregido a **mínimo de varios bloques**, que es el estimador correcto de un coste
+   intrínseco: el planificador solo puede añadir tiempo, nunca quitarlo. Medido 0.267 ms contra
+   0.506 del peor bloque.
+
+### Pendiente de la v2.1
+
+- **§5 (log-precio), §6 (cuantiles empíricos) y §7 (péndulo)** sin ejecutar.
+- **Ninguna de las cuatro condiciones del §8 se cumple**, así que el A/B sigue congelado:
+  fracción instrumental 195 % / 62 % contra < 50 %; `omega_valida` 12.5 % / 25 % contra > 90 %;
+  duplicados de `mid` peores, no mejores; §5.2 en régimen agitado sin repetir.
+- El criterio `σ_ω/ω` del §4.4 en paralelo a `C` está **sin implementar**.
+- `ciclos_min` y `muestras_por_ciclo_min` siguen `[CALIBRAR]`: hace falta una captura mucho
+  más larga para que el barrido discrimine.
+
+## Sesión 2026-08-07 (b) — ¿Existe ω_m? (v2.2, experimentos §2, §3 y §5)
+
+Ejecuta `ORDEN_TRABAJO_EXISTE_OMEGA_2_2.md`. **Ningún cambio al modelo**, como exige su §8:
+todo es código de análisis aparte. Suite **53/53**. Captura de 48 h lanzada y corriendo.
+
+### ⚠ VEREDICTO: (A) dentro de la banda medida, (C) fuera de ella
+
+**Dentro de ~2.5 s – 300 s no hay escala característica.** `ω_m` es salida del algoritmo, no
+del mercado. Tres líneas de evidencia independientes, todas en la misma dirección:
+
+| evidencia | resultado |
+|---|---|
+| §3 REAL contra BARAJADO, precio de transacción | KS **p = 0.98** → indistinguibles |
+| §3 REAL contra BARAJADO, `mid` | KS p = 0.28 → indistinguibles |
+| §3 ídem en la otra captura (ν = 27 contra 102) | KS p = 0.60 → indistinguibles |
+| §3 medianas de período, REAL / BARAJADO | **112.0 s / 112.7 s** |
+| §5 multitaper contra AR(1), precio | 6.6 % de frecuencias sobre el umbral 95 % (azar ≈ 5 %) |
+| §5 multitaper contra AR(1), `mid` | 7.4 % |
+| §5 pico multitaper / modo EMD | **184×** de separación |
+| §2 rechazos de banda | **100 % por arriba**, 0 % por abajo |
+| §2 `T/(W·Δτ)` de los rechazados | concentrado en **~0.60** (dispersión 24 % en `mid`) |
+| §4.2 fracción instrumental (precio) | **195 %** |
+
+**Barajar los incrementos destruye todo el orden temporal y `ω_m` no se entera.** Y el nulo es
+un nulo de verdad: curtosis 601.8 contra 601.8, masa en cero 65.6 % contra 65.6 % — la marginal
+se conserva exacta, así que la única diferencia posible era la estructura temporal, y no la hay.
+
+### La demostración que lo cierra: la EMD no tiene hipótesis nula
+
+Fijado como test permanente (`test_v22_emd_no_tiene_hipotesis_nula`). Sobre un **paseo
+aleatorio puro** —sin escala característica por construcción— la cadena devuelve:
+
+```
+periodo 118.1 s con C = 0.690      <- ventana completa (384 muestras)
+periodo  37.5 s                    <- media ventana
+```
+
+El período **escala con la ventana**, no con la señal. Eso es exactamente lo que el §1.2
+anticipa citando la línea Flandrin/Rilling/Gonçalvès y Wu/Huang: sobre ruido fraccionario la
+EMD se comporta como un banco diádico y el modo dominante lo fija la ventana.
+
+Y explica de golpe tres sesiones de síntomas: los `C` de 0.94–1.00 de la v1.3, el factor 7 del
+§5.2 de la v2.0, la `σ_genuina² < 0` de la v2.1. No eran defectos distintos: **eran la misma
+cosa, medida desde tres sitios.**
+
+### Lo que NO queda decidido, y por qué importa
+
+La hipótesis **(B)** —ciclo en decenas de minutos— **no queda probada ni refutada**. El
+multitaper alcanza ~300 s y la EMD ~65 s con la configuración actual. Ver un ciclo de 30 min con
+`Δτ = 0.5 s` exige `W ≥ 10 800` contra los 384 actuales: factor 28×.
+
+Por eso está corriendo la **captura de 48 h** (`captura_larga.py`, bloques cada 5 min con
+escritura atómica a temporal y `rename`, para no repetir el defecto de volcado de la v2.0). El
+§4 multiescala se ejecuta sobre ella, y hasta entonces **no se decide sobre el diseño**.
+
+### Reservas honestas de esta medición
+
+- **Potencia estadística baja.** 4 ventanas independientes. Un KS que no rechaza significa "no
+  se detectó diferencia", NO "son iguales". Lo que sostiene la lectura no es el p-valor sino que
+  las medianas coinciden y que las tres líneas convergen.
+- **El brazo IAAFT no es fiable aquí.** Da 11.6 s en un observable y 118 s en el otro: aplicado
+  al NIVEL de precio (paseo aleatorio) no converge. La lectura **no se apoya en él**, se apoya en
+  BARAJADO. Con eso, separar (A) de (A′) —"no hay ciclo" contra "hay memoria, no ciclo"— queda
+  pendiente.
+- **Un solo par de capturas**, de 899 s y 439 s.
+
+### TABLA DE MEDICIONES — todos los números crudos de la v2.2
+
+Captura principal: **91 931 transacciones en 899 s** (ν = 102.3 tx/s, K = 51, W = 384,
+Δτ ≈ 0.51 s). Captura secundaria: 11 870 transacciones en 439 s (ν = 27.0, K = 14).
+Reproducible con `python experimento_v22.py`.
+
+**§2 — Por qué lado falla la banda** (banda [2.5, 65.0] s; ventana W·Δτ = 195 s)
+
+| observable | períodos p10 / MED / p90 / max | dentro | **rechazo por arriba** | por abajo | ventanas indep. |
+|---|---|---|---|---|---|
+| precio de transacción | 52.2 / **112.0** / 263.0 / 305.1 s | 2/8 (25.0 %) | **6/8 (75.0 %)** | 0 (0.0 %) | 4 |
+| `mid` | 36.9 / **104.3** / 153.9 / 187.9 s | 3/8 (37.5 %) | **5/8 (62.5 %)** | 0 (0.0 %) | 4 |
+
+`T/(W·Δτ)` de los rechazados por arriba:
+
+| observable | p10 | MED | p90 | dispersión |
+|---|---|---|---|---|
+| precio de transacción | 0.490 | **0.596** | 1.412 | 50.9 % |
+| `mid` | 0.525 | **0.604** | 0.865 | **24.4 %** ← concentrado |
+
+**§3 — Nulo por sustitutos, precio de transacción**
+
+| vía | f_hz p10 / MED / p90 | C MED | `omega_valida` | T MED | σ_instr²/σ_total² |
+|---|---|---|---|---|---|
+| **REAL** | 0.00384 / **0.00893** / 0.01921 | 0.702 | 12.5 % | **112.0 s** | **195.3 %** |
+| IAAFT | 0.04939 / 0.08711 / 0.15974 | 0.654 | 87.5 % | 11.6 s | 92.8 % |
+| **BARAJADO** | 0.00535 / **0.00888** / 0.01223 | 0.783 | 0.0 % | **112.7 s** | 482.8 % |
+
+**§3 — Nulo por sustitutos, `mid`**
+
+| vía | f_hz p10 / MED / p90 | C MED | `omega_valida` | T MED | σ_instr²/σ_total² |
+|---|---|---|---|---|---|
+| **REAL** | 0.00662 / **0.00967** / 0.03004 | 0.698 | 25.0 % | 104.3 s | **62.0 %** |
+| IAAFT | 0.00664 / 0.00847 / 0.01944 | 0.741 | 25.0 % | 118.2 s | 122.1 % |
+| **BARAJADO** | 0.00418 / 0.00638 / 0.01274 | 0.815 | 0.0 % | 158.6 s | 143.0 % |
+
+**§3 — Kolmogorov-Smirnov sobre la distribución de f_hz**
+
+| comparación | p | lectura |
+|---|---|---|
+| REAL vs BARAJADO, precio | **0.9801** | indistinguibles |
+| REAL vs BARAJADO, `mid` | 0.2827 | indistinguibles |
+| REAL vs BARAJADO, captura ν = 27 | 0.6000 | indistinguibles |
+| REAL vs IAAFT, precio | 0.0025 | distintas ⚠ ver reserva sobre IAAFT |
+| REAL vs IAAFT, `mid` | 0.9801 | indistinguibles ⚠ inconsistente con la fila anterior |
+
+**§3 — El nulo ES un nulo** (marginal de incrementos, REAL contra BARAJADO)
+
+| observable | curtosis | masa en cero |
+|---|---|---|
+| precio de transacción | 601.8 → **601.8** | 65.6 % → **65.6 %** |
+| `mid` | 165.7 → **165.7** | 95.9 % → **95.9 %** |
+| captura ν = 27 | 216.8 → **216.8** | 74.3 % → **74.3 %** |
+
+**§5 — Multitaper (Thomson) contra nulo AR(1)**, NW = 4, 7 tapers, bandas al 95 %
+
+| observable | n log-retornos | Δτ | AR(1) `a` | frecuencias sobre umbral | pico | exceso | modo EMD | separación |
+|---|---|---|---|---|---|---|---|---|
+| precio de transacción | 1800 | 0.171 s | 0.4816 | 59/900 = **6.6 %** | 0.6 s | ×1.78 | 112.0 s | **184×** |
+| `mid` | 1802 | 0.171 s | 0.3125 | 67/901 = **7.4 %** | 0.5 s | ×1.64 | 103.4 s | **190×** |
+
+Por azar se esperaría ~5 % de frecuencias por encima del umbral del 95 %. **Ninguno de los dos
+observables muestra exceso significativo sobre ruido rojo.** El multitaper cubre períodos de
+0.34 s a ~308 s, o sea que **sí incluye** el modo de 112 s que la EMD devuelve — y ahí no ve nada.
+
+**El test que lo cierra** (`test_v22_emd_no_tiene_hipotesis_nula`, sintético y determinista)
+
+| serie | ventana | período que la EMD devuelve | C |
+|---|---|---|---|
+| paseo aleatorio puro | 384 muestras | **118.1 s** | 0.690 |
+| el mismo | 192 muestras | **37.5 s** | — |
+
+**§4.2 — Fracción instrumental por observable** (8 ventanas temporales, 9 rejillas)
+
+| observable | σ_total² | σ_instr² | σ_genuina² | fracción |
+|---|---|---|---|---|
+| precio de transacción | 3.94e-05 | 7.70e-05 | **−3.76e-05** | **195 %** |
+| `mid` | 1.88e-04 | 1.16e-04 | +7.14e-05 | 62 % |
+
+### Qué sobreviviría si (A) se confirma a todas las escalas
+
+Del §6.2, y conviene tenerlo escrito para que el veredicto no se lea como catástrofe: sobreviven
+**toda la v2.0** (reloj de ticks, ingesta por lotes, `Q(Δt)`, deduplicación, huecos), **toda la
+capa de riesgo de la v1.3**, **Loeper y el NMPC** (necesitan `λ` y `Γ`, no `ω`) y con alta
+probabilidad **`R_n`** — estimar una tendencia es mucho más robusto que extraer un ciclo.
+
+Habría que rediseñar `A_arm`, el término `γ_ω·ω_m` de `ρ_k`, `c²_vol`, los nodos de fase y la
+Sec. 1.4 entera (`Φ`, `Ψ`, `Ω`, `Ω_crit`). Eso sería una v3.0 con su propio documento.
+
+El §6.3 cataloga cuatro alternativas sin implementar ninguna. La cuarta —**ciclo estocástico de
+Harvey dentro del propio EAKF**— merece atención cuando llegue el momento: es `A_arm` con
+amortiguamiento y `λ` estimada CONJUNTAMENTE con el estado, así que **tiene nulo** (si `ρ → 0`
+el ciclo no existe), `σ_ω` sale nativa de la covarianza de parámetros, y desaparece el traspaso
+externo `ω_m → A_arm` donde viven la trampa del 2π, la guarda de banda y el problema de rejilla.
+
+### Estado de la captura de 48 h y qué falta para cerrar la v2.2
+
+Lanzada con `captura_larga.py --horas=48`, bloques cada 300 s. Primer bloque verificado:
+22 623 transacciones a 75.4 tx/s.
+
+⚠ **Defecto propio corregido durante el lanzamiento.** `np.savez_compressed` **añade `.npz`** al
+nombre si no lo lleva, así que escribiendo en `bloque_00000.npz.tmp` acababa creando
+`bloque_00000.npz.tmp.npz` y el `os.replace` fallaba con `WinError 2`. La primera captura corrió
+**media hora sin guardar un solo bloque**. Se arregla pasando un descriptor de archivo abierto en
+vez de la ruta. Es exactamente el modo de fallo que el §4.4 pedía evitar, y casi se repite.
+
+Pendiente para cerrar la v2.2:
+
+- **§4 multiescala** (C0–C4, Δτ de 0.5 s a 120 s, cinco configuraciones × tres observables) sobre
+  la captura larga. Es el estadístico `T/(W·Δτ)` por configuración lo que decide entre (A) y (B).
+- **§4.3**: reevaluar el observable por configuración, ahora con el criterio corregido
+  —`σ_instr²/σ_total²` y validez, no duplicados— e incluyendo el precio medio ponderado por
+  volumen, que a escalas gruesas es el observable natural.
+- Repetir el §5.2 de la v2.0 en **régimen agitado** (ν > 300 tx/s), condición 4 del §8 de la v2.1.
+- Un IAAFT fiable —sobre incrementos y no sobre el nivel— para poder separar (A) de (A′).
+
+Y en cola, **no bloqueadas** por el veredicto porque no dependen de `ω_m` (§7 de la v2.2):
+**v2.1 §5** (log-precio) y **v2.1 §6** (cuantiles empíricos del NIS). Las compuertas del NIS
+están mal calibradas pase lo que pase con `ω_m`, así que son el mejor candidato para la espera.
 
 ## Convenciones
 
