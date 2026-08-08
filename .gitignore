@@ -50,3 +50,8 @@ captura_*.log
 
 # Conversiones de los PDF a Markdown: se regeneran desde el PDF
 Markdown de PDF*/
+
+# Logs de SSA: se regeneran con barrido_ssa.py / phi_precio.py
+ssa_log/
+ssa_log_*.txt
+phi_*.txt

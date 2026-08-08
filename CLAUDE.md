@@ -46,6 +46,13 @@ el estado *anterior* del código.
    raíces reales — NO HAY OSCILADOR**, y todo el AR(2) queda explicado a 7 decimales por paseo
    aleatorio + rebote bid-ask. **56/56** criterios.
 
+9. **Cambio de herramienta: SSA en lugar de EMD, y φ′ contra el precio** — sesión
+   2026-08-08 (f). **Ningún cambio a `Micelio.py`.** La búsqueda de `ω_m` por atractor de
+   frecuencias queda **abandonada por decisión del operador**. Dos resultados: la
+   descomposición SSA del precio real es **la escalera armónica de la ventana** (`T = 2L/k`,
+   error 0.0000, idéntica sobre un paseo aleatorio), y **φ′ = ticks/BTC se asocia
+   positivamente con la volatilidad realizada en 16 de 16 ventanas** (p de signos 3.05e-05).
+
 ⚠ **Lee las sesiones 2026-08-07 (b) y 2026-08-08 antes de tocar nada que dependa de `ω_m`.**
 `ω_m`, `Φ`, `Ψ`, `Ω`, `Ω_crit`, `A_arm` y los nodos de fase **no tienen sustento empírico**.
 Lo que sobrevive está en "Qué sobreviviría si (A) se confirma".
@@ -79,6 +86,15 @@ corregir el filtro 90 veces con la misma medición, y eso está corregido en ori
 - `captura_larga.py` — **v2.2**: captura continua por bloques (48 h) con escritura atómica.
 - `experimento_v22.py` — **v2.2**: nulos por sustitutos, histograma de banda y árbitro
   multitaper. `python experimento_v22.py`.
+- `ssa.py` — **v3.2**: Análisis Espectral Singular. Descomposición exacta, w-correlación,
+  barrido de `L` con parada por **mínimo local**, detección de pares, **Monte Carlo SSA**
+  contra nulos AR(1) / ARIMA(1,1,0) / barajado, escalera de ventana y color de ruido.
+  `python ssa.py --autotest` → **11/11**. **No se importa desde `Micelio.py`.**
+- `barrido_ssa.py` / `graficar_ssa.py` — **v3.2**: toma de datos por ventanas (logea `t`,
+  precio, id de tick, cantidad, signo y volumen neto, más autovalores, autovectores y
+  w-correlación de **cada** `L`) y las figuras de matplotlib sobre ese log.
+- `phi_precio.py` — **v3.2**: φ′ = ticks por volumen inyectado contra el precio, en bloques
+  disjuntos, con nulo por desplazamiento circular y por barajado.
 - `oscilador.py` / `experimento_v30.py` — **v3.0**: primitivas `k`, `m`, `γ`, `Q` por AR(2) con
   hipótesis nula, verificación dimensional y descomposición del rebote bid-ask.
   `python experimento_v30.py`. **No se importa desde `Micelio.py`.**
@@ -2132,6 +2148,215 @@ desde la v2.0. Hace falta más dato antes de responderla.
   tiene sesgo propio y los dos muestreos discrepan en signo.
 - Más allá de la microestructura (n > 256 ticks) el precio es **difusivo**.
 - El propagador **existe** (sesión d): pico 1.95 contra 0.003–0.016 con signos barajados.
+
+## Sesión 2026-08-08 (f) — SSA en lugar de EMD, y φ′ contra el precio (v3.2)
+
+Cambio de estrategia pedido por el operador: **se abandona la búsqueda de `ω_m` como atractor
+de frecuencias** y se pasa a SSA (Análisis Espectral Singular). Objetivo declarado: una
+**ventana de toma de datos** con logeo completo, no un modelo. **`Micelio.py` sin cambios.**
+
+### Por qué SSA y no EMD: la EMD no tiene hipótesis nula, SSA sí
+
+La v2.2 dejó demostrado que la EMD devuelve un "ciclo" de 118.1 s sobre un paseo aleatorio
+puro, y de 37.5 s al partir la ventana en dos. SSA **no arregla eso por sí solo** — se
+comprobó y también fabrica pares oscilatorios sobre ruido. Lo que sí tiene es el test que
+falta: **Monte Carlo SSA** (Allen & Smith 1996), que contrasta los autovalores observados
+contra los de un nulo ajustado a los mismos datos.
+
+### La condición de parada del barrido de `L`
+
+Buscar `ortogonalidad == 0` no termina nunca: el ruido de medición —el mismo que alimenta `R`
+en el EAKF— siempre filtra energía entre componentes, así que el mínimo alcanzable es
+estrictamente positivo y desconocido. Implementado como **rejilla finita** (no hay bucle) con
+elección por **mínimo local interior**, y dos salvaguardas:
+
+- si el mínimo cae en un extremo de la rejilla, devuelve `hay_minimo_local = False` en lugar
+  de entregar el borde como si fuera una elección;
+- cada punto del barrido lleva al lado **el mismo estadístico medido sobre sustitutos
+  barajados**. Una métrica que baja igual sin estructura no mide separación, mide la rejilla.
+
+### Controles del propio estimador (`python ssa.py --autotest`) — 11/11
+
+Este proyecto llevaba cinco sesiones ejecutando controles **negativos** con disciplina. Estos
+son la mitad que faltaba, los **positivos**: dada una verdad conocida, ¿el estimador la
+recupera?
+
+| control | resultado |
+|---|---|
+| reconstrucción exacta (suma de elementales = serie) | error **1.1e-12** |
+| dos períodos conocidos, 120 y 37 muestras | **0.63 %** y **0.02 %** de error |
+| ruido blanco → β | **+0.002 ± 0.017** |
+| paseo aleatorio → β | **+1.977 ± 0.018** (ROJO) |
+| señal enterrada en AR(1), MC-SSA | la marca, **p = 0.000** |
+| AR(1) puro, MC-SSA | 6/20 sobre p95 |
+| curva monótona → mínimo local | **no discrimina** (correcto) |
+| paseo aleatorio → escalera `2L/k` | error **0.0317** (cae en ella) |
+| señal con ciclos → escalera `2L/k` | error **0.6020** (la rompe) |
+
+⚠ **Sobre un paseo aleatorio puro, SSA también fabrica pares oscilatorios**, con período que
+escala con la ventana: 152.4 muestras con L=400 (0.38·L) y 60.4 con L=200 (0.30·L). Es el
+defecto de la EMD intacto. Lo que cambia es que **MC-SSA lo detecta**: 1/20 componentes sobre
+el p95, o sea el 5 % del azar.
+
+### ⚠ HALLAZGO: los autovectores del precio real son los armónicos de la VENTANA
+
+Medido sobre 8 ventanas de 8 192 ticks de `captura_v31b` (97 742 tx, 4.33 h, ν = 6.0 tx/s) y
+8 de `captura_larga` (480 757 tx, 14.39 h, ν por ventana de **21 a 109 tx/s**).
+
+`T/L` de los primeros autovectores, **idéntico en las 16 ventanas**, con `L` entre 96 y 768 y
+en los dos observables (precio y volumen neto acumulado):
+
+```
+1.600   0.889   0.667   0.500   0.400   0.333   0.286
+```
+
+Que es `T = 2L/k`. Error mediano al escalón, y energía del primer autovector:
+
+| serie | error a `2L/k` | E(EOF1) | E del par dominante |
+|---|---|---|---|
+| **8 ventanas reales, v31b** | **0.0000** (6/8 exacto) | 97.6–99.8 % | **0.00–0.01 %** |
+| **8 ventanas reales, larga** | **0.0000–0.0335** | 84.2–99.4 % | 0.00–0.06 % |
+| ctrl_paseo (paseo aleatorio) | 0.0347 | 90.8 % | 0.16 % |
+| ctrl_barajado (incrementos reales barajados) | 0.0264 | 98.1 % | 0.03 % |
+| **ctrl_positivo (T = 120 y 37 conocidos)** | **0.1250 / 0.4235** | **45.8 %** | **85.93 %** |
+
+El control positivo recupera su verdad: 128 ticks (verdad 120) con el 85.9 % de la energía y
+37 ticks (verdad 37) con el 11.8 %, y MC-SSA marca **exactamente las componentes 1, 2, 3 y 4**
+—los dos pares verdaderos, ni una más—. Sobre BTC real, la descomposición es
+**indistinguible de la de un paseo aleatorio**, y los pares que el detector encuentra llevan
+0.00–0.06 % de la energía.
+
+**La escalera no se mueve al cambiar ν por un factor 18** (6 → 109 tx/s). Si el período
+viniera del mercado, cambiar la tasa de transacciones lo movería.
+
+### Ortogonalidad por ventana
+
+| serie | media \|w-corr\| | razón real/barajado |
+|---|---|---|
+| 8 ventanas reales v31b, precio | 0.1425–0.1456 | **0.882–0.993** |
+| 8 ventanas reales larga, precio | 0.1392–0.1532 | 0.944–1.043 |
+| ctrl_paseo | 0.1459 | 0.998 |
+| ctrl_barajado | 0.1448 | 0.987 |
+| **ctrl_positivo** | **0.0933** | **0.629** |
+
+La métrica discrimina —el control positivo se separa con claridad— y sobre datos reales dice
+que la separación es la de un sustituto barajado. La curva contra `L` es además **plana** en
+las ventanas reales: los mínimos locales que se eligen son poco profundos, así que **la `L`
+elegida sobre datos reales no es una elección informada**, y así queda anotado.
+
+### Sobre retornos la escalera se rompe, pero no aparece ciclo
+
+Aplicar SSA al **nivel** garantiza que el primer EOF sea la tendencia y se lleve ~98 %. Se
+repitió sobre `retorno` y `vol_neto` (v31b, 8 ventanas):
+
+| observable | escalera | E(EOF1) | E del par dominante | razón real/nulo |
+|---|---|---|---|---|
+| retorno | 0.125–6.16 (med **1.16**) | 0.3–11.5 % | 0.65–3.00 % | 0.63–0.83 |
+| vol_neto | 0.007–0.125 (med **0.032**) | 1.0–5.6 % | 0.56–5.54 % | 0.81–1.16 |
+| ctrl_positivo (retorno) | 5.53 | 29.7 % | **58.58 %** | 0.862 |
+| ctrl_paseo (retorno) | 11.28 | 0.28 % | 0.56 % | 0.750 |
+
+En retornos ya no hay escalera, pero tampoco energía oscilatoria: 0.65–3.00 % contra 58.58 %
+del control. Y `ctrl_paseo` da razón 0.750, dentro del rango de los datos reales, así que esa
+métrica **no discrimina** en este observable.
+
+### ⚠ Dos límites de MC-SSA encontrados por los controles
+
+1. **Sobre series casi blancas el test es inservible.** Con `nulo=ar1` sobre retornos marca
+   **23–30 de 30** componentes en los datos reales… y **30/30 en `ctrl_paseo`**, que es ruido
+   iid puro. El sesgo anticonservador conocido (proyectar sobre las EOF de los propios datos)
+   se vuelve fatal cuando el espectro es plano y todos los autovalores son parecidos.
+2. **`ar1_incrementos` es demasiado severo con señales fuertes.** En `ctrl_positivo` sobre el
+   nivel da **0/30**: pierde un ciclo verdadero y grande, porque el AR(1) ajustado a los
+   incrementos absorbe la propia sinusoide y ensancha el nulo. `ar1` sobre el nivel lo detecta
+   con 4/4.
+
+**Ningún nulo es el bueno por sí solo**, y por eso el log guarda los tres. Es la misma lección
+de la sesión (e): el control solo vale si su nulo reproduce las propiedades del dato que
+importan.
+
+### ⚠ φ′ CONTRA EL PRECIO — y la separación que el operador pidió
+
+`φ′ = ticks por volumen inyectado [ticks/BTC]`, la derivada del reloj de transacciones
+respecto del de volumen. Sobre bloques **disjuntos** de m = 64 ticks: `φ′_b = m / Σq`. Es el
+inverso del tamaño medio de operación: φ′ alta = muchas operaciones pequeñas.
+
+El criterio del operador: si `T/L` es constante en todas las ventanas pero la asociación
+φ′–precio **varía**, entonces la escalera es del aparato y la asociación es del mercado.
+Medido:
+
+| magnitud (v31b) | rango entre ventanas | sd | signo | p de signos |
+|---|---|---|---|---|
+| **T/L (período SSA)** | **0.0908** | **0.0314** | — | — |
+| **Spearman(log φ′, V)** | 0.2486 | 0.0942 | **8/8** | **0.0078** |
+| Pearson(log φ′, log V) | 0.4679 | 0.1411 | 7/8 | 0.0703 |
+| ρ(log φ′, \|ΔP\|) | 0.3441 | 0.1037 | 7/8 | 0.0703 |
+| ρ(log φ′, flujo neto) | 0.7449 | 0.3111 | 4/8 | 1.0000 |
+| ρ(log φ′, nivel de precio) ESPURIA | 0.4707 | 0.1406 | 2/8 | 0.2891 |
+| ρ predictiva (φ′ → volatilidad siguiente) | 0.2237 | 0.0796 | 5/8 | 0.7266 |
+| ρ predictiva (φ′ → retorno siguiente) | 0.2695 | 0.0830 | 2/8 | 0.2891 |
+
+**El período es la magnitud más estable de todas** (rango 0.09) y la asociación φ′–volatilidad
+varía 3× más. Son dos cosas distintas, que es exactamente lo que había que decidir.
+
+**Y la asociación es real.** Replicada en las dos capturas, con nulo por **desplazamiento
+circular** del volumen contra el precio (conserva intacto el agrupamiento de operaciones
+grandes, que barajar destruye; los precios no se tocan, así que la volatilidad del bloque es
+idéntica bajo el nulo y lo único que se rompe es el emparejamiento):
+
+| captura | ν | ρ Spearman mediana | p < 0.05 individual | V(φ′ alto)/V(φ′ bajo) |
+|---|---|---|---|---|
+| v31b | 4.6–9.6 tx/s | +0.204 (0.033 a 0.282) | 4/8 | **1.181** (1.07–1.25) |
+| larga | 21–109 tx/s | **+0.338** (0.114 a 0.484) | **6/8**, z hasta **+5.27** | **1.412** (1.12–1.87) |
+
+**16 de 16 ventanas con signo positivo → p de signos = 3.05e-05.** En terciles: la volatilidad
+realizada es un **18 % mayor** (v31b) y un **41 % mayor** (larga) en el tercil alto de φ′ que
+en el bajo, y la razón supera 1 en las 16 ventanas.
+
+Lecturas, en orden:
+
+1. **Cuando el mercado se fragmenta en operaciones pequeñas, la volatilidad realizada por
+   unidad de volumen sube.** Es una propiedad del mercado, no del estimador: el nulo no la
+   reproduce y el efecto es más fuerte donde ν es mayor.
+2. ⚠ **Pearson no era ciego, estaba roto — y el defecto era mío.** Hay bloques con volatilidad
+   **exactamente cero** (64 ticks sin que el precio se mueva): **2.82 %** en `captura_v31b` y
+   **0.62 %** en `captura_larga`. Metidos en un logaritmo se van a −27.6, unas **30
+   desviaciones** fuera, y dominaban la correlación ellos solos. Con ellos dentro, Pearson daba
+   −0.093 a +0.158 en v31b y −0.558 a +0.391 en larga, errático y sin significación.
+   Excluyéndolos —y solo de las correlaciones sobre `log V`— pasa a **7/8 y 8/8 positivo**, con
+   medianas **+0.193** y **+0.363**, de acuerdo con Spearman. Spearman no los necesita: el
+   rango de un cero está bien definido y es el más bajo, que es justo lo que son.
+   **Sin la comprobación gráfica no se habría visto**: los ceros aparecieron como una fila de
+   puntos aplastada contra el borde del eje logarítmico.
+3. **No hay componente direccional ni predictiva.** ρ(φ′, retorno) da 2/8 y 3/8; ρ(φ′, retorno
+   siguiente) da 2/8 y 3/8; ρ(φ′, volatilidad del bloque **siguiente**) da 5/8 y 3/8. φ′ dice
+   **cuánto** se mueve el precio en el mismo bloque, no **hacia dónde**, y no lo anticipa.
+4. La correlación con el **nivel** de precio es espuria por construcción (dos series no
+   estacionarias) y sale 2/8: se calcula porque se preguntó por ella, y se reporta marcada.
+
+### Reservas de esta sesión
+
+- **La `L` elegida sobre datos reales no significa nada.** La curva de ortogonalidad contra
+  `L` es plana; los mínimos son de baja prominencia. El barrido discrimina en el control
+  positivo y no en el mercado.
+- **Todo esto mide DENTRO de la ventana**: 8 192 ticks son ~22 min a ν = 6 y ~2 min a ν = 109,
+  y `L ≤ 1024`. **No dice nada sobre la hipótesis (B) de la v2.2** (escala de decenas de
+  minutos), que sigue sin decidir.
+- El efecto de φ′ es **modesto y variable**: individualmente significativo en 10 de 16
+  ventanas. Lo que lo sostiene es la consistencia de signo, no la magnitud de ninguna.
+- `captura_larga` no persiste `tr_maker`, así que en esa réplica el flujo firmado no es
+  interpretable. `captura_v31b` sí lo trae.
+- m = 64 ticks por bloque es una elección **sin calibrar**. Habría que barrer m y comprobar a
+  qué escala vive la asociación — que es la misma pregunta de los dos relojes de la sesión (e).
+
+### Pendiente
+
+- Barrer `m` en φ′ y ver si la asociación vive en el reloj de ticks o en el de volumen.
+- Nulo de MC-SSA que funcione sobre series casi blancas (el sesgo anticonservador lo invalida).
+- SSA multivariante (M-SSA) sobre `[precio, φ′]`, que es el paso natural ahora que hay una
+  asociación establecida entre los dos canales.
+- Sigue en pie todo lo de la v3.1: núcleo paramétrico del propagador, `γ` de la
+  autocorrelación de signos y la comprobación `pendiente ≈ (1−γ)/2 − β`.
 
 ## Convenciones
 
