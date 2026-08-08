@@ -1544,6 +1544,124 @@ def test_v22_barajado_conserva_la_marginal():
 
 
 
+def test_v30_dimensiones_del_oscilador():
+    """[F/v3.0 §2.3] Los cuatro terminos comparten unidades y Q es adimensional.
+
+    Las trampas del 2pi y del factor 125 fueron errores dimensionales
+    silenciosos; el §2.3 introduce cuatro identificaciones fisicas nuevas a la
+    vez, asi que exige este test antes de implementar nada.
+    """
+    import oscilador as OSC
+
+    d = OSC.verificar_dimensiones()
+    assert d["Q_adimensional"]
+    assert d["lambda_S2_Gamma_adimensional"]
+    # [lambda] = 1/BTC EXTRAIDA del PDF (Sec. 4.4.1), no asumida.
+    assert OSC.UNIDADES["lambda"] == "1/BTC"
+    # Termino comun: USD/BTC, o sea (1, -1, 0) en exponentes de (USD, BTC, Tick).
+    assert tuple(int(v) for v in d["termino_comun"]) == (1, -1, 0)
+    return f"terminos en USD/BTC; Q adimensional; [lambda]=1/BTC del PDF"
+
+
+def test_v30_ar2_recupera_Q_y_anula_k_en_paseo():
+    """[F/v3.0 §3.2] Tabla de validacion, INCLUIDA la fila del paseo aleatorio.
+
+    ⚠ Es la demostracion de que el nulo del test es el correcto: sobre un paseo
+    aleatorio —la hipotesis que la v2.2 no pudo rechazar— el AR(2) devuelve
+    k ~ 0 y raices REALES, o sea "sin oscilador". Por primera vez la pregunta se
+    hace con un estadistico cuyo nulo es la alternativa que preocupa.
+    """
+    import oscilador as OSC
+
+    rng = np.random.default_rng(30)
+
+    def simular(Q, k=0.25, m=1.0, n=120_000):
+        g = math.sqrt(k * m) / Q
+        D = m + g + k
+        phi1, phi2 = (2 * m + g) / D, -m / D
+        x = np.zeros(n)
+        e = rng.normal(0, 1, n)
+        for t in range(2, n):
+            x[t] = phi1 * x[t - 1] + phi2 * x[t - 2] + e[t] / D
+        return x
+
+    detalle = []
+    for nombre, Q_real, complejas in (
+        ("subamortiguado", 5.0, True),
+        ("critico", 0.5, True),
+        ("sobreamortiguado", 0.167, False),
+    ):
+        x = simular(Q_real)
+        p1, p2, *_ = OSC.ajustar_ar2(x)
+        pr = OSC.primitivas_desde_phi(p1, p2)
+        assert abs(pr["Q"] - Q_real) / Q_real < 0.10, (nombre, pr["Q"], Q_real)
+        assert pr["raices_complejas"] is complejas, (nombre, pr)
+        assert pr["m"] > 0.0, f"{nombre}: masa negativa en un oscilador simulado"
+        detalle.append(f"{nombre} Q={pr['Q']:.3f}")
+
+    # LA FILA QUE IMPORTA: paseo aleatorio -> k ~ 0, raices reales.
+    x = np.cumsum(rng.normal(0, 1, 120_000))
+    p1, p2, *_ = OSC.ajustar_ar2(x)
+    pr = OSC.primitivas_desde_phi(p1, p2)
+    assert abs(pr["k"]) < 1e-3, f"paseo aleatorio con k = {pr['k']:.3e}"
+    assert not pr["raices_complejas"], "el paseo aleatorio salio con raices complejas"
+    detalle.append(f"paseo k={pr['k']:.2e} raices reales")
+    return " | ".join(detalle)
+
+
+def test_v30_masa_negativa_es_rebote_bid_ask():
+    """[F/v3.0] ⚠ m < 0 no es "poca inercia": es microestructura de RETORNOS.
+
+    Un paseo aleatorio cuyos retornos estan autocorrelacionados con coeficiente
+    `a` produce EXACTAMENTE:
+
+        x_t = (1+a) x_{t-1} - a x_{t-2} + e   =>   phi1 = 1+a,  phi2 = -a
+
+    y por tanto `phi1 + phi2 = 1` identicamente, o sea `k = 0` POR CONSTRUCCION,
+    y `m = -phi2 = a`. Con rebote bid-ask (a < 0) sale masa negativa.
+
+    Medido sobre 446 892 ticks reales: a = -0.216061, phi1 = +0.783939,
+    phi2 = +0.216061, con errores de 2e-7 contra la prediccion. Es decir, TODO el
+    AR(2) del mercado real es paseo aleatorio + rebote, sin fuerza recuperadora.
+    """
+    import oscilador as OSC
+
+    rng = np.random.default_rng(31)
+    n = 200_000
+    a = -0.216  # el valor medido sobre mercado real
+    e = rng.normal(0, 1, n)
+    r = np.empty(n)
+    r[0] = e[0]
+    for t in range(1, n):
+        r[t] = a * r[t - 1] + e[t]
+    x = 64_000 + np.cumsum(r)
+
+    dec = OSC.descomponer_rebote(x)
+    assert abs(dec["a_retornos"] - a) < 0.01, dec["a_retornos"]
+    assert dec["err_phi1"] < 5e-3, dec
+    assert dec["err_phi2"] < 5e-3, dec
+    assert abs(dec["suma_pred"] - 1.0) < 1e-12, "phi1+phi2 deberia ser 1 identicamente"
+
+    pr = OSC.primitivas_desde_phi(dec["phi1"], dec["phi2"])
+    assert pr["m"] < 0.0, "con a < 0 la masa debe salir negativa"
+    assert abs(pr["k"]) < 1e-3, pr["k"]
+    assert math.isnan(pr["Q"]), "Q no puede estar definida con k*m < 0"
+
+    # La guarda tiene que verlo.
+    res = {"mco": pr, "etiqueta": "sintetico"}
+    assert OSC.guarda_masa(res) is not None, "la guarda de masa negativa no disparo"
+
+    # Y el ciclo de Harvey no tiene parametrizacion valida (segunda via, §4.1).
+    h = OSC.harvey_desde_phi(dec["phi1"], dec["phi2"])
+    assert not h["existe"], "Harvey no deberia tener solucion con phi2 > 0"
+    return (
+        f"a={dec['a_retornos']:+.4f} -> phi1={dec['phi1']:+.4f} (pred "
+        f"{dec['phi1_pred']:+.4f}), phi2={dec['phi2']:+.4f} (pred "
+        f"{dec['phi2_pred']:+.4f}); k=0 identicamente, m<0, Harvey sin solucion"
+    )
+
+
+
 # ==============================================================================
 # RUNNER
 # ==============================================================================

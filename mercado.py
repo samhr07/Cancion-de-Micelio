@@ -338,6 +338,51 @@ def leer_mmr(lector_firmado=None) -> tuple[float, bool]:
 # inventarse el volumen, que es justo lo que el mock hacía.
 
 
+# ------------------------------------------------------------------------------
+# ⚠ EL FEED EMITE TRANSACCIONES CON PRECIO Y CANTIDAD EN CERO
+# ------------------------------------------------------------------------------
+# HALLAZGO DEL 2026-08-07, sobre datos reales y en LAS TRES rutas de captura
+# (stream simple `/ws/`, stream combinado `/stream?streams=`, y el bot):
+#
+#     captura_trades (simple)     29 de 11 870 trades   0.244 %
+#     captura_dual   (combinado)  76 de 91 931 trades   0.083 %
+#     captura_larga  (combinado)  25 de 22 623 trades   0.111 %
+#
+# Son mensajes `"e":"trade"` con `"p":"0"` y `"q":"0"`, **id de trade válido y
+# monótono** y timestamp válido. No es un fallo de parseo: el id encaja en la
+# secuencia, así que Binance consume un identificador con ellos.
+#
+# CONSECUENCIA SI NO SE FILTRAN, y es grave: `publicar_trade` escribiría
+# `P_spot = 0` y el EAKF tomaría una medición de 0 USD/BTC. A ~30 tx/s eso es una
+# innovación espuria de −65 000 USD **cada ~30 segundos**.
+#
+# Medido sobre `captura_dual` (91 931 trades):
+#     |incremento| máximo CON ceros   = 65 245.5 USD
+#     |incremento| máximo SIN ceros   =      11.8 USD     <- factor 5 500
+#     curtosis de incrementos CON     =    601.8
+#     curtosis de incrementos SIN     =   1 179.7
+#
+# ⚠ La curtosis SUBE al limpiar, y eso desconcierta hasta que se ve por qué: los
+# ceros inflaban tanto la varianza que el denominador σ⁴ aplastaba el cociente.
+# Estaban ENMASCARANDO la cola real, no creándola. Toda cifra de varianza medida
+# sobre la serie sucia —incluida la curtosis 601.8 que la v2.1 §1.5 y la v2.2
+# usan— está mal por órdenes de magnitud y hay que releerla.
+def tick_valido(precio: float, cantidad: float) -> bool:
+    """¿Es esta transacción utilizable? Validez de DATO, no del modelo.
+
+    Se rechaza en el borde del sistema —aquí, en la ingesta— y no aguas abajo,
+    por el mismo principio que `hay_medicion`: un dato inválido no debe entrar
+    nunca al bloque compartido, porque una vez dentro es indistinguible de uno
+    bueno para todos los consumidores.
+    """
+    return (
+        math.isfinite(precio)
+        and math.isfinite(cantidad)
+        and precio > 0.0
+        and cantidad > 0.0
+    )
+
+
 @dataclass
 class TickMercado:
     """Una transaccion real. `es_sintetico` marca las que no vienen del exchange.
@@ -448,6 +493,10 @@ class FeedPublico:
         self.max_estancamientos = int(max_estancamientos)
         self.estancamientos = 0
         self.modo_degradado = False
+        # Contador de transacciones rechazadas por `tick_valido`. Se publica en
+        # telemetria: si esta fraccion se dispara, el feed cambio de
+        # comportamiento y hay que mirarlo antes que las matrices.
+        self.n_invalidos = 0
 
     async def escuchar(self, al_recibir, cancelado=None) -> None:
         """Bucle de ingesta. `al_recibir(TickMercado)` se invoca por cada tick.
@@ -498,13 +547,21 @@ class FeedPublico:
                         if dato.get("e") not in ("trade", "aggTrade"):
                             continue
                         self.estancamientos = 0
+                        precio_msg = float(dato["p"])
+                        cantidad_msg = float(dato["q"])
+                        if not tick_valido(precio_msg, cantidad_msg):
+                            # ~0.1-0.24 % de los mensajes vienen con p=0 y q=0.
+                            # Se descartan aqui, en el borde: dentro del bloque
+                            # compartido serian indistinguibles de un dato bueno.
+                            self.n_invalidos += 1
+                            continue
                         # 't' en `@trade`, 'a' en `@aggTrade`: mismo papel de
                         # identidad para deduplicar y detectar huecos (§3.3/§3.4).
                         tid = int(dato.get("t", dato.get("a", 0)))
                         al_recibir(
                             TickMercado(
-                                precio=float(dato["p"]),
-                                cantidad=float(dato["q"]),
+                                precio=precio_msg,
+                                cantidad=cantidad_msg,
                                 # 'T' es el instante del trade en el reloj del
                                 # exchange. Usar el local aquí falsearía τ_d de la
                                 # Sec. 6.5, que es precisamente la latencia que se
@@ -573,6 +630,12 @@ class FeedPublico:
                 nuevos = [t for t in trades if int(t["a"]) > ultimo_agg_id]
                 if trades:
                     ultimo_agg_id = max(int(t["a"]) for t in trades)
+                antes = len(nuevos)
+                nuevos = [
+                    t for t in nuevos
+                    if tick_valido(float(t["p"]), float(t["q"]))
+                ]
+                self.n_invalidos += antes - len(nuevos)
                 for tr in nuevos:
                     al_recibir(
                         TickMercado(

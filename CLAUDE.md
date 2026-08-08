@@ -9,9 +9,9 @@ IPOPT y qpOASES). No se han validado contra CUDA ni acados.**
 
 ---
 
-## ESTADO ACTUAL (2026-08-07)
+## ESTADO ACTUAL (2026-08-08)
 
-Seis tandas de trabajo aplicadas, en este orden:
+Ocho tandas de trabajo aplicadas, en este orden:
 
 1. **Correcciones estructurales** — el orden de trabajo de abajo, ejecutado en su totalidad.
    Detalle en "Sesión 2026-08-02".
@@ -41,8 +41,18 @@ el estado *anterior* del código.
    la banda medida** — `ω_m` es salida del algoritmo, no del mercado — y **(C) fuera de ella**,
    pendiente de la captura de 48 h. **53/53** criterios.
 
-⚠ **Lee la sesión 2026-08-07 (b) antes de tocar nada que dependa de `ω_m`.** Está en duda si
-`ω_m`, `Φ`, `Ψ`, `Ω`, `Ω_crit`, `A_arm` y los nodos de fase siguen en el diseño.
+8. **Oscilador forzado v3.0** — `ORDEN_TRABAJO_OSCILADOR_3_0.md`, §2.3 y §3 (el que decide).
+   Detalle en "Sesión 2026-08-08". **Ningún cambio de modelo.** Veredicto: **k = 0, m < 0,
+   raíces reales — NO HAY OSCILADOR**, y todo el AR(2) queda explicado a 7 decimales por paseo
+   aleatorio + rebote bid-ask. **56/56** criterios.
+
+⚠ **Lee las sesiones 2026-08-07 (b) y 2026-08-08 antes de tocar nada que dependa de `ω_m`.**
+`ω_m`, `Φ`, `Ψ`, `Ω`, `Ω_crit`, `A_arm` y los nodos de fase **no tienen sustento empírico**.
+Lo que sobrevive está en "Qué sobreviviría si (A) se confirma".
+
+⚠ **El feed emite transacciones con `p = 0`** (~0.2 %). Corregido en `mercado.tick_valido`, pero
+**toda medición de varianza anterior al 2026-08-08 está contaminada** — ver el hallazgo de datos
+en la sesión 2026-08-08.
 
 **Las Fases 2 y 3 siguen sin ejecutar.** La 3 necesita Testnet. La 2 sigue tras su
 compuerta, pero la v1.3 cambió el terreno: el ρ₁ = 0.87 de `y1` resultó ser artefacto de
@@ -69,6 +79,9 @@ corregir el filtro 90 veces con la misma medición, y eso está corregido en ori
 - `captura_larga.py` — **v2.2**: captura continua por bloques (48 h) con escritura atómica.
 - `experimento_v22.py` — **v2.2**: nulos por sustitutos, histograma de banda y árbitro
   multitaper. `python experimento_v22.py`.
+- `oscilador.py` / `experimento_v30.py` — **v3.0**: primitivas `k`, `m`, `γ`, `Q` por AR(2) con
+  hipótesis nula, verificación dimensional y descomposición del rebote bid-ask.
+  `python experimento_v30.py`. **No se importa desde `Micelio.py`.**
 
 ### Cómo se arranca
 
@@ -1698,6 +1711,127 @@ Pendiente para cerrar la v2.2:
 Y en cola, **no bloqueadas** por el veredicto porque no dependen de `ω_m` (§7 de la v2.2):
 **v2.1 §5** (log-precio) y **v2.1 §6** (cuantiles empíricos del NIS). Las compuertas del NIS
 están mal calibradas pase lo que pase con `ω_m`, así que son el mejor candidato para la espera.
+
+## Sesión 2026-08-08 — Oscilador forzado: el veredicto (v3.0, §2.3 y §3)
+
+Ejecuta `ORDEN_TRABAJO_OSCILADOR_3_0.md`. **Ningún cambio de modelo en `Micelio.py`**, como
+exige su §8. Suite **56/56**.
+
+### ⚠ VEREDICTO: k = 0. NO HAY OSCILADOR. Y ahora se sabe qué había en su lugar
+
+El AR(2) sobre **446 892 ticks reales** (3.19 h continuas, tras descartar los ceros del feed):
+
+| magnitud | valor |
+|---|---|
+| φ₁ | **+0.783939** ± 0.000087 |
+| φ₂ | **+0.216061** ± 0.000089 |
+| `k = 1 − φ₁ − φ₂` | **+4.67e-07** ± 1.7e-04 |
+| `m = −φ₂` | **−0.216061** ← **NEGATIVA** |
+| raíces | **REALES** (sin oscilación) |
+| `Q` | **indefinida** (`k·m < 0`) |
+| **`H₀: k = 0`** | **p = 0.6175 → NO se rechaza** |
+
+Y el ajuste robusto de Huber, que por el §3.3 prevalece si difiere: `k = 6.7e-16`, tres órdenes
+de magnitud aún más cerca de cero.
+
+### La explicación mecánica, exacta a 7 decimales
+
+`m < 0` no es "poca inercia". Es la firma de que el segundo rezago viene de la
+**autocorrelación de los RETORNOS**, no de una inercia del precio. Si
+
+```
+x_t = x_{t-1} + r_t        con    r_t = a·r_{t-1} + ε
+```
+
+entonces, sin aproximar nada:
+
+```
+x_t = (1+a)·x_{t-1} − a·x_{t-2} + ε      ⟹   φ₁ = 1+a,  φ₂ = −a
+                                          ⟹   φ₁ + φ₂ = 1  IDÉNTICAMENTE
+                                          ⟹   k = 0  POR CONSTRUCCIÓN,  m = a
+```
+
+Medido sobre los datos reales:
+
+| | valor |
+|---|---|
+| `a = ρ₁(retornos)` — el rebote bid-ask | **−0.216061** |
+| φ₁ predicho `1+a` / medido | +0.783939 / **+0.783939** (error **2.0e-07**) |
+| φ₂ predicho `−a` / medido | +0.216061 / **+0.216061** (error **2.7e-07**) |
+
+**Todo el AR(2) del mercado real es un paseo aleatorio más rebote bid-ask.** No queda residuo
+que atribuir a una fuerza recuperadora. Y encaja con lo ya medido: la v2.0 reportó ρ₁ = −0.164
+en la innovación del filtro y lo identificó como rebote bid-ask; es la misma cantidad.
+
+### Segunda vía independiente, y gratis: Harvey tampoco existe
+
+El §4.1 da la correspondencia `ρ = √(−φ₂)`, `λ = arccos(φ₁/(2√(−φ₂)))`. Con **φ₂ = +0.216 > 0**,
+`√(−φ₂)` no es real: **el ciclo estocástico de Harvey no tiene parametrización válida sobre
+estos datos**. No hace falta ajustar nada por máxima verosimilitud para saberlo — el §4 queda
+respondido por el mismo número que respondió el §3.
+
+### ⚠ La guarda que faltaba: el §3.3 pide vigilar `γ < 0` y el fallo real fue `m < 0`
+
+`γ` salió positiva (+1.216) en el ajuste global y en **0 de 38** bloques fue negativa. La guarda
+que el documento especifica no habría disparado nunca. La que hacía falta es sobre la masa, y
+está añadida (`oscilador.guarda_masa`) con su test.
+
+### ⚠ HALLAZGO DE DATOS QUE OBLIGA A RELEER TRES SESIONES
+
+**El feed emite transacciones con `p = 0` y `q = 0`**, con id de trade válido y monótono. En las
+tres rutas de captura:
+
+| captura | ceros | fracción |
+|---|---|---|
+| `captura_trades` (stream simple `/ws/`) | 29 / 11 870 | **0.244 %** |
+| `captura_dual` (stream combinado) | 76 / 91 931 | 0.083 % |
+| `captura_larga` (combinado) | 990 / 467 326 | 0.212 % |
+
+**En producción no se filtraban.** `publicar_trade` habría escrito `P_spot = 0` y el EAKF habría
+tomado una medición de 0 USD/BTC: a ~30 tx/s, una innovación espuria de −65 000 USD **cada
+~30 s**. Corregido en `mercado.tick_valido`, en el borde de la ingesta.
+
+Y la corrección de las cifras del registro es contraintuitiva:
+
+| sobre `captura_dual` | con ceros | sin ceros |
+|---|---|---|
+| curtosis de incrementos | **601.8** | **1179.7** |
+| \|incremento\| máximo | 65 245.5 USD | **11.8 USD** |
+
+⚠ **La curtosis SUBE al limpiar.** Los ceros inflaban tanto la varianza que el denominador σ⁴
+aplastaba el cociente: estaban **enmascarando** la cola real, no creándola. Toda cifra de
+varianza medida sobre la serie sucia —incluida la curtosis 601.8 que la v2.1 §1.5 y la v2.2
+citan— está mal, y el factor 5 500 en el incremento máximo dice cuánto.
+
+### Estabilidad por bloques (§3.3)
+
+38 bloques de 5 min sobre el tramo continuo:
+
+| magnitud | p10 | mediana | p90 | dispersión |
+|---|---|---|---|---|
+| `k` | −6.44e-05 | +1.66e-05 | +1.88e-04 | **250 %** |
+| `Q` | 0.0018 | 0.0035 | 0.0103 | (finito en 21/38) |
+
+`k` cambia de signo entre bloques y su dispersión es del 250 %. El §3.3 pregunta explícitamente
+si `k` y `Q` varían tanto como variaba `ω_m` de ventana en ventana: **sí**. Con la diferencia de
+que ahora sabemos por qué — están fluctuando alrededor de cero.
+
+### Lo que esto cierra y lo que no
+
+**Cierra** la pregunta del §1.2 de la v2.2 por una vía con hipótesis nula correcta, sobre todos
+los datos, sin ventana espectral y sin banda de resolubilidad. El resultado coincide con el de
+la v2.2 (`REAL ≈ BARAJADO`) y con el multitaper, que no veía exceso sobre ruido rojo.
+
+**No cierra** la hipótesis (B) —escala de decenas de minutos—: 3.19 h de tramo continuo dan
+poca resolución ahí, y el AR(2) a Δn = 1 tick es un instrumento de escala fina. La captura
+larga sufrió un **corte de DNS de 36 442 s** (10 h) que partió los datos en dos tramos; hay que
+relanzarla para el §4 multiescala de la v2.2.
+
+⚠ **Reserva sobre el alcance del AR(2):** se ajusta sobre el NIVEL con intercepto constante, así
+que mide reversión a un nivel FIJO. Una reversión a una tendencia móvil aparecería como `k = 0`
+igualmente. Los bloques de 5 min mitigan esto —ahí el nivel es localmente constante— y también
+dan `k ≈ 0`, pero no lo eliminan del todo. El modelo estructural de Harvey con tendencia +
+ciclo lo resolvería, y es justo el que no tiene parametrización válida.
 
 ## Convenciones
 
