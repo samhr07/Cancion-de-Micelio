@@ -2038,6 +2038,101 @@ dato. La captura de 8 h con `tr_maker` está corriendo.
   `pendiente ≈ (1−γ)/2 − β` del A.4, que es la validación del mecanismo por dos vías.
 - Raíces de `G(τ)` con un estadístico cuyo nulo no sea degenerado.
 
+## Sesión 2026-08-08 (e) — La firma en tiempo de ticks resuelve la discrepancia
+
+Tres tareas pedidas: firma en reloj de ticks, control positivo, `τ_pico` en ambos relojes.
+
+### ⚠ CONFIRMADO: el sesgo era mezclar dos relojes, no el agrupamiento de volatilidad
+
+La confirmación estaba en mis propios datos y no la señalé: el barajado destruye el
+**agrupamiento** de volatilidad pero conserva los **tiempos de llegada**. Con incrementos iid,
+los tramos con más ticks siguen teniendo más varianza por segundo, mecánicamente. Que la
+pendiente barajada saliera −0.0403 y no cero era exactamente esa firma.
+
+**Firma en tiempo de ticks** (`σ(n)/√n` contra `n` en ticks), 446 892 ticks, ν = 39 tx/s:
+
+| n [ticks] | 2 | 8 | 32 | 128 | 512 | 1024 | 4096 | 8192 |
+|---|---|---|---|---|---|---|---|---|
+| solapada | 0.1964 | 0.2088 | 0.3045 | 0.4579 | 0.5631 | 0.5839 | 0.5721 | 0.5393 |
+| **no solapada** | **0.1984** | **0.2127** | **0.3044** | **0.4584** | **0.5640** | **0.5835** | 0.5466 | 0.5474 |
+
+**Los dos estimadores coinciden a tres decimales.** La discrepancia de signo desaparece **por
+construcción**, no por corrección de sesgo.
+
+Y el control negativo se limpia solo:
+
+| pendiente sobre barajados | reloj de pared | **reloj de ticks** |
+|---|---|---|
+| rango completo | −0.0796 | **−0.0054** |
+| rango largo | −0.0403 | **−0.0028** |
+
+**El sesgo del estimador desaparece.** Es la confirmación de que venía de los dos relojes.
+
+**Resultado en tiempo de ticks:**
+
+| rango | pendiente | lectura |
+|---|---|---|
+| [2, 256] ticks | +0.228 | microestructura: el rebote bid-ask muriéndose |
+| **[256, 8192] ticks** | **+0.007 / +0.003** | **DIFUSIVO** (control barajado: −0.003) |
+
+Más allá de la microestructura, **el precio es difusivo en tiempo de ticks**. La "reversión" del
+A.2 era íntegramente el artefacto de los dos relojes.
+
+Consecuencia aceptada: `H*` pasa a `H*_ticks = (c/σ_tick)²`, y su valor en segundos depende de
+ν. Con ν variando por factor 20, **`H*` en segundos no es una constante** — más honesto, no menos.
+
+### ⚠ El control positivo funciona, pero su nulo NO es conservador
+
+Sustituyendo la razón degenerada por un bootstrap paramétrico bajo núcleo monótono
+`G(τ) = G∞·τ/(τ₀+τ)`, con σ calibrada a la volatilidad real (0.1806 USD):
+
+| | valor |
+|---|---|
+| descenso medido pico→final | **16.8 %** |
+| descenso espurio bajo el nulo monótono | MED 0.0 %, p90 0.1 %, **máx 0.4 %** |
+| sorteos ≥ 16.8 % | **0 de 60** |
+
+Parecía cerrado. **No lo está**, por dos razones que encontré después:
+
+1. **`R` no tiene un solo pico.** Extendiendo el rango: 1.95 en τ=398, baja a 1.55 en 1000,
+   **sube a 2.09 en 1800**, vuelve a bajar. El "descenso" depende de dónde se trunca:
+
+   | max_rezago | 600 | 800 | 1000 | 1500 | 2000 | 2300 |
+   |---|---|---|---|---|---|---|
+   | pico | 398 | 398 | 398 | 1500 (borde) | 1642 | 1642 |
+   | descenso | 9.9 % | 16.8 % | 20.4 % | 0.0 % | 12.1 % | 16.9 % |
+
+2. **Mi nulo usa signos iid.** `rng.permutation(eps_real)` destruye la memoria larga del flujo
+   de órdenes — que es precisamente lo que produce estas ondulaciones a rezagos largos. El nulo
+   es **demasiado estrecho**, y por eso da máx 0.4 % donde el real da 16.8 %.
+
+**Conclusión:** el sobrepaso sigue sin establecerse, y ahora se sabe qué haría falta — un nulo
+monótono con **flujo de memoria larga**, no con signos iid. Es la misma lección otra vez: el
+control positivo solo vale si su nulo reproduce las propiedades del dato que importan.
+
+⚠ Nota de calibración: con σ ajustada a la volatilidad real el nulo da máx 0.4 %; con otra SNR
+da 15.4 %. **El resultado depende críticamente de la SNR**, así que el número aislado no
+significa nada sin declarar cómo se calibró.
+
+### `τ_pico` en ambos relojes — sin conclusión
+
+| captura | ν [tx/s] | pico [ticks] | pico [s] |
+|---|---|---|---|
+| v31 | 5.6 | 398 (o 1642 según ventana) | 71 (o 293) |
+| larga (regla de tick) | 39.0 | 668 | 17.1 |
+
+**No es estable en ninguno de los dos relojes**, pero el propio `τ_pico` no es una cantidad bien
+definida mientras `R` tenga varios máximos locales. La pregunta —¿en qué reloj vive el
+decaimiento del impacto?— sigue abierta y es la que sostiene la arquitectura de dos relojes
+desde la v2.0. Hace falta más dato antes de responderla.
+
+### Lo que sí queda establecido de esta sesión
+
+- La firma de volatilidad **debe medirse en tiempo de ticks**; en reloj de pared el estimador
+  tiene sesgo propio y los dos muestreos discrepan en signo.
+- Más allá de la microestructura (n > 256 ticks) el precio es **difusivo**.
+- El propagador **existe** (sesión d): pico 1.95 contra 0.003–0.016 con signos barajados.
+
 ## Convenciones
 
 - Comentarios y nombres de variables en español, consistente con el código y el PDF existentes.
