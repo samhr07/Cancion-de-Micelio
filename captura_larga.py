@@ -48,6 +48,10 @@ class Bloque:
         self.tr_precio, self.tr_t, self.tr_id = [], [], []
         self.bk_mid, self.bk_t = [], []
         self.tr_cant = []
+        # ⚠ `es_maker` se captura desde la v2.0 en el bot pero NO se persistia en
+        # las capturas de analisis. Sin el no hay forzamiento medido y el §2 de
+        # la v3.1 es inejecutable. Omision propia, corregida aqui.
+        self.tr_maker = []
 
     def volcar(self):
         if not self.tr_precio:
@@ -67,6 +71,7 @@ class Bloque:
                 tr_t=np.array(self.tr_t, dtype=np.float64),
                 tr_id=np.array(self.tr_id, dtype=np.int64),
                 tr_cant=np.array(self.tr_cant, dtype=np.float64),
+                tr_maker=np.array(self.tr_maker, dtype=np.uint8),
                 bk_mid=np.array(self.bk_mid, dtype=np.float64),
                 bk_t=np.array(self.bk_t, dtype=np.float64),
             )
@@ -90,6 +95,7 @@ async def capturar(horas: float, directorio: str, symbol: str = "btcusdt"):
     t_ultimo_bloque = t0
     mid_prev = 0.0
     n_total = 0
+    n_invalidos = 0
     reintentos = 0
 
     while time.time() < fin:
@@ -113,10 +119,16 @@ async def capturar(horas: float, directorio: str, symbol: str = "btcusdt"):
                         d = env.get("data", env)
                         e = d.get("e")
                         if e == "trade":
+                            # Filtro de validez del feed: ~0.2 % de los mensajes
+                            # traen p=0 y q=0 con id valido (ver mercado.tick_valido).
+                            if float(d["p"]) <= 0.0 or float(d["q"]) <= 0.0:
+                                n_invalidos += 1
+                                continue
                             bloque.tr_precio.append(float(d["p"]))
                             bloque.tr_t.append(float(d["T"]) / 1000.0)
                             bloque.tr_id.append(int(d["t"]))
                             bloque.tr_cant.append(float(d["q"]))
+                            bloque.tr_maker.append(1 if d.get("m") else 0)
                             n_total += 1
                         elif e == "bookTicker":
                             b, a = float(d["b"]), float(d["a"])
@@ -167,7 +179,7 @@ def cargar_larga(directorio: str = DIR_POR_DEFECTO):
     rutas = sorted(glob.glob(os.path.join(directorio, "bloque_*.npz")))
     if not rutas:
         raise FileNotFoundError(f"sin bloques en {directorio}")
-    campos = ("tr_precio", "tr_t", "tr_id", "tr_cant", "bk_mid", "bk_t")
+    campos = ("tr_precio", "tr_t", "tr_id", "tr_cant", "tr_maker", "bk_mid", "bk_t")
     acum = {c: [] for c in campos}
     for r in rutas:
         try:
@@ -176,7 +188,8 @@ def cargar_larga(directorio: str = DIR_POR_DEFECTO):
             print(f"[AVISO] bloque ilegible, se omite: {r}")
             continue
         for c in campos:
-            acum[c].append(d[c])
+            if c in d.files:
+                acum[c].append(d[c])
     return {c: np.concatenate(v) for c, v in acum.items() if v}
 
 

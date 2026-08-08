@@ -1833,6 +1833,148 @@ igualmente. Los bloques de 5 min mitigan esto —ahí el nivel es localmente con
 dan `k ≈ 0`, pero no lo eliminan del todo. El modelo estructural de Harvey con tendencia +
 ciclo lo resolvería, y es justo el que no tiene parametrización válida.
 
+## Sesión 2026-08-08 (b) — Horizonte derivado (v3.1, §1 completo)
+
+Ejecuta `ORDEN_TRABAJO_PROPAGADOR_3_1.md`. **Preregistro commiteado ANTES de medir** en
+`66bed94` (`PREREGISTRO_3_1.md`), como exige su §4. `Micelio.py` sin cambios.
+
+### §1 — El horizonte, derivado por primera vez
+
+Sobre el tramo continuo limpio de 446 892 ticks (3.19 h, ν = 39 tx/s):
+
+| magnitud | valor |
+|---|---|
+| ρ₁ de retornos (rebote bid-ask) | −0.216061 |
+| σ_r sobre datos **limpios** | 0.2218 USD |
+| **`s_eff` de Roll** | **0.2062 USD/BTC** ≈ 2 ticks |
+
+Coste de ida y vuelta y horizonte al que la volatilidad lo iguala:
+
+| esquema | `c(u)` | en ticks | **`H*`** |
+|---|---|---|---|
+| maker + maker | 25.97 USD/BTC | 260 | **50.0 s** |
+| maker + taker | 45.66 USD/BTC | 457 | ~200 s |
+| taker + taker | 65.35 USD/BTC | 653 | **fuera del rango medido** |
+
+**Firma de volatilidad** (`σ(H)` contra `H`), el gráfico que el §8 exige y que dice
+empíricamente a qué escala deja de dominar la microestructura:
+
+| H [s] | 0.5 | 1 | 2 | 5 | 10 | 30 | 60 | 120 | 300 |
+|---|---|---|---|---|---|---|---|---|---|
+| σ [USD] | 2.22 | 3.34 | 5.11 | 8.30 | 11.91 | 20.58 | 28.24 | 35.47 | 51.66 |
+| σ/√H | 3.15 | 3.34 | 3.61 | 3.71 | **3.77** | **3.76** | 3.65 | 3.24 | 2.98 |
+
+La meseta está en **H = 10–30 s**: por debajo, σ/√H cae; por encima, también. Ese es el rango
+donde la difusión es más limpia, y coincide en orden de magnitud con el `H*` derivado.
+
+**Dos consecuencias que reordenan el proyecto**, y ahora con números propios:
+
+1. Con comisiones taker, `σ` **no alcanza el coste dentro de los 300 s medidos**. Al régimen de
+   volatilidad de esta captura, una ida y vuelta taker no se paga. El §1.3 lo anticipa: si `H*`
+   se dispara, **el sistema debe operar menos, no más**.
+2. **La latencia de 300 ms deja de ser una restricción.** Contra `H* = 50 s` es el **0.6 %**.
+   Lleva seis versiones condicionando decisiones de diseño.
+
+⚠ **Criterio NO CUMPLIDO, declarado en el preregistro:** el escalón de comisiones **no se pudo
+leer de la cuenta** — `/fapi/v1/commissionRate` es firmado y el Modo LECTURA no tiene
+credenciales. Se usan las tarifas públicas VIP 0, marcadas como asumidas en el código.
+
+### §2 — Bloqueado por una omisión mía, ya corregida
+
+El §2 necesita `ε` del campo `m` de Binance. **Mis capturas nunca lo persistieron**: el bot lo
+lleva en `MERCADO_DTYPE` desde la v2.0, pero `captura_dual.py` y `captura_larga.py` guardaban
+precio, tiempo, id y cantidad, no `m`. Sin él no hay forzamiento medido y el §2 es inejecutable.
+
+Corregido: `captura_larga.py` guarda ahora `tr_maker` y además **filtra los ceros del feed en
+origen**. Captura nueva lanzada; primer bloque verificado (42.5 % de trades con `m = True`).
+
+### ⚠ §3 — La calibración por simulación NO reproduce la tabla del documento
+
+El §3.2 mide un sesgo de tamaño finito de 0.03–0.10 entre `β` teórico `(1−γ)/2` y el `β` al que
+`ρ₁(retornos)` cruza cero, **decreciente** con γ. Mi simulación da sesgos de **0.40–0.55** y
+**crecientes**. Dos defectos propios encontrados y corregidos por el camino:
+
+1. El núcleo `h(k) = G(k) − G(k−1)` se construía desde τ = 1, así que `h(1)` salía exactamente
+   cero — el propagador no decaía en el primer rezago, que es donde está casi todo el efecto.
+2. La convolución era `mode="same"`, que **centra el núcleo y mete el futuro en el presente**.
+   Sobre un test de predictibilidad eso fabrica la señal que se pretende medir. Es la misma
+   familia que la media móvil centrada contra la que advierte el §5.
+3. El generador de signos no producía la γ pedida (0.30 → 0.542 medido). Exponente del núcleo
+   corregido a `α = (1+γ)/2`, y la calibración pasa a evaluarse contra la **γ medida**.
+
+Aun así el sesgo no converge al del documento. Sospecha principal: mi `G(τ) = (1+τ)^(−β)` tiene
+**impacto permanente `G(∞) = 0`**, mientras que el propagador de Bouchaud tiene `G(∞) > 0` — con
+todo el impacto transitorio, el precio revierte por construcción y el cruce se desplaza a `β`
+altas. **No se ajusta el simulador hasta que cuadre**: eso sería ajustar el instrumento al
+resultado esperado. Se deja como no reproducido y el §3 no se ejecuta sobre datos reales hasta
+resolverlo.
+
+## Sesión 2026-08-08 (c) — Adenda A: la pendiente de la firma. El hallazgo NO sobrevive
+
+Ejecuta `ADENDA_A_PROPAGADOR_3_1.md`, que sustituye el §3 entero. **Simulador eliminado** como
+exige el A.5. `Micelio.py` sin cambios.
+
+### ⚠ EL CONTROL OBLIGATORIO DEL A.3.4 FALLA — y por eso existe
+
+Sobre incrementos **barajados**, donde por construcción no hay estructura temporal alguna, la
+pendiente **no sale cero**:
+
+| serie | pendiente [30, 180] s | pendiente [0.5, 180] s |
+|---|---|---|
+| REAL | −0.1530 | −0.1194 |
+| **BARAJADA (control)** | **−0.0403** | **−0.0796** |
+
+El A.3.4 es explícito: "Si sale distinta [de cero], el estimador tiene sesgo propio y el
+resultado sobre datos reales no vale." **El estimador tiene sesgo negativo propio.** La
+comparación honesta es −0.153 contra −0.040, no contra cero.
+
+### Y el bootstrap tampoco separa
+
+`IC 95 % = [−0.1522, +0.0699]`, mediana −0.0530, **p contra cero = 0.4167**. Bloques móviles de
+900 s, 12 bloques efectivos — por debajo de los ~15 que el A.3.3 pide como mínimo.
+
+### Los dos estimadores de la firma discrepan EN SIGNO
+
+| rango | solapada | no solapada |
+|---|---|---|
+| [0.5, 180] s | −0.1194 (reversión) | **+0.0111 (momentum)** |
+| [0.5, 30] s | −0.1235 (reversión) | **+0.0421 (momentum)** |
+| [30, 180] s | −0.1530 (reversión) | −0.0580 (reversión) |
+
+El A.3.2 pide reportar el acuerdo de signo entre rangos; aquí falla algo peor, el acuerdo entre
+**estimadores**. La ponderación es la causa: la firma solapada pone un punto de partida por
+tick, así que **sobrepondera los tramos de alta actividad**, que son también los de alta
+volatilidad. Solapada y no solapada no estiman la misma cantidad.
+
+Por eso `H_lo` sale distinto según el estimador: la firma solapada decrece monótonamente desde
+0.5 s —no hay región de microestructura creciente— mientras la no solapada sí la tiene y pone la
+meseta en 10–30 s, como decía el A.2.
+
+### Veredicto sobre el hallazgo preliminar del A.2
+
+La razón de varianzas **sí** es monótona (`VR(45)=0.936`, `VR(60)=0.845`, `VR(90)=0.785`,
+`VR(120)=0.703`, `VR(180)=0.567`), que es lo que hacía atractivo el hallazgo. Pero **el control
+barajado reproduce el mismo comportamiento cualitativo**, el bootstrap da p = 0.42, y los dos
+estimadores discrepan en signo.
+
+**No se puede rechazar difusividad con estos datos.** La pista del A.2 no sobrevive a su propio
+control — que es exactamente para lo que el A.3.4 lo puso, y la segunda vez que este control
+salva un análisis (la primera fue `C = 0.783` sobre barajados en la v2.2).
+
+⚠ Esto **no cierra** el criterio de abandono del §4.2 del preregistro: ese exige además que
+`E[Δp]` no supere `c(u)` en ningún régimen y que el residuo sea blanco, y ninguna de las dos se
+ha medido todavía. Falta también el §2 (`β`, `γ`, forma de `G(τ)`), ahora ya posible porque la
+captura persiste `tr_maker`.
+
+### Lo que hace falta antes de volver a mirar la pendiente
+
+1. **Resolver la discrepancia entre estimadores.** Mientras solapada y no solapada den signos
+   opuestos, ninguna pendiente es reportable. La ponderación por actividad es la sospecha.
+2. **Más datos.** 12 bloques de bootstrap contra los ~15 mínimos; y el A.3.3 dimensiona el
+   procedimiento para 48 h, no para 3.19 h.
+3. **Corregir el sesgo del estimador** o contrastar siempre contra el barajado en vez de contra
+   cero.
+
 ## Convenciones
 
 - Comentarios y nombres de variables en español, consistente con el código y el PDF existentes.

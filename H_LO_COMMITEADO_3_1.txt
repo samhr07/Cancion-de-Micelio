@@ -1,0 +1,4 @@
+H_lo = 0.5 s
+H_hi = 180.0 s
+Determinados por la firma de volatilidad ANTES de ajustar (A.3.2).
+Tramo: 446892 ticks, 3.19 h.
