@@ -52,6 +52,9 @@ el estado *anterior* del código.
    descomposición SSA del precio real es **la escalera armónica de la ventana** (`T = 2L/k`,
    error 0.0000, idéntica sobre un paseo aleatorio), y **φ′ = ticks/BTC se asocia
    positivamente con la volatilidad realizada en 16 de 16 ventanas** (p de signos 3.05e-05).
+   **El período y φ′ son independientes** (`L` explica el 79 % de la varianza de `T`; φ′ no
+   añade nada significativo): se apuntaba a la **frecuencia** y lo que resultó medible es la
+   **amplitud**.
 
 ⚠ **Lee las sesiones 2026-08-07 (b) y 2026-08-08 antes de tocar nada que dependa de `ω_m`.**
 `ω_m`, `Φ`, `Ψ`, `Ω`, `Ω_crit`, `A_arm` y los nodos de fase **no tienen sustento empírico**.
@@ -2334,6 +2337,44 @@ Lecturas, en orden:
 4. La correlación con el **nivel** de precio es espuria por construcción (dos series no
    estacionarias) y sale 2/8: se calcula porque se preguntó por ella, y se reporta marcada.
 
+### ⚠ El período y φ′ son INDEPENDIENTES — se apuntaba a la frecuencia y lo medible era la amplitud
+
+Medido cruzando las dos magnitudes sobre las **16 ventanas** (8 de `captura_v31b` y 8 de
+`captura_larga`), que es la comprobación que faltaba para cerrar la separación:
+
+| par | Pearson | Spearman | t (n = 16) |
+|---|---|---|---|
+| **`T` contra `L`** (la ventana de análisis) | **+0.891** | **+0.938** | **+7.36** |
+| `T/L` contra φ′ mediana | −0.347 | −0.162 | −1.38 |
+| `T` contra φ′ mediana | −0.469 | −0.306 | −1.99 |
+| `T/L` contra ν | −0.105 | −0.165 | — |
+| `T/L` contra ρ(φ′, V) | −0.153 | −0.103 | — |
+| φ′ mediana contra ν | −0.082 | −0.035 | — |
+
+Con n = 16 el umbral es |t| > 2.14. **El período lo determina `L` y nada más**: `L` explica el
+**79 %** de la varianza de `T`, y la dependencia residual de φ′ —una vez quitada `L`— no es
+significativa. No se puede descartar una dependencia débil con 16 ventanas; sí se puede
+descartar que sea el mecanismo dominante, porque apenas queda varianza por repartir.
+
+**Lo que esto significa para el diseño del sistema.** Desde la v1.1 el proyecto apunta a una
+**frecuencia**: `ω_m`, `ω_ang`, `A_arm`, los nodos de fase, `Φ`, `Ψ`, `Ω`, `Ω_crit`, `C`,
+`c²_vol`, el término `γ_ω·ω_m` de `ρ_k`. Todas esas cantidades son una frecuencia o una fase.
+La v3.0 ya había dictado `k = 0, raíces reales, NO HAY OSCILADOR`; esta sesión añade que el
+período que devuelve la descomposición es el de la ventana y no el del mercado.
+
+**Lo único que sobrevive a la medición es una relación de amplitud**: φ′ contra la volatilidad
+realizada, 16/16 ventanas, p de signos 3.05e-05, con un efecto del +18 % al +41 % entre
+terciles. φ′ no mueve el período: mueve **cuánto** se mueve el precio.
+
+**Consecuencia, y queda marcada como hipótesis de diseño SIN PROBAR:** una variable que
+modula amplitud y no fase no entra en la matriz de transición `A` —que es donde vive la
+dinámica— sino en las **covarianzas de ruido**. En términos del EAKF, φ′ es candidata natural
+a entrar en `Q_k` y `R_k`, que es exactamente donde la Sec. 7.3.3 del PDF pone `ρ_k`. La forma
+`ρ_k = 1 + γ_ω|ω_m| + γ_Q|ΣQ|` tiene el término equivocado: `γ_ω|ω_m|` es la frecuencia, que
+no tiene sustento empírico, mientras que un término en φ′ sí lo tendría. **Nada de esto está
+medido todavía** —haría falta comprobar que modular `Q` con φ′ mejora el NIS y la blancura de
+la innovación— y no se ha tocado `Micelio.py`.
+
 ### Reservas de esta sesión
 
 - **La `L` elegida sobre datos reales no significa nada.** La curva de ortogonalidad contra
@@ -2351,6 +2392,9 @@ Lecturas, en orden:
 
 ### Pendiente
 
+- **Probar φ′ como modulador de `Q_k`** en lugar del término `γ_ω|ω_m|` de la Sec. 7.3.3, y
+  medirlo por NIS y blancura de la innovación. Es la consecuencia directa de que lo medible
+  sea amplitud y no frecuencia, y es lo primero que habría que ejecutar.
 - Barrer `m` en φ′ y ver si la asociación vive en el reloj de ticks o en el de volumen.
 - Nulo de MC-SSA que funcione sobre series casi blancas (el sesgo anticonservador lo invalida).
 - SSA multivariante (M-SSA) sobre `[precio, φ′]`, que es el paso natural ahora que hay una
