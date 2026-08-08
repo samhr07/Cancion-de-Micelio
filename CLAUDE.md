@@ -1975,6 +1975,69 @@ captura persiste `tr_maker`.
 3. **Corregir el sesgo del estimador** o contrastar siempre contra el barajado en vez de contra
    cero.
 
+## Sesión 2026-08-08 (d) — §2: el propagador existe; el sobrepaso NO está establecido
+
+Primera ejecución del §2 con **forzamiento medido**, ahora que la captura persiste `tr_maker`.
+Tramo continuo de 19 157 ticks (0.95 h, ν = 5.6 tx/s — tramo tranquilo).
+
+### El test de signo del §2.2: NO falla, y por poco lo doy por fallado
+
+`G(0) = 0` **exactamente**. Estuve a punto de aplicar la parada obligatoria, pero el cero es
+**artefacto de mi estimador**: uso `R(τ) = E[(p_{t+τ} − p_t)·ε_t]`, que en `τ = 0` es
+idénticamente nulo por construcción. No es un signo invertido, es una definición. El impacto
+inmediato en sentido de propagador es `R(1)`.
+
+Y `R(1) = −0.0052 < 0`, que tampoco es signo invertido: **es el rebote bid-ask**. Una compra
+agresora ejecuta al ask y el trade siguiente tiende al bid. Es la misma cantidad que el
+`ρ₁ = −0.216` de la v3.0.
+
+**La convención `m = True → ε = −1` es CORRECTA**, y el criterio honesto lo demuestra:
+
+| | valor |
+|---|---|
+| `R(τ) > 0` para τ ≥ 2 | **799 de 799 rezagos (100 %)** |
+| con `ε` invertido | espejo exacto, negativa en todo el rango |
+
+Si el signo estuviera invertido, `R` sería negativa en TODO el rango, no solo en τ = 1.
+
+### El propagador existe, y con margen enorme
+
+| τ (ticks) | 1 | 2 | 10 | 50 | 100 | 200 | 300 | 500 | 800 |
+|---|---|---|---|---|---|---|---|---|---|
+| `R(τ)` [USD/BTC] | −0.005 | +0.005 | +0.088 | +0.510 | +0.943 | +1.525 | +1.839 | +1.834 | +1.621 |
+
+**Control con signos barajados** (precios intactos, relación destruida): el pico se desploma de
+**1.9488 a 0.0028–0.0155**, o sea un factor **~150–700**. La relación entre signo de transacción
+y movimiento posterior del precio es real y masiva. **El propagador con forzamiento medido
+existe**, que es lo que el §2 quería establecer.
+
+### ⚠ Pero el sobrepaso NO está establecido, y el fallo es de mi estadístico
+
+`R` alcanza su máximo en τ = 398 ticks (**71.1 s**, cerca del `H* = 50 s`) y cae a 1.621 en
+τ = 800 — un descenso del 17 %. Eso *parece* sobrepaso y reversión, que es la firma de raíces
+complejas, o sea de oscilador.
+
+**No se puede afirmar.** Elegí como estadístico la razón `R(final)/R(pico)`, y bajo el nulo esa
+razón es **degenerada**: cuando el pico es ruido (~0.003), la razón explota a valores absurdos
+(p5 = −560, mediana = −11). El `p = 0.917` que devuelve no significa nada. Es un estadístico mal
+elegido, no un resultado.
+
+El control B (incrementos barajados, signos intactos) da mediana 0.722 y p95 = 1.000, con el
+real en 0.832: **dentro del rango del nulo**. Con 24 ventanas independientes a τ = 800, un
+descenso del 17 % es perfectamente compatible con ruido de muestra.
+
+**Conclusión honesta:** el propagador existe y es grande; su forma —monótona o con sobrepaso—
+**queda sin decidir**, y hace falta (a) un estadístico con nulo bien definido y (b) mucho más
+dato. La captura de 8 h con `tr_maker` está corriendo.
+
+### Pendiente del §2
+
+- Ajuste del núcleo paramétrico de 4 parámetros (`G₀`, `τ₀`, `β`, `δ`) con bootstrap por bloques.
+- `δ` barrida y elegida por verosimilitud **fuera de muestra**.
+- `γ` de la autocorrelación de signos, y la comprobación de coherencia
+  `pendiente ≈ (1−γ)/2 − β` del A.4, que es la validación del mecanismo por dos vías.
+- Raíces de `G(τ)` con un estadístico cuyo nulo no sea degenerado.
+
 ## Convenciones
 
 - Comentarios y nombres de variables en español, consistente con el código y el PDF existentes.
