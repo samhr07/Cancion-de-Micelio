@@ -421,6 +421,78 @@ def anticipabilidad(ev: dict, marks: list, ventana_s: float = 5.0,
     return out
 
 
+def residencia_del_nivel(d: dict) -> dict:
+    """Cuanto vive el nivel de precio del mejor bid, con el muestreo CORRECTO.
+
+    ⚠ SESGO DE INSPECCION. Muestrear NIVELES da la mediana de las duraciones;
+    pero una orden insertada en un instante al azar cae en un nivel con
+    probabilidad proporcional a su DURACION. Los dos numeros no se parecen en
+    nada aqui: mediana por nivel 0.0070 s contra mediana por instante 112.6 s,
+    cuatro ordenes de magnitud.
+
+    Calcularlo mal daba cocientes `T_despeje/T_residencia` de 1566 a 19892 y la
+    conclusion "el nivel SIEMPRE muere antes", que es falsa. Con el muestreo
+    correcto el cociente va de 0.14 a 1.75 y **cruza 1 dentro del rango de `Q0`
+    observado**, que es justo lo que se le pide a una variable de estado.
+
+    Para una duracion `L`, el nivel en que caes tiene media `E[L^2]/E[L]` y su
+    vida RESTANTE esperada es `E[L^2]/(2 E[L])`.
+    """
+    bt, bb = d["bk_t"], d["bk_b"]
+    dur = []
+    for a, b in cl.tramos_continuos(d["tr_t"]):
+        t0, t1 = d["tr_t"][a], d["tr_t"][b - 1]
+        m = (bt >= t0) & (bt <= t1)
+        tt, pp = bt[m], bb[m]
+        if tt.size < 3:
+            continue
+        cam = np.flatnonzero(np.diff(pp) != 0) + 1
+        ini = np.concatenate(([0], cam))
+        fin = np.concatenate((cam, [tt.size]))
+        dur.extend([tt[y - 1] - tt[x] for x, y in zip(ini, fin) if y - x > 0])
+    L = np.array([x for x in dur if x > 0], dtype=np.float64)
+    if L.size < 10:
+        return {}
+    w = L / L.sum()
+    orden = np.argsort(L)
+    Ls, cw = L[orden], np.cumsum(w[orden])
+    qb = lambda pc: float(Ls[np.searchsorted(cw, pc / 100.0)])
+    EL2_EL = float((L ** 2).sum() / L.sum())
+    return {"n_niveles": int(L.size),
+            "mediana_por_nivel": float(np.median(L)),
+            "media_por_nivel": float(L.mean()),
+            "mediana_por_instante": qb(50),
+            "p25_por_instante": qb(25), "p75_por_instante": qb(75),
+            "media_del_nivel_en_que_caes": EL2_EL,
+            "vida_restante_esperada": EL2_EL / 2.0,
+            "frac_tiempo_mayor_60s": float(w[L > 60].sum())}
+
+
+def ritmo_consumo_bid(d: dict) -> dict:
+    """BTC/s transados al mejor bid, POR TRAMO CONTINUO.
+
+    ⚠ Dividir por la duracion total incluiria el hueco de 5 884 s de la
+    suspension, en el que no hubo ni datos ni consumo. Es el defecto que
+    produjo el 0.53 BTC/s del §4.2 de la orden, y de ahi la incompatibilidad
+    aparente con la tabla de supervivencia.
+    """
+    tm = d["tr_maker"].astype(bool)
+    q, p, t = d["tr_cant"], d["tr_precio"], d["tr_t"]
+    i = np.clip(np.searchsorted(d["bk_t"], t, side="right") - 1, 0,
+                len(d["bk_t"]) - 1)
+    al_bid = tm & (np.abs(p - d["bk_b"][i]) <= TOL)
+    filas, vol, dur = [], 0.0, 0.0
+    for k, (a, b) in enumerate(cl.tramos_continuos(t)):
+        v = float(q[a:b][al_bid[a:b]].sum())
+        dd = float(t[b - 1] - t[a])
+        filas.append({"tramo": k, "ticks": b - a, "volumen": v,
+                      "duracion": dd, "btc_por_s": v / dd if dd > 0 else np.nan})
+        vol += v
+        dur += dd
+    return {"por_tramo": filas, "volumen_total": vol, "duracion_continua": dur,
+            "btc_por_s": vol / dur if dur > 0 else float("nan")}
+
+
 def _fmt_pct(x):
     return "n/a" if not np.isfinite(x) else "%.1f %%" % (100 * x)
 
@@ -680,6 +752,23 @@ def _autotest() -> int:
           % (mk["mk_1s"], mk["mk_5s"], mk["mk_50s"]))
     ok("positivo a 50 s tras subir el mid", mk["mk_50s"] > 0.3)
     ok("cerca de cero a 1 s (aun no se movio)", abs(mk["mk_1s"]) < 0.1)
+
+    print("== 5. CONTROL POSITIVO del sesgo de inspeccion ==")
+    # Con duraciones exponenciales de media m, el nivel en que caes tiene media
+    # 2m y su vida restante esperada es m. Verdad conocida y exacta.
+    rng = np.random.default_rng(101)
+    m_verdad = 5.0
+    L = rng.exponential(m_verdad, 200000)
+    EL2_EL = float((L ** 2).sum() / L.sum())
+    print("     duraciones exponenciales de media %.1f s" % m_verdad)
+    print("     media por nivel        = %.3f  (verdad %.1f)" % (L.mean(), m_verdad))
+    print("     E[L2]/E[L]             = %.3f  (verdad %.1f)" % (EL2_EL, 2 * m_verdad))
+    print("     vida restante E[L2]/2E[L] = %.3f  (verdad %.1f)"
+          % (EL2_EL / 2, m_verdad))
+    ok("recupera el factor 2 del sesgo de longitud",
+       abs(EL2_EL - 2 * m_verdad) / (2 * m_verdad) < 0.03)
+    print("     (sobre el libro real el factor no es 2 sino ~20: la mediana por")
+    print("      nivel es 0.0070 s y por instante 112.6 s)")
 
     print("")
     print("RESULTADO: %d fallo(s)" % fallos)
