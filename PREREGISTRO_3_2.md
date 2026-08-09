@@ -667,12 +667,72 @@ de penalización es defendible y ninguna es interpretable.
 
 ## 11. Criterio de ABANDONO (§9.3)
 
-Sin cambios respecto al §4.2 de la v3.1, que sigue vigente y **este documento no relaja**.
+### 11.1 ⚠ ENMIENDA — el abandono se acota a la ESCALA DE SEGUNDOS
+
+**Redactada el 2026-08-09, ANTES de que exista ningún resultado del §9** y sin haber ajustado un
+solo modelo sobre `captura_v33`. Se enmienda ahora precisamente porque hacerlo después sería
+mover la portería.
+
+La redacción anterior —"la hipótesis de estructura explotable a `H*` queda abandonada", con la
+coletilla *"no hay otra escala a la que retirarse: ésta es donde está el dinero"*— **era correcta
+mientras se creía que `H*` era el horizonte operativo. No lo es.**
+
+`H*` está definido como el punto donde el movimiento típico **iguala** el coste. O sea: es el
+horizonte en el que habría que acertar el movimiento **entero** para no perder. Eso no es un
+punto de operación, es un **suelo por debajo del cual operar es imposible**. La v3.1 §1.3 lo
+convirtió en "el número movible" que fija el horizonte del propagador y del NMPC, y ahí está el
+error de lectura.
+
+El R² necesario para que la ventaja supere el lastre cae con `1/H`. Con `σ₁ = 3.77 USD/BTC·s^½`
+—el plateau de la firma de volatilidad de la v3.1, no el despeje `c/√H*`, que es tautológico
+porque `H* := (c/σ₁)²`— y un lastre de comisiones (37.65) más selección adversa (5.78) medida en
+la sesión de ejecución pasiva, operando sólo el decil superior de la señal:
+
+| horizonte | `σ(H)` | lastre | **R² requerido** |
+|---|---|---|---|
+| **103 s = `H*`** | 38.3 | 43.4 | **41.8 %** |
+| 10 min | 92.3 | 43.4 | **7.2 %** |
+| 1 h | 226.2 | 43.4 | **1.2 %** |
+| 4 h | 452.4 | 45.8 | 0.33 % |
+| ~2.3 días | 1 680.6 | 86.1 | 0.09 % |
+
+(financiación del perpetuo a partir de 1 h, ~6.3 USD/BTC por cada 8 h; es lo que crea un óptimo
+interior en vez de "cuanto más largo, mejor")
+
+**Un R² del 42 % sobre dirección de precio es fantasía.** Ésa es la razón *estructural* por la
+que el paso 3 puede fallar, y **no tiene nada que ver con que haya o no señal**.
+
+**Lo que se enmienda, y sólo esto:**
+
+> Si los pasos 2 o 3 del §9 fallan sobre datos que sí pasan la compuerta, queda abandonada la
+> hipótesis de **estructura explotable a escala de SEGUNDOS**. Eso **no** decide nada sobre
+> escalas de minutos a horas, que pasan a ser la línea principal —la hipótesis (B) de la v2.2,
+> sin decidir desde entonces y despriorizada justo cuando se derivó `H*`.
+
+**Lo que NO se relaja:** los criterios de éxito, el margen, la compuerta, el orden de la regla de
+decisión y la obligación de reportar el paso en que se detuvo siguen exactamente igual.
+
+⚠ **Reservas de la aritmética de arriba, para que no se cite como más de lo que es:** supone
+normalidad conjunta, difusividad sostenida, operar sólo el decil superior y tarifas VIP 0. **La
+difusividad está medida sólo hasta 8 192 ticks (~12 min a `ν = 11`)** — más allá es
+extrapolación y hay que verificarla. Y que el R² *requerido* caiga no dice nada sobre el R²
+*alcanzable*: a escala de días el flujo de órdenes predice poco y el juego es otro. Además ~150
+operaciones al año hacen que estimar un Sharpe tarde años, y eso es un coste real de irse largo.
+
+### 11.2 El criterio, con la enmienda aplicada
+
+Sin más cambios respecto al §4.2 de la v3.1, que sigue vigente y **este documento no relaja**.
 
 Si los pasos 2 o 3 del §9 fallan sobre datos que **sí** pasan la compuerta, la hipótesis de
-**estructura explotable a `H*`** queda abandonada.
+**estructura explotable a escala de segundos** queda abandonada.
 
-> "No hay otra escala a la que retirarse: ésta es donde está el dinero."
+### 11.3 Lo que la v3.2 decide, y lo que ya no
+
+La v3.2 **no se para**: permanente contra transitorio es una pregunta bien planteada y el
+estimador está validado con 18 controles. Pero **baja la apuesta que tiene encima**. Cualquiera
+que sea el resultado, decide la **forma del núcleo de impacto a escala de segundos**, y eso es
+una capa de **ejecución** —cómo colocar una orden— no la capa de **decisión** —cuándo operar y en
+qué dirección.
 
 ---
 
@@ -725,8 +785,16 @@ y la constancia de que la captura no se había tocado.**
 | 7 | (esta) | control del reloj de un solo lado | control **espejo** con núcleo fijo en segundos | sin el espejo no se distingue el diagnóstico del artefacto de que `ν` no entra en la definición de `D` a ticks fijos | **NO** |
 | 8 | (esta) | `f_∞` estimado siempre | `f_∞` **sólo si se rechazó `D = 1`** | con `β → 0` el núcleo tiende a 1 sea cual sea `f_∞`: no está identificado sin decaimiento | **NO** |
 
-**Las ocho enmiendas son anteriores a mirar un solo dato de `captura_v32`**, y las ocho las
-motivó un control positivo del propio estimador, no un resultado.
+| 9 | (esta, 2026-08-09) | abandono de "estructura explotable a `H*`" | abandono acotado a **escala de SEGUNDOS** | `H*` es el horizonte donde habría que acertar el movimiento entero: un **suelo**, no un punto de operación. El R² requerido cae con `1/H` — 41.8 % en `H*`, 7.2 % a 10 min, 1.2 % a 1 h | **NO** |
+
+**Las nueve enmiendas son anteriores a que exista ningún resultado del §9**, y ninguna se motivó
+en un resultado: ocho por controles del propio estimador y la novena por una implicación
+aritmética de cifras ya publicadas (`c(u)` con probabilidad de llenado, y la firma de
+volatilidad de la v3.1).
+
+⚠ **Sobre `captura_v33`: no se ha ajustado ningún modelo sobre ella, ni se ha formado la
+partición de prueba.** Lo único ejecutado es `--resumen`, que es la comprobación de compuerta que
+el §1 de este documento ordena hacer y pegar literalmente.
 
 ### El estadístico ha cambiado tres veces; la pregunta, ninguna
 

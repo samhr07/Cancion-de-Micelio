@@ -407,9 +407,15 @@ def anticipabilidad(ev: dict, marks: list, ventana_s: float = 5.0,
         r = lambda x: np.argsort(np.argsort(x)).astype(float)
         a, b = r(f) - r(f).mean(), r(v) - r(v).mean()
         rho = float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b)))
+        # ⚠ La MEDIA, no la mediana. Con k = 25 elementos la mediana es UN
+        # elemento, y salia identica (-7.7040) en los tres horizontes solo
+        # porque el central coincidia -- pese a que los conjuntos solo se
+        # solapan un 68-84 %. Un estadistico que no distingue conjuntos
+        # distintos no esta midiendo el conjunto.
         out["%gs" % h] = {
-            "flujo_previo_peores": float(np.median(f[peores])),
-            "flujo_previo_resto": float(np.median(f[resto])),
+            "flujo_previo_peores": float(np.mean(f[peores])),
+            "flujo_previo_resto": float(np.mean(f[resto])),
+            "flujo_mediana_peores": float(np.median(f[peores])),
             "spearman_flujo_markout": rho,
             "n": int(v.size), "k": int(k)}
     return out
@@ -532,6 +538,7 @@ def informe(est: dict, horizonte_s: float) -> None:
         an = anticipabilidad(est["ev"], mk, 5.0, 0.05)
         print("   %-6s %16s %14s %14s"
               % ("h", "flujo 5 % peor", "flujo resto", "rho(flujo,mk)"))
+        print("   (medias; la mediana de 25 elementos no distingue conjuntos)")
         for h, r in an.items():
             print("   %-6s %+16.4f %+14.4f %+14.4f"
                   % (h, r["flujo_previo_peores"], r["flujo_previo_resto"],
