@@ -9,7 +9,38 @@ IPOPT y qpOASES). No se han validado contra CUDA ni acados.**
 
 ---
 
-## ESTADO ACTUAL (2026-08-08)
+## ESTADO ACTUAL (2026-08-09)
+
+### Lo primero que hay que saber
+
+**Dos líneas abiertas, ninguna cerrada, y las dos esperando datos.** No se abre una tercera.
+
+| línea | qué decide | estado |
+|---|---|---|
+| **v3.2** `ORDEN_TRABAJO_MIGRACION_3_2` | impacto permanente contra transitorio (M0/M1/M1′/M2) | **congelada** hasta que `captura_v33` alcance **741 000 ticks continuos**. Va por 292 107 (39 %), un solo tramo, faltan ~12 h |
+| **v4.0** `ORDEN_TRABAJO_EJECUCION_4_0` | cuánto cuesta operar | `captura_estacional` corriendo, 21 días. §4.2 y §5 ya resueltos |
+
+**`Micelio.py` no se toca desde la v2.2.** Todo lo posterior es código de análisis aparte.
+
+**Preregistros vigentes y congelados:** `PREREGISTRO_3_2.md` (9 enmiendas, todas anteriores a
+mirar dato) y `PREREGISTRO_4_0.md` (1 enmienda). Los dos llevan registro de enmiendas con hash
+antes/después y constancia de si había resultado a la vista.
+
+**Suites:** `tests_v13.py` 56/56 · `ssa.py` 11/11 · `migracion_v32.py` 18/18 · `cola.py` 9/9 ·
+`difusividad.py` 5/5.
+
+⚠ **Retractaciones vigentes — no citar lo retirado:**
+- **Los «tres regímenes» de difusividad NO existen** (commit `432f459`). El rango de ajuste
+  estaba fijo en ticks y la banda en segundos difería por factor 7; a banda común la reversión
+  desaparece, y sobre banda común la pendiente **no es estimable** (cambia de +0.02 a +1.52 solo
+  con la densidad de la rejilla). La difusividad más allá de ~12 min **sigue sin verificarse**.
+- **φ′ se retira del vocabulario; se escribe `q̄`** (commit `9b2267e`). Es `1/q̄` y el hallazgo es
+  Jones-Kaul-Lipson (1994), no un descubrimiento. Ni la estimación de `δ` por esa vía ni el apoyo
+  a M1′ sobreviven a sus nulos.
+- **Toda cifra de ejecución anterior al commit `0e3b9e0` se descarta**: el llenado adverso estaba
+  clasificado como no-llenado y el sesgo ocultaba justo los llenados malos.
+
+### Historial
 
 Ocho tandas de trabajo aplicadas, en este orden:
 

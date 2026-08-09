@@ -16,8 +16,13 @@ se referencia en el reporte.
 
 Línea **paralela**, no sucesora. La predictiva (v3.2 → v3.3 → v3.4) sigue su curso sin tocarse.
 Aquí se mide **cuánto cuesta operar**, que entraba en el sistema como tarifa fija y resultó no
-serlo: la tasa de llenado maker medida (**41.3 %**) y el markout (**−5.78 USD/BTC** a 50 s) mueven
-`c(u)` de 25.2 a **~37.7** y `H*` de 50 s a **~103 s**.
+serlo: la tasa de llenado maker medida (**41.3 % a 60 s**) y el markout (**−5.78 USD/BTC** a 50 s)
+mueven `c(u)` de 25.2 a **~37.7** y `H*` de 50 s a **~103 s**.
+
+⚠ **La tasa de llenado depende del horizonte y hay que citarla siempre con él.** A los **120 s**
+que usa la taxonomía del §1.3 de este documento sube a **48.4 %**, y con ella `C_maker` baja. Las
+dos cifras son correctas y describen cosas distintas; mezclarlas sin el horizonte al lado es la
+clase de confusión que este proyecto ya pagó con `H*` en segundos contra `H*` en ticks.
 
 **No decide** nada de la v3.2, ni toca `Micelio.py`, ni modifica la función de coste del NMPC
 (eso es v3.4 y va después de que `c(u, estado)` exista).
@@ -97,15 +102,41 @@ variable primaria = T_despeje / T_residencia           [adimensional]
 
 Se congela **antes de ver su poder predictivo**.
 
-⚠ **Requisito de entrada, no apéndice: resolver primero la inconsistencia declarada en el §4.2.**
-2 058.1 BTC transados al mejor bid dan ~0.53 BTC/s, con lo que una cola de 22.7 BTC se despejaría
-en ~43 s; pero se midió `P(sin llenar a 60 s) = 92.8 %` en ese tercil (**cifra corregida**: el
-99.5 % es anterior al arreglo del llenado adverso, commit `0e3b9e0`, y toda cifra de ejecución
-previa a ese commit se descarta). **Los dos números siguen sin ser compatibles.**
+⚠ **Requisito de entrada, no apéndice** — y **RESUELTO** en el commit `8759b05`, sobre
+`captura_v32` (banco de pruebas; la captura de evaluación de esta línea es la estacional y **no
+se tocó**). Se deja el enunciado original y la resolución debajo, porque el camino es
+instructivo.
 
-Primero verificar que ambos salen del **mismo tramo**. Si se sostiene, la lectura es que el cuello
-de botella no es despejar la cola sino que **el nivel muere antes**, y entonces manda
-`T_residencia`, no `Q₀`.
+*Enunciado original:* 2 058.1 BTC transados al mejor bid dan ~0.53 BTC/s, con lo que una cola de
+22.7 BTC se despejaría en ~43 s; pero se midió `P(sin llenar a 60 s) = 92.8 %` en ese tercil.
+Los dos números no eran compatibles.
+
+**Resolución, en dos capas:**
+
+1. **Los 0.53 BTC/s salían de un denominador equivocado.** `captura_v32` tiene **dos tramos** y
+   la duración total incluye el hueco de 5 884 s de la suspensión, donde no hubo ni datos ni
+   consumo. Por tramo continuo: 0.2196 y 0.0869 BTC/s, **0.1628 BTC/s** en total. Con el ritmo
+   correcto `T_despeje` de la cola grande es **139 s, no 43 s**, y contra un horizonte de 60 s el
+   92.8 % de no llenado deja de ser incompatible: es lo esperable. **La incompatibilidad era
+   aritmética.**
+2. **Y al medir `T_residencia` aparece un sesgo de inspección.** Muestrear NIVELES da mediana
+   0.0070 s; pero una orden insertada en un instante al azar cae en un nivel con probabilidad
+   proporcional a su **duración**, y por instante la mediana es **112.6 s** — cuatro órdenes de
+   magnitud. Con el muestreo malo el cociente salía de 1 566 a 19 892 y la conclusión habría sido
+   «el nivel **siempre** muere antes», que es falsa.
+
+**Con la vida restante esperada correcta (`E[L²]/2E[L]` = 79.5 s):**
+
+| tercil | `Q₀` | `T_despeje` | **cociente** | |
+|---|---|---|---|---|
+| pequeña | 1.785 BTC | 11.0 s | **0.14** | despeja antes de morir |
+| media | 8.181 BTC | 50.3 s | **0.63** | |
+| grande | 22.669 BTC | 139.2 s | **1.75** | el nivel muere primero |
+
+**El cociente cruza 1 dentro del rango de `Q₀` observado**, que es lo que se le pide a una
+variable de estado. Y la lectura **no** es la anticipada arriba: no es que el nivel muera siempre
+antes, es que **ambos mecanismos ligan según `Q₀`** — y ésa es la razón de que la variable
+primaria deba ser el cociente y no cualquiera de los dos por separado.
 
 ### 1.5 Eventos programados del §7 — la lista, ANTES de mirar si tienen efecto
 
@@ -219,7 +250,12 @@ invalidó, y **constancia de si había resultado a la vista**.
 
 | # | commit antes → después | regla retirada | regla que la sustituye | qué la invalidó | ¿resultado a la vista? |
 |---|---|---|---|---|---|
-| — | — | (ninguna todavía) | — | — | — |
+| 1 | `7d3debd` → `8759b05` | §1.4 declaraba la inconsistencia de `T_despeje` **sin resolver** | resuelta: ritmo real 0.1628 BTC/s (no 0.53) y `T_residencia` con muestreo ponderado por duración | denominador que incluía el hueco de la suspensión, y sesgo de inspección al muestrear niveles en vez de instantes | **NO** — sobre `captura_v32` (banco), no sobre la estacional |
+
+⚠ **No es un cambio de criterio.** El §2 de la orden exige resolver esa inconsistencia **antes**
+de ajustar nada; resolverla es cumplir un requisito de entrada, no mover una regla. La variable de
+estado congelada —el cociente `T_despeje/T_residencia`— es la misma; lo que cambió es que ahora
+se sabe calcularla bien.
 
 **Regla: a partir del primer contacto con el conjunto de evaluación del §4, este documento queda
 congelado.**
