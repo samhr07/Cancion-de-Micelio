@@ -262,11 +262,11 @@ def main() -> int:
             print("P(un tramo alcance %d): NO ESTIMABLE con %d corte(s)"
                   % (cl.TICKS_COMPUERTA, pr["n_cortes"]))
             print("       hacen falta al menos 3 eventos para que la tasa signifique")
-            print("       algo. Lo unico defendible hoy: el tramo medio observado es")
-            print("       %.0f ticks contra los %d que pide la compuerta, o sea un")
-            print("       factor %.1f." % (pr["ticks_medios_por_tramo"],
-                                           cl.TICKS_COMPUERTA,
-                                           cl.TICKS_COMPUERTA / pr["ticks_medios_por_tramo"]))
+            print("       algo. Lo unico defendible hoy: el tramo medio observado")
+            print("       es %.0f ticks contra los %d que pide la compuerta, o sea"
+                  " un factor %.1f."
+                  % (pr["ticks_medios_por_tramo"], cl.TICKS_COMPUERTA,
+                     cl.TICKS_COMPUERTA / pr["ticks_medios_por_tramo"]))
         else:
             print("P(un tramo alcance %d): %.4f" % (cl.TICKS_COMPUERTA, pr["p"]))
             print("AVISO: %s" % pr["nota"])
