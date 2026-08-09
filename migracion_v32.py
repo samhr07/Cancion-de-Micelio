@@ -80,13 +80,29 @@ REJILLA_DELTA = (0.0, 0.25, 0.5, 1.0)
 # 1. Nucleo
 # ===========================================================================
 
-def nucleo_G(tau, tau0: float, beta: float) -> np.ndarray:
-    """G(tau)/G0 = (1 + tau/tau0)^(-beta). Normalizado a G(0) = 1."""
-    return (1.0 + np.asarray(tau, dtype=np.float64) / tau0) ** (-beta)
+def nucleo_G(tau, tau0: float, beta: float, f_inf: float = 0.0) -> np.ndarray:
+    """G(tau)/G0 = f_inf + (1 - f_inf) * (1 + tau/tau0)^(-beta).
+
+    `f_inf = G(inf)/G(0)` es la **fraccion PERMANENTE** del impacto.
+
+    ⚠ La primera version de este modulo usaba `(1 + tau/tau0)^(-beta)` a secas,
+    que tiene `G(inf) = 0`: todo el impacto es transitorio por construccion. Eso
+    ya se anoto como sospecha en la v3.1 §3 ("mi G(tau) tiene impacto permanente
+    G(inf) = 0, mientras que el propagador de Bouchaud tiene G(inf) > 0") y se
+    quedo sin arreglar. Sin `f_inf`, `D = G(K)/G(0)` no puede distinguir "decae a
+    un suelo" de "decae a cero", y `G(inf)` es justo lo que el §5 de la v3.1
+    designo referencia movil del sistema.
+
+    Con `f_inf = 1` sale `G` constante: impacto permanente, o sea M1/MkII, que
+    queda anidado de forma mas limpia que por `beta = 0`.
+    """
+    base = (1.0 + np.asarray(tau, dtype=np.float64) / tau0) ** (-beta)
+    return f_inf + (1.0 - f_inf) * base
 
 
 def nucleo_h(K: int, tau0: float, beta: float,
-             omega_G: float = 0.0, phi: float = 0.0) -> np.ndarray:
+             omega_G: float = 0.0, phi: float = 0.0,
+             f_inf: float = 0.0) -> np.ndarray:
     """Respuesta al impulso de los INCREMENTOS: h(0)=G(0), h(k)=G(k)-G(k-1).
 
     Con `beta > 0` sale h(0) = 1 y h(k) < 0: impacto instantaneo seguido de
@@ -94,7 +110,7 @@ def nucleo_h(K: int, tau0: float, beta: float,
     h = [1, 0, 0, ...]: instantaneo y permanente, que es M1.
     """
     tau = np.arange(K + 1, dtype=np.float64)
-    G = nucleo_G(tau, tau0, beta)
+    G = nucleo_G(tau, tau0, beta, f_inf)
     if omega_G != 0.0:
         G = G * np.cos(omega_G * tau + phi)
     h = np.empty(K + 1, dtype=np.float64)
@@ -116,6 +132,36 @@ def convolucion_causal(x: np.ndarray, h: np.ndarray) -> np.ndarray:
     return np.convolve(x, h)[: x.size]
 
 
+def decaimiento_perfil(mod: dict, fracciones=(0.25, 0.50, 1.00)) -> dict:
+    """`D` evaluada a varias fracciones de `K`, para ver si la caida se aplana.
+
+    Con un solo `D = G(K)/G(0)` no se sabe si el impacto restante es permanente
+    o si sigue cayendo fuera del rango ajustado. Tres puntos lo dicen: si
+    `D(K/4) > D(K/2) > D(K)` con diferencias que se encogen, hay suelo; si caen
+    linealmente en log, sigue bajando.
+    """
+    out = {}
+    for f in fracciones:
+        tau = f * mod["K"]
+        out["D_%.2fK" % f] = float(nucleo_G(tau, mod["tau0"], mod["beta"],
+                                            mod.get("f_inf", 0.0)))
+    out["f_inf"] = float(mod.get("f_inf", 0.0))
+    d0 = out["D_%.2fK" % fracciones[0]]
+    d1 = out["D_%.2fK" % fracciones[-2]]
+    d2 = out["D_%.2fK" % fracciones[-1]]
+    caida_1 = d0 - d1        # sobre un intervalo de K/4
+    caida_2 = d1 - d2        # sobre un intervalo de K/2, el DOBLE de ancho
+    # ⚠ Los dos intervalos NO son igual de anchos: el segundo abarca el doble de
+    # rezago. Que caiga MENOS en el intervalo mas ancho ya es aplanamiento; una
+    # ley de potencias sin suelo cae mas en el tramo ancho. Comparar las caidas
+    # crudas exigiendo un factor 2 (como hacia la primera version) pedia mucho
+    # mas que aplanamiento y fallaba sobre un suelo verdadero del 60 %.
+    out["caida_primera"] = float(caida_1)
+    out["caida_segunda"] = float(caida_2)
+    out["se_aplana"] = bool(caida_2 < caida_1) if caida_1 > 1e-9 else True
+    return out
+
+
 def decaimiento(mod: dict) -> float:
     """G(K)/G(0): cuanto queda del impacto al final del rango ajustado.
 
@@ -131,7 +177,7 @@ def decaimiento(mod: dict) -> float:
       decaimiento ~ 1  ->  impacto permanente  ->  M1 / MkII
       decaimiento < 1  ->  impacto transitorio ->  propagador
     """
-    return float(nucleo_G(mod["K"], mod["tau0"], mod["beta"]))
+    return float(nucleo_G(mod["K"], mod["tau0"], mod["beta"], mod.get("f_inf", 0.0)))
 
 
 # ===========================================================================
@@ -164,47 +210,55 @@ def forzamiento(eps: np.ndarray, v: np.ndarray, delta: float,
 
 def ajustar(y: np.ndarray, eps: np.ndarray, v: np.ndarray, K: int,
             delta: float, beta_libre: bool = True,
-            con_oscilacion: bool = False, v_mediana: float | None = None) -> dict:
-    """Ajusta el modelo sobre (y, eps, v). Devuelve parametros y sigma."""
+            con_oscilacion: bool = False, con_suelo: bool = False,
+            v_mediana: float | None = None) -> dict:
+    """Ajusta el modelo sobre (y, eps, v). Devuelve parametros y sigma.
+
+    `con_suelo=True` libera `f_inf = G(inf)/G(0)`, la fraccion permanente.
+    """
     x = forzamiento(eps, v, delta, v_mediana)
     y = np.asarray(y, dtype=np.float64)
 
-    def sse(par):
+    def desempaquetar(par):
+        i = 0
+        ltau0 = par[i]; i += 1
+        beta = par[i]; i += 1
+        f_inf = float(np.clip(par[i], 0.0, 1.0)) if con_suelo else 0.0
+        i += 1 if con_suelo else 0
         if con_oscilacion:
-            ltau0, beta, om, ph = par
-        elif beta_libre:
-            ltau0, beta = par
-            om = ph = 0.0
+            om, ph = par[i], par[i + 1]
         else:
-            (ltau0,) = par
-            beta = 0.0
             om = ph = 0.0
-        tau0 = float(np.exp(ltau0))
+        return float(np.exp(ltau0)), float(beta), f_inf, float(om), float(ph)
+
+    def sse(par):
+        tau0, beta, f_inf, om, ph = desempaquetar(par)
         if not np.isfinite(tau0) or tau0 <= 1e-3 or beta < -1.0 or beta > 5.0:
             return 1e30
-        h = nucleo_h(K, tau0, beta, om, ph)
+        h = nucleo_h(K, tau0, beta, om, ph, f_inf)
         z = convolucion_causal(x, h)
         _, pred = _perfilar_G0(y, z)
         return float(np.sum((y - pred) ** 2))
 
-    if not beta_libre and not con_oscilacion:
-        # M1: beta = 0 hace G constante, asi que tau0 es inobservable. Se fija.
-        tau0, beta, om, ph = 1.0, 0.0, 0.0, 0.0
+    if not beta_libre and not con_oscilacion and not con_suelo:
+        # M1: impacto permanente. Se codifica como f_inf = 1, que hace G
+        # constante sin depender de tau0 ni de beta.
+        tau0, beta, f_inf, om, ph = 1.0, 0.0, 1.0, 0.0, 0.0
     else:
-        p0 = [np.log(50.0), 0.4] + ([0.01, 0.0] if con_oscilacion else [])
-        r = optimize.minimize(sse, p0, method="Nelder-Mead",
-                              options={"maxiter": 4000, "xatol": 1e-6, "fatol": 1e-10})
+        p0 = [np.log(50.0), 0.4]
+        if con_suelo:
+            p0.append(0.3)
         if con_oscilacion:
-            tau0, beta, om, ph = float(np.exp(r.x[0])), float(r.x[1]), float(r.x[2]), float(r.x[3])
-        else:
-            tau0, beta = float(np.exp(r.x[0])), float(r.x[1])
-            om = ph = 0.0
+            p0 += [0.01, 0.0]
+        r = optimize.minimize(sse, p0, method="Nelder-Mead",
+                              options={"maxiter": 6000, "xatol": 1e-6, "fatol": 1e-10})
+        tau0, beta, f_inf, om, ph = desempaquetar(r.x)
 
-    h = nucleo_h(K, tau0, beta, om, ph)
+    h = nucleo_h(K, tau0, beta, om, ph, f_inf)
     z = convolucion_causal(x, h)
     G0, pred = _perfilar_G0(y, z)
     resid = y - pred
-    return {"G0": G0, "tau0": tau0, "beta": beta, "delta": delta,
+    return {"G0": G0, "tau0": tau0, "beta": beta, "delta": delta, "f_inf": f_inf,
             "omega_G": om, "phi": ph, "K": K,
             "sigma": float(np.std(resid, ddof=1)),
             "v_mediana": float(np.median(v[v > 0])) if v_mediana is None else v_mediana,
@@ -340,6 +394,116 @@ def contraste_omega_G(y, eps, v, K, delta, n_sorteos: int = 40,
     p = float(np.mean(nulo >= obs))
     return {"estadistico": obs, "p_simulado": p, "omega_G": mo["omega_G"],
             "nulo_p95": float(np.percentile(nulo, 95)), "n_sorteos": n_sorteos}
+
+
+# ===========================================================================
+# 4.bis  D contra NULO SIMULADO -- porque D tampoco tiene nulo por si sola
+# ===========================================================================
+
+def nulo_de_D(n: int, K: int, delta: float, sigma: float, G0: float,
+              D_verdadero: float = 1.0, gamma_signos: float = 0.0,
+              n_sorteos: int = 40, semilla: int = 0,
+              con_suelo: bool = False) -> dict:
+    """Distribucion de `D_hat` bajo un `D` VERDADERO dado, con N, K, gamma y
+    f(v) emparejados con la muestra real.
+
+    ⚠ POR QUE HACE FALTA. `D` no tiene nulo por si sola, y el estimador **encoge
+    hacia el centro**: medido, con `D = 1` verdadero devuelve 0.9835 (−1.65 %) y
+    con `D = 0.6808` devuelve 0.6994 (+2.73 %). Una regla ingenua
+    "`D < 1` -> transitorio" declararia transitorio sobre la serie de impacto
+    PERMANENTE, que es el control positivo. Y el sesgo apunta hacia el modelo
+    mas complejo justo en la frontera de decision.
+
+    Seria la CUARTA aparicion del patron que el propio preregistro prohibe en su
+    §5.3: umbral tomado del valor asintotico donde la distribucion finita es
+    otra (chi2 sobre NIS en v2.1, (1-gamma)/2 en v3.1, 2dLL en la v3.2, y aqui).
+
+    La regla se escribe contra el **cuantil 5 % de esta distribucion**, no contra 1.
+    """
+    rng = np.random.default_rng(semilla)
+    # Se elige (tau0, beta) que produzca exactamente D_verdadero a rezago K.
+    tau0 = max(K / 4.0, 1.0)
+    if D_verdadero >= 1.0:
+        beta = 0.0
+    else:
+        beta = -np.log(D_verdadero) / np.log(1.0 + K / tau0)
+
+    Ds = np.empty(n_sorteos)
+    for s in range(n_sorteos):
+        d = generar(n, G0=G0, tau0=tau0, beta=beta, delta=delta, sigma=sigma,
+                    K=K, gamma_signos=gamma_signos, semilla=int(rng.integers(1 << 30)))
+        m = ajustar(d["y"], d["eps"], d["v"], K, delta, con_suelo=con_suelo)
+        Ds[s] = decaimiento(m)
+
+    q05, q50, q95 = np.percentile(Ds, [5, 50, 95])
+    # Tasa de falsos positivos de la regla ingenua "D_hat < D_verdadero".
+    falsos = float(np.mean(Ds < D_verdadero))
+    return {"D_verdadero": float(D_verdadero), "D_mediana": float(q50),
+            "sesgo": float(q50 - D_verdadero),
+            "q05": float(q05), "q95": float(q95),
+            "falsos_regla_ingenua": falsos,
+            "muestras": Ds, "n_sorteos": n_sorteos,
+            "umbral_transitorio": float(q05)}
+
+
+def curva_de_sesgo(n: int, K: int, delta: float, sigma: float, G0: float,
+                   rejilla_D=(1.00, 0.90, 0.80, 0.70, 0.50, 0.30),
+                   gamma_signos: float = 0.0, n_sorteos: int = 12,
+                   semilla: int = 0) -> list:
+    """Sesgo de `D_hat` sobre una MALLA de `D` verdadero, no sobre dos puntos.
+
+    Dos puntos no dicen si el estimador encoge, si tiene un sesgo constante o si
+    el sesgo cambia de signo; y la frontera de decision esta justo donde importa.
+    """
+    filas = []
+    for i, Dv in enumerate(rejilla_D):
+        r = nulo_de_D(n, K, delta, sigma, G0, D_verdadero=Dv,
+                      gamma_signos=gamma_signos, n_sorteos=n_sorteos,
+                      semilla=semilla + 100 * i)
+        filas.append({"D_verdadero": Dv, "D_medida": r["D_mediana"],
+                      "sesgo": r["sesgo"], "q05": r["q05"], "q95": r["q95"]})
+    return filas
+
+
+def reloj_del_propagador(y, eps, v, t, bloques, K_ticks: int, T_seg: float,
+                         delta: float) -> dict:
+    """¿El impacto decae en tiempo de transacciones o en tiempo de pared?
+
+    ⚠ SUSTITUYE a la regresion de `log tau0` contra `log nu` del §6 de la orden.
+    Esa regresion es inejecutable: `tau0` **no esta identificada individualmente**
+    (ver `decaimiento`), asi que regresar su logaritmo no mide nada.
+
+    Se computa `D` dos veces por bloque -- una con el rezago tope FIJO EN TICKS y
+    otra con el tope fijo EN SEGUNDOS (`K_b = round(T_seg * nu_b)`)-- y se compara
+    la dispersion entre bloques. La lectura:
+
+      decae en tiempo de transacciones  ->  D a K ticks estable; D a T s varia
+      decae en tiempo de pared          ->  al reves
+
+    Sin `tau0`, sin regresion, sobre el funcional que si esta identificado.
+    """
+    D_tk, D_sg, nus = [], [], []
+    for a, b in bloques:
+        yb, eb, vb, tb = y[a:b], eps[a:b], v[a:b], t[a:b]
+        dur = float(tb[-1] - tb[0])
+        if dur <= 0 or (b - a) < 4 * K_ticks:
+            continue
+        nu_b = (b - a) / dur
+        K_b = int(max(4, min(round(T_seg * nu_b), (b - a) // 4)))
+        m_tk = ajustar(yb, eb, vb, K_ticks, delta)
+        m_sg = ajustar(yb, eb, vb, K_b, delta)
+        D_tk.append(decaimiento(m_tk))
+        D_sg.append(decaimiento(m_sg))
+        nus.append(nu_b)
+
+    D_tk, D_sg = np.array(D_tk), np.array(D_sg)
+    disp_tk = float(np.std(D_tk)) if D_tk.size > 1 else float("nan")
+    disp_sg = float(np.std(D_sg)) if D_sg.size > 1 else float("nan")
+    return {"D_ticks": D_tk, "D_segundos": D_sg, "nu": np.array(nus),
+            "dispersion_ticks": disp_tk, "dispersion_segundos": disp_sg,
+            "n_bloques": int(D_tk.size),
+            "lectura": ("tiempo de transacciones" if disp_tk < disp_sg
+                        else "tiempo de pared") if D_tk.size > 1 else "no decidible"}
 
 
 # ===========================================================================
@@ -506,6 +670,85 @@ def _autotest() -> int:
               % (n, ne, 3 / (2 * n), margen_bic(3, n, ne)))
     ok("el margen declarado supera a k/(2N)",
        margen_bic(3, 150000, 15) > 3 / (2 * 150000))
+
+    print("== 10. D NO tiene nulo: distribucion simulada bajo D = 1 ==")
+    nl = nulo_de_D(20000, K=60, delta=0.5, sigma=0.20, G0=0.5,
+                   D_verdadero=1.0, gamma_signos=0.3, n_sorteos=30, semilla=21)
+    print("     D verdadero 1.0 -> mediana %.4f (sesgo %+.4f), q05=%.4f q95=%.4f"
+          % (nl["D_mediana"], nl["sesgo"], nl["q05"], nl["q95"]))
+    print("     REGLA: se declara transitorio solo si D_hat < %.4f (q05), no < 1"
+          % nl["umbral_transitorio"])
+    print("     la regla ingenua 'D_hat < 1' declara transitorio en el %.0f %% de"
+          " los sorteos con impacto PERMANENTE verdadero"
+          % (100 * nl["falsos_regla_ingenua"]))
+    ok("el umbral simulado es estrictamente menor que 1",
+       nl["umbral_transitorio"] < 1.0)
+    ok("la regla ingenua tiene tasa de falsos positivos inaceptable",
+       nl["falsos_regla_ingenua"] > 0.20,
+       "%.0f %% contra el 5 %% nominal" % (100 * nl["falsos_regla_ingenua"]))
+    # ⚠ El SIGNO del sesgo no es estable: con N=40000, K=120 y signos iid la
+    # mediana salio 0.9835 (sesgo -1.65 %), y aqui con N=20000, K=60 y
+    # gamma=0.3 sale por encima de 1. Por eso no se puede corregir con una
+    # regla de pulgar: hay que simular emparejando N, K, gamma y f(v).
+
+    print("== 11. Curva de sesgo de D sobre una MALLA, no sobre dos puntos ==")
+    curva = curva_de_sesgo(20000, K=60, delta=0.5, sigma=0.20, G0=0.5,
+                           gamma_signos=0.3, n_sorteos=8, semilla=31)
+    print("     %-12s %-12s %-10s %s" % ("D verdadero", "D medida", "sesgo", "IC90"))
+    for f in curva:
+        print("     %-12.3f %-12.4f %+-10.4f [%.3f, %.3f]"
+              % (f["D_verdadero"], f["D_medida"], f["sesgo"], f["q05"], f["q95"]))
+    sesgos = np.array([f["sesgo"] for f in curva])
+    ok("el sesgo esta caracterizado en toda la malla", np.all(np.isfinite(sesgos)))
+
+    print("== 12. CONTROL POSITIVO: f_inf separa suelo de caida a cero ==")
+    # Verdad: 60 % permanente. Sin suelo el ajuste no puede representarlo.
+    rng = np.random.default_rng(41)
+    n12, K12 = 60000, 60
+    eps12 = rng.choice([-1.0, 1.0], size=n12).astype(float)
+    v12 = np.exp(rng.normal(0.0, 1.0, size=n12))
+    x12 = forzamiento(eps12, v12, 0.5)
+    h12 = nucleo_h(K12, 15.0, 1.2, f_inf=0.60)
+    y12 = 0.5 * convolucion_causal(x12, h12) + rng.normal(0, 0.20, n12)
+    m_sin = ajustar(y12, eps12, v12, K12, 0.5)
+    m_con = ajustar(y12, eps12, v12, K12, 0.5, con_suelo=True)
+    print("     verdad   f_inf=0.600  D(K)=%.4f" % float(nucleo_G(K12, 15.0, 1.2, 0.60)))
+    print("     sin suelo f_inf=0.000  D(K)=%.4f  <- no puede representar el suelo"
+          % decaimiento(m_sin))
+    print("     con suelo f_inf=%.3f  D(K)=%.4f" % (m_con["f_inf"], decaimiento(m_con)))
+    ok("con suelo recupera f_inf al 20 %", abs(m_con["f_inf"] - 0.60) / 0.60 < 0.20)
+    perf = decaimiento_perfil(m_con)
+    print("     perfil D: K/4=%.4f  K/2=%.4f  K=%.4f  -> se aplana: %s"
+          % (perf["D_0.25K"], perf["D_0.50K"], perf["D_1.00K"], perf["se_aplana"]))
+    ok("detecta que la caida se aplana", perf["se_aplana"])
+
+    print("== 13. CONTROL POSITIVO: en que reloj vive el propagador ==")
+    # Verdad: decae en TICKS. Bloques con nu deliberadamente distinta.
+    rng = np.random.default_rng(51)
+    trozos, t_acum, tt = [], 0.0, []
+    for nu_b in (4.0, 12.0, 30.0, 8.0, 20.0, 6.0):
+        nb = 12000
+        e = rng.choice([-1.0, 1.0], size=nb).astype(float)
+        vv = np.exp(rng.normal(0.0, 1.0, size=nb))
+        trozos.append((e, vv))
+        tt.append(t_acum + np.arange(nb) / nu_b)
+        t_acum = tt[-1][-1] + 1.0 / nu_b
+    eps13 = np.concatenate([a for a, _ in trozos])
+    v13 = np.concatenate([b for _, b in trozos])
+    t13 = np.concatenate(tt)
+    x13 = forzamiento(eps13, v13, 0.5)
+    h13 = nucleo_h(80, 20.0, 0.8)          # el nucleo es el MISMO en ticks
+    y13 = 0.5 * convolucion_causal(x13, h13) + rng.normal(0, 0.20, len(x13))
+    bl = [(i * 12000, (i + 1) * 12000) for i in range(6)]
+    r13 = reloj_del_propagador(y13, eps13, v13, t13, bl, K_ticks=80, T_seg=6.0,
+                               delta=0.5)
+    print("     nu por bloque: %s" % np.round(r13["nu"], 1).tolist())
+    print("     D a K ticks fijo : %s (sd %.4f)"
+          % (np.round(r13["D_ticks"], 3).tolist(), r13["dispersion_ticks"]))
+    print("     D a T seg fijo   : %s (sd %.4f)"
+          % (np.round(r13["D_segundos"], 3).tolist(), r13["dispersion_segundos"]))
+    print("     lectura: %s" % r13["lectura"])
+    ok("recupera el reloj verdadero (ticks)", r13["lectura"] == "tiempo de transacciones")
 
     print("")
     print("RESULTADO: %d fallo(s)" % fallos)

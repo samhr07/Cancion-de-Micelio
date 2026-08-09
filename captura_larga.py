@@ -284,8 +284,29 @@ def ofi_l1(bk_b, bk_B, bk_a, bk_A):
             - baja_a * qa[1:] + sube_a * qa[:-1])
 
 
+HUECO_MAX = 300.0        # [s] por encima de esto el tramo continuo se rompe
+EMBARGO_PISO = 1950      # ticks; ver PREREGISTRO_3_2 Sec. 2.2
+TICKS_COMPUERTA = 380 * EMBARGO_PISO   # 741 000; ver migracion_v32.ticks_de_compuerta
+
+
+def tramos_continuos(t: np.ndarray, hueco_max: float = HUECO_MAX) -> list:
+    """Parte la serie en tramos SIN huecos mayores que `hueco_max`.
+
+    ⚠ La compuerta es sobre el tramo continuo MAS LARGO, no sobre el total.
+    La captura larga de la v2.2 sufrió un corte de DNS de 36 442 s y quedó
+    partida en dos; sumar los dos trozos habría dado por buena una muestra que
+    no existe como serie temporal.
+    """
+    if t.size < 2:
+        return [(0, t.size)]
+    cortes = np.flatnonzero(np.diff(t) > hueco_max) + 1
+    ini = np.concatenate(([0], cortes))
+    fin = np.concatenate((cortes, [t.size]))
+    return [(int(a), int(b)) for a, b in zip(ini, fin)]
+
+
 def resumen(directorio: str) -> int:
-    """Comprueba la compuerta de datos del §2.1 de la v3.2 y lo dice sin adornos."""
+    """Comprueba la compuerta de datos del Sec. 2.1 de la v3.2 y lo dice sin adornos."""
     d = cargar_larga(directorio)
     n_tr = len(d.get("tr_t", []))
     if n_tr == 0:
@@ -296,6 +317,14 @@ def resumen(directorio: str) -> int:
     huecos = np.diff(t)
     hueco_max = float(huecos.max()) if huecos.size else 0.0
 
+    tramos = tramos_continuos(t)
+    largos = [(b - a) for a, b in tramos]
+    k_mejor = int(np.argmax(largos))
+    a_m, b_m = tramos[k_mejor]
+    n_cont = b_m - a_m
+    dur_cont = float(t[b_m - 1] - t[a_m])
+    nu_cont = n_cont / dur_cont if dur_cont > 0 else float("nan")
+
     print("=" * 70)
     print("COMPUERTA DE DATOS -- Sec. 2.1 de la v3.2")
     print("=" * 70)
@@ -303,6 +332,16 @@ def resumen(directorio: str) -> int:
     print("transacciones   : %d en %.2f h  ->  nu = %.2f tx/s"
           % (n_tr, dur / 3600.0, n_tr / dur if dur > 0 else float("nan")))
     print("hueco maximo    : %.1f s" % hueco_max)
+    print("tramos continuos: %d (corte a %.0f s)" % (len(tramos), HUECO_MAX))
+    print("TRAMO MAS LARGO : %d ticks en %.2f h (nu = %.2f tx/s)  <- lo que cuenta"
+          % (n_cont, dur_cont / 3600.0, nu_cont))
+    falta = TICKS_COMPUERTA - n_cont
+    if falta > 0 and nu_cont > 0:
+        print("faltan          : %d ticks = %.1f h mas a la nu actual"
+              % (falta, falta / nu_cont / 3600.0))
+    if len(tramos) > 1:
+        print("AVISO: la serie esta PARTIDA. Solo cuenta el tramo mas largo; los")
+        print("       demas no se suman porque no son la misma serie temporal.")
 
     tiene_maker = "tr_maker" in d
     tiene_cant = "tr_cant" in d
@@ -331,8 +370,11 @@ def resumen(directorio: str) -> int:
 
     print("")
     reqs = [
-        ("tramo continuo >= 8 h", dur >= 8 * 3600.0, "%.2f h" % (dur / 3600.0)),
-        ("sin cortes internos (< 300 s)", hueco_max < 300.0, "max %.1f s" % hueco_max),
+        ("tramo continuo >= %d ticks" % TICKS_COMPUERTA, n_cont >= TICKS_COMPUERTA,
+         "%d ticks (%.2f h)" % (n_cont, dur_cont / 3600.0)),
+        ("bloques de bootstrap >= 15", (int(0.20 * n_cont) - EMBARGO_PISO)
+         // (5 * EMBARGO_PISO) >= 15,
+         "%d bloques" % max(0, (int(0.20 * n_cont) - EMBARGO_PISO) // (5 * EMBARGO_PISO))),
         ("tr_maker persistido", tiene_maker, "si" if tiene_maker else "NO"),
         ("q persistido", tiene_cant, "si" if tiene_cant else "NO"),
         ("bookTicker con cantidades (e_t computable)", tiene_libro,

@@ -246,9 +246,53 @@ D = G(K) / G(0)          D ≈ 1  ->  impacto permanente  ->  M1 / MkII
 Verificado: con verdad `β = 0.35` (`D` verdadero 0.6808) el ajuste da `D = 0.6994`; con verdad
 `β = 0` (`D = 1`) da `D = 0.9835`, pese a devolver `β̂ = 5.0` en ese segundo caso.
 
+⚠ **SEGUNDA CORRECCIÓN: `D` tampoco tiene nulo, y el umbral 1 es inservible.** El estimador de
+`D` está sesgado, y **el signo del sesgo no es estable**: con `N = 40 000`, `K = 120` y signos iid
+la mediana bajo `D = 1` verdadero sale **0.9835**; con `N = 20 000`, `K = 60` y `γ = 0.3` sale
+**1.0023**. Medida la tasa de error de la regla ingenua sobre impacto **permanente** verdadero:
+
+```
+"D_hat < 1  ->  transitorio"   declara transitorio en el 33 % de los sorteos
+```
+
+**33 % de falsos positivos contra un 5 % nominal**, y el sesgo empuja hacia el modelo **más
+complejo** justo en la frontera de decisión. Sería la **cuarta** aparición del patrón que el
+§5.3 de este mismo documento prohíbe.
+
+**Se declara:** el umbral se toma del **cuantil 5 % de la distribución simulada de `D̂` bajo
+`D = 1`**, con `N`, `K`, `γ` y `f(v)` **emparejados con la muestra real**, nunca del valor
+asintótico 1. Con la configuración del control salió `q05 = 0.9817`. La **curva de sesgo** se
+reporta sobre una malla de `D` verdadero (1.00, 0.90, 0.80, 0.70, 0.50, 0.30), no sobre dos
+puntos. Implementado en `migracion_v32.nulo_de_D` y `curva_de_sesgo`.
+
+⚠ **TERCERA CORRECCIÓN: `D` no separa "decae a un suelo" de "decae a cero", y `G(∞)` es
+justamente lo que el §5 de la v3.1 designó referencia móvil del sistema.** El núcleo original
+`(1 + τ/τ₀)^(−β)` tiene `G(∞) = 0` **por construcción**: todo el impacto es transitorio se mida
+lo que se mida. La sospecha ya estaba anotada en la v3.1 §3 y se quedó sin arreglar.
+
+**Se declara el núcleo con suelo permanente:**
+
+```
+G(τ)/G₀ = f_∞ + (1 − f_∞)·(1 + τ/τ₀)^(−β)        f_∞ = G(∞)/G(0)
+```
+
+`f_∞` es la **fracción permanente**, que es la cantidad con contenido económico y la que la v3.3
+necesitará de todos modos. Verificado: con verdad `f_∞ = 0.60`, el ajuste **sin** suelo no puede
+representarlo y el ajuste **con** suelo devuelve **0.572**. `M1` queda anidado como `f_∞ = 1`,
+más limpio que por `β = 0`.
+
+Se reporta además el **perfil `D` a `K/4`, `K/2` y `K`** para ver si la caída se aplana. ⚠ Los
+intervalos no son igual de anchos —el segundo abarca el doble de rezago—, así que el criterio es
+que caiga **menos** en el tramo ancho; exigir un factor 2 sobre las caídas crudas fallaba sobre
+un suelo verdadero del 60 %.
+
+⚠ **`K` se congela ANTES: `K = 2 · embargo`.** `D` depende del rango en que se evalúa, así que
+"`D ≈ 1`" no significa nada hasta que `K` esté declarado.
+
 | contraste | regla declarada |
 |---|---|
-| **¿impacto permanente?** | IC bootstrap al 95 % de **`D = G(K)/G(0)`**. Si **contiene 1** → MkII está bien especificada y **se prefiere por parsimonia** |
+| **¿impacto permanente?** | `D̂ ≥ q05` de la distribución simulada bajo `D = 1` → MkII está bien especificada y **se prefiere por parsimonia**. Nunca contra el umbral 1 |
+| **¿cuánto es permanente?** | IC bootstrap de **`f_∞`**, más el perfil `D` a `K/4`, `K/2`, `K` |
 | **respaldo obligatorio** | el contraste anidado **M1 contra M2 fuera de muestra** (§9 y §10). Es el que decide si los dos discrepan |
 | **¿`δ = 0.5`?** | si `δ = 0.5` es el máximo en validación **o está dentro de su IC** → MkII acierta también aquí |
 
@@ -338,14 +382,27 @@ reportará con esas palabras.
 
 `τ₀` es el número que sustituye a `ω_m`, así que en qué reloj vive es decisorio.
 
-Regresión de `log τ₀` contra `log ν` por bloques:
+⚠ **CUARTA CORRECCIÓN: la regresión de `log τ̂₀` contra `log ν` que pide el §6 de la orden es
+INEJECUTABLE.** Si `τ̂₀` no está identificada individualmente —y no lo está, ver §5.2—, regresar
+su logaritmo no mide nada. El test quedaba inservible sin que se notara.
 
-| pendiente | lectura |
+**Se declara el sustituto, sobre el funcional que SÍ está identificado.** Se computa `D` dos
+veces por bloque: una con el rezago tope **fijo en ticks** y otra **fijo en segundos**
+(`K_b = round(T · ν_b)`), y se compara la dispersión entre bloques:
+
+| lectura | firma |
 |---|---|
-| ≈ 0 | el impacto decae en **tiempo de transacciones** (`τ₀` en ticks estable) |
-| ≈ 1 | el impacto decae en **tiempo de pared** (`τ₀/ν` en segundos estable) |
+| decae en **tiempo de transacciones** | `D` a `K` ticks estable; `D` a `T` segundos varía con `ν` |
+| decae en **tiempo de pared** | al revés |
 
-**Se reporta la pendiente con su IC, no un veredicto.** `τ₀` va en ticks **y** en segundos.
+Sin `τ₀`, sin regresión. Verificado sobre un control positivo con núcleo fijo **en ticks** y seis
+bloques de `ν` entre 4 y 30 tx/s: dispersión **0.0218 en ticks contra 0.1284 en segundos**, y la
+lectura recuperada es la verdadera. Implementado en `migracion_v32.reloj_del_propagador`.
+
+**Se reportan las dos dispersiones y las dos series de `D`, no un veredicto.**
+
+Y hay palanca real: `ν` se movió de **3.35 a 12.4 tx/s dentro de la misma captura** en la primera
+hora, así que el contraste no necesita comparar capturas de versiones distintas del pipeline.
 
 ⚠ **Confundidor declarado:** `ν` correlaciona con volatilidad y con sesión. Se incluye el
 regresor de régimen del §8 como control. Sin él, la pendiente mide otra cosa.
@@ -568,6 +625,31 @@ Se anotan ahora para que no se presenten después como matices:
    operamos, así que no hay impacto propio que descontar; la guarda del §7.3 de la orden
    (separación propio/ajeno por `orderId`) es de la v3.3, no de ésta, y se anota para que no se
    olvide al integrar.
+
+---
+
+## 12.bis ⚠ REGISTRO DE ENMIENDAS — obligatorio en el reporte
+
+Un preregistro que se edita sin dejar rastro del motivo no protege de nada, y este proyecto sabe
+cómo se lee un veredicto emitido sobre criterios movidos a posteriori. **Toda enmienda se acredita
+con: hash antes, hash después, la regla retirada, la que la sustituye, el control que la invalidó,
+y la constancia de que la captura no se había tocado.**
+
+| # | commit antes → después | regla retirada | regla que la sustituye | qué la invalidó | ¿se miró dato real? |
+|---|---|---|---|---|---|
+| 1 | `190edda` → `2ad0700` | «el IC de `β̂` contiene 0» | IC de `D = G(K)/G(0)` contiene 1 | control positivo de `migracion_v32.py`: con `β = 0` verdadero el ajuste devuelve `β̂ = 5.0` y acierta la curva; `(τ₀, β)` no están identificados por separado | **NO** |
+| 2 | `2ad0700` → (esta) | compuerta `375·embargo = 731 250` | `380·embargo = 741 000`, derivado en `ticks_de_compuerta()` | el embargo se **descarta** del conjunto de prueba en vez de repartirse; con 375 salen 14 bloques, no 15 | **NO** |
+| 3 | `2ad0700` → (esta) | «`D < 1` → transitorio» | `D̂ < q05` de la distribución simulada bajo `D = 1` | el estimador de `D` está sesgado, con **signo no estable**, y la regla ingenua da **33 % de falsos positivos** sobre impacto permanente verdadero | **NO** |
+| 4 | `2ad0700` → (esta) | núcleo `(1+τ/τ₀)^(−β)` con `G(∞) = 0` | núcleo con suelo `f_∞ + (1−f_∞)(1+τ/τ₀)^(−β)` | `D` no separa «decae a un suelo» de «decae a cero», y `G(∞)` es la referencia móvil del §5 de la v3.1 | **NO** |
+| 5 | `2ad0700` → (esta) | regresión de `log τ̂₀` contra `log ν` | dispersión de `D` en reloj de ticks contra reloj de pared | `τ̂₀` no está identificada individualmente, así que la regresión no mide nada | **NO** |
+
+**Las cinco enmiendas son anteriores a mirar un solo dato de `captura_v32`**, y las cinco las
+motivó un control positivo del propio estimador, no un resultado. Esa es la diferencia entre
+enmendar y ajustar el criterio al resultado, y por eso la columna de la derecha existe.
+
+**Regla para el futuro: a partir del primer contacto con el conjunto de prueba, este documento
+queda congelado.** Cualquier cambio posterior invalida el carácter fuera de muestra del resultado
+y así se reportaría.
 
 ---
 
