@@ -383,9 +383,27 @@ def resumen(directorio: str) -> int:
     dur_cont = float(t[b_m - 1] - t[a_m])
     nu_cont = n_cont / dur_cont if dur_cont > 0 else float("nan")
 
+    # ⚠ LO PRIMERO: ¿esta viva? Un proceso congelado conserva su PID y su
+    # memoria residente, asi que `tasklist` lo muestra igual de sano que uno que
+    # trabaja. La captura v32 estuvo 6.80 h muerta -- la maquina suspendida-- y
+    # se reportaba como "PID vivo, N MB acumulando". La presencia no es vida; lo
+    # unico que la mide es la antiguedad del ultimo dato. Misma leccion que el
+    # WebSocket que conecta y calla de la v1.3, y no la vi venir por segunda vez.
+    # ⚠ El umbral es 2 periodos de bloque, no un numero suelto: los datos se
+    # persisten cada `PERIODO_BLOQUE`, asi que el ultimo dato EN DISCO puede
+    # tener hasta un periodo de antiguedad en una captura perfectamente sana.
+    # Con 120 s daba falso positivo sobre una captura recien arrancada, y un
+    # detector de muerte que grita sobre las vivas no lo mira nadie.
+    edad = time.time() - float(t[-1])
+    edad_max = 2.0 * PERIODO_BLOQUE
     print("=" * 70)
     print("COMPUERTA DE DATOS -- Sec. 2.1 de la v3.2")
     print("=" * 70)
+    if edad > edad_max:
+        print("*** CAPTURA SIN DATOS DESDE HACE %.2f h (%.0f s) ***" % (edad / 3600.0, edad))
+        print("*** Comprueba si el proceso esta CONGELADO: un PID vivo no basta. ***")
+    else:
+        print("captura VIVA: ultimo dato hace %.0f s" % edad)
     print("directorio      : %s" % directorio)
     print("transacciones   : %d en %.2f h  ->  nu = %.2f tx/s"
           % (n_tr, dur / 3600.0, n_tr / dur if dur > 0 else float("nan")))
@@ -428,6 +446,8 @@ def resumen(directorio: str) -> int:
 
     print("")
     reqs = [
+        ("la captura sigue recibiendo datos", edad <= edad_max,
+         "ultimo dato hace %.0f s" % edad),
         ("tramo continuo >= %d ticks" % TICKS_COMPUERTA, n_cont >= TICKS_COMPUERTA,
          "%d ticks (%.2f h)" % (n_cont, dur_cont / 3600.0)),
         ("bloques de bootstrap >= 15", (int(0.20 * n_cont) - EMBARGO_PISO)

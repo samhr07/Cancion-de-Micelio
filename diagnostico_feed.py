@@ -155,9 +155,19 @@ def main() -> int:
     dur = float(t[-1] - t[0])
     nu = n / dur if dur > 0 else float("nan")
 
+    import time as _time
+    edad = _time.time() - float(t[-1])
     print("=" * 74)
     print("CATALOGO DE PERDIDAS DE DATOS")
     print("=" * 74)
+    # ⚠ El hueco que no aparece en ningun catalogo es el que sigue abierto: una
+    # captura muerta hace 7 h se ve identica a una que acaba de terminar. Va lo
+    # primero y por eso.
+    if edad > 2.0 * cl.PERIODO_BLOQUE:
+        print("*** SIN DATOS DESDE HACE %.2f h -- la captura NO esta recibiendo ***"
+              % (edad / 3600.0))
+    else:
+        print("captura VIVA (ultimo dato hace %.0f s)" % edad)
     print("directorio   : %s" % a.dir)
     print("transacciones: %d en %.2f h (nu media %.2f tx/s)" % (n, dur / 3600.0, nu))
     print("")
