@@ -2528,6 +2528,97 @@ Y si algo de φ′ acaba en `Q`, dos correcciones más:
 - Sigue en pie todo lo de la v3.1: núcleo paramétrico del propagador, `γ` de la
   autocorrelación de signos y la comprobación `pendiente ≈ (1−γ)/2 − β`.
 
+## AUDITORÍA DE `Micelio.py` (2026-08-09) — qué pasaría si se arrancara hoy
+
+`Micelio.py` no se toca desde la v2.2. Desde entonces se han refutado varias de las cantidades
+que lo gobiernan, y **el código no lo sabe**. Esta sección dice qué sigue en pie, qué está muerto
+y qué haría el bot si alguien lo arrancara. **No es una lista de tareas** — no se toca nada hasta
+que la v3.2 decida.
+
+### ⚠ Lo que más importa: el objetivo de posición NO CONTIENE NINGUNA SEÑAL
+
+La condición terminal de Loeper es `U = ½γ₀(S − S_ref)²` con `γ₀ = I_max/(S·ΔS_max)`. La
+cobertura objetivo denominada en BTC sale de ahí por derivación directa:
+
+```
+S·∂U/∂S  =  S·γ₀·(S − S_ref)  =  I_max · (S − S_ref) / ΔS_max
+```
+
+**El inventario objetivo es una función lineal del desplazamiento respecto del nodo de fase,
+escalada por el techo de riesgo. No hay `α` en ninguna parte.** El bot no compra porque espere
+que el precio suba: compra porque el precio se ha alejado de `S_ref`, y compra exactamente
+`I_max` cuando se aleja `ΔS_max`.
+
+Eso es la decisión 3 de abajo llevada al límite: no es que `γ` derivado del techo de riesgo
+*cancele* `α` — es que **`α` nunca entró en la formulación**. Y el ancla `S_ref` es un nodo de
+fase de la EMD, que es justo lo que la v2.2, la v3.0 y la v3.2 refutaron.
+
+### ⚠ Segundo: el bot no puede abstenerse
+
+El coste del NMPC es **puramente cuadrático** (línea 1104):
+
+```
+J = Σ [ q_Δ·e_k² + q_inv(Ω)·I_k² + R_eff,k·(u_c,k² + u_v,k²) ]  +  p_Δ·e_N² + p_inv·I_N²
+```
+
+Sin término lineal en `|u|` **no hay banda muerta**: el óptimo de una cuadrática con objetivo no
+nulo es siempre `u ≠ 0`. El bot opera *siempre* que haya desviación, por pequeña que sea, y solo
+lo frenan las restricciones de caja y el freno de singularidad. Es exactamente lo que la decisión
+2 corrige, y es la razón de que esa decisión sea v3.4 y no un detalle.
+
+### Qué está muerto pero conectado, y qué lo salva
+
+| cantidad | estado empírico | qué hace hoy en el código |
+|---|---|---|
+| `ω_m`, `ω_ang` | **sin sustento** (v2.2, v3.0, v3.2) | alimenta `A_arm` y `c²_vol = k·ω_m·ν` |
+| `A_arm` / rama armónica | el oscilador **no existe** (`k = 0`, raíces reales) | se conmuta por `C` con histéresis |
+| `C` (concentración espectral) | inflada por la escalera de ventana | decide la rama de `A` |
+| nodos de fase → `S_ref` | son armónicos de la ventana (`T = 2L/k`) | **compuerta de todo el lazo** y ancla del objetivo |
+| `Ω`, `Φ`, `Ψ` | **sin sustento** | `q_inv(Ω)` y `R_eff = R_base + κΩ²` |
+
+**Lo que lo salva de hacer daño, y es un accidente afortunado:** la guarda de banda de la v2.1
+declara `omega_valida` cierta solo el **12.5 %** de las ventanas. Cuando es falsa, `ω_ang` va a
+NaN, `Ω` se congela y degrada a 0 pasados 120 s, y la rama de `A` cae a velocidad constante. O
+sea que **el 87.5 % del tiempo el acoplamiento endógeno está efectivamente desconectado** y el
+filtro corre como un EAKF de velocidad constante en reloj de ticks — que es justo lo que la v3.0
+§6.2 lista como superviviente.
+
+Dicho de otro modo: **el sistema funciona hoy porque su parte refutada casi nunca se activa.**
+
+Y hay una compuerta más, en la línea 2486: `if is_burnt_in and dropout == 0 and nu > 0.0 and
+S_ref > 0.0`. Sin un nodo de fase detectado **el bot no opera en absoluto**. La cadena entera
+cuelga de un detector cuya base empírica cayó.
+
+### Lo que sí sobrevive intacto
+
+Coincide con la lista del §6.2 de la v3.0, y la auditoría lo confirma leyendo el código:
+
+- **Reloj de transacciones** (Δn = 1), ingesta por lotes, deduplicación por `aggTradeId`,
+  detección de huecos, `Q(Δt)` acumulada correctamente.
+- **Capa de riesgo entera** (v1.3): 7 guardas con `causa_halt` distinguible, ruta de cierre que
+  no reporta éxito sin posición plana confirmada, máquina de episodios con `DETENIDO` terminal.
+- **EAKF** con corrección una vez por paquete, actualización multi-tasa, NIS y burn-in.
+- **Loeper backward** y su condición CFL — el esquema es correcto; lo discutible es su
+  condición terminal, no su integración.
+- **Infraestructura**: instancia única por latido, seqlock, ring buffer SPSC con detección de
+  sobrepaso, telemetría con `ỹ_k`, recuperación de memoria compartida huérfana en Windows.
+
+### Defectos de código encontrados en esta pasada
+
+Ninguno nuevo de corrección. Los que había siguen documentados en las secciones históricas.
+
+⚠ **Lo que sí hay que anotar como riesgo latente:** `apply_filters` valida contra `minNotional`
+y el orden de trabajo v4.0 (decisión 4) establece que **el filtro que ata es `minQty` = 0.001 BTC
+≈ 96 USD**, no los 50 USDT del nocional. A precios actuales `minQty` es el doble de restrictivo.
+No es un error de la v1.3 —entonces se midieron los dos— pero sí una cifra que envejeció.
+
+### Conclusión de la auditoría
+
+**El código está sano; su modelo no.** Lo que hay que cambiar cuando la v3.2 decida no son bugs:
+son tres decisiones de diseño —el objetivo de posición sin señal, el coste sin término lineal, y
+el ancla en un nodo de fase refutado— y las tres están ya identificadas y fuera del alcance de
+esta tanda.
+
 ## Decisiones de diseño tomadas fuera de sesión (2026-08-09)
 
 Acordadas en conversación entre el operador y Claude. **No son tareas**: son decisiones que
