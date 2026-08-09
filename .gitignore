@@ -55,3 +55,5 @@ Markdown de PDF*/
 ssa_log/
 ssa_log_*.txt
 phi_*.txt
+telemetria/estacional/
+captura_estacional.log
