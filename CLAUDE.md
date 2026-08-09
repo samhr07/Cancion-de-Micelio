@@ -2497,6 +2497,45 @@ Y si algo de φ′ acaba en `Q`, dos correcciones más:
 - Sigue en pie todo lo de la v3.1: núcleo paramétrico del propagador, `γ` de la
   autocorrelación de signos y la comprobación `pendiente ≈ (1−γ)/2 − β`.
 
+## Decisiones de diseño tomadas fuera de sesión (2026-08-09)
+
+Acordadas en conversación entre el operador y Claude. **No son tareas**: son decisiones que
+cierran discusiones abiertas y que hay que conocer antes de tocar lo que afectan.
+
+**1. El problema de la secretaria queda RECHAZADO.** No se cumple ninguna de sus cinco premisas
+—elección única, irrevocable, sin recuerdo, solo rango ordinal, objetivo «el mejor»— y el mercado
+no es ninguna de esas cosas. La regla de **cuándo operar** es la banda muerta `|α| > c_efectivo`.
+Donde sí hay un problema de parada óptima genuino es en **`τ*`: cuándo cancelar la orden maker y
+cruzar**, que es el sucesor natural del §5 de la v4.0 en lazo cerrado.
+
+**2. El coste del NMPC es LINEAL, no cuadrático.**
+
+```
+J = −α·u + c·(u⁺ + u⁻) + ½R(u⁺ − u⁻)²      con  u⁺, u⁻ ≥ 0
+```
+
+La complementariedad `u⁺·u⁻ = 0` sale **gratis** porque `c > 0`. **Sin el término lineal no hay
+banda muerta y el bot nunca se abstiene** — opera siempre, aunque `α` sea ruido. Es **v3.4**:
+toca `Micelio.py` y va **después** de que `c(u, estado)` exista.
+
+⚠ Esto reabre la contradicción #1 del PDF por el otro lado. La Sec. 6.1 descartaba la norma L1
+por no diferenciable en SQP; la formulación de arriba la recupera **sin** perder
+diferenciabilidad, separando `u` en parte positiva y negativa. La Sec. 4.5 tenía razón en pedir
+L1 y la 6.1 en rechazar la formulación ingenua.
+
+**3. `γ` NO se deriva del techo de riesgo.** Hacerlo **cancela `α` algebraicamente** y el tamaño
+deja de responder a la señal: el bot operaría el mismo tamaño con señal fuerte y con señal
+nula. Son **dos términos separados con un `min`**, no uno derivado del otro.
+
+**4. El filtro que manda es `minQty = 0.001 BTC ≈ 96 USD, no el `minNotional` de 50 USDT.** La
+v1.3 §A midió los dos y se quedó con el análisis del nocional; a los precios actuales el que ata
+es `minQty`. Se consulta `/fapi/v1/exchangeInfo` **al arrancar y sin cachear** — el propio
+proyecto ya documentó que Testnet es 10× más fino que Mainnet y que calibrar contra el entorno
+equivocado produce un sistema que funciona en pruebas y se degrada en producción.
+
+**5. `PLAN_CAPITAL_5_0.md` es CONDICIONAL** y no se ejecuta hasta que pase el **paso 3** de la
+regla de decisión de la v3.2 — el criterio económico, el único con dinero detrás.
+
 ## Convenciones
 
 - Comentarios y nombres de variables en español, consistente con el código y el PDF existentes.

@@ -344,6 +344,85 @@ def coste_con_llenado(p_llenado: float, S: float = 65000.0,
             "razon_contra_maker_maker": total / (2 * c_maker)}
 
 
+def microprecio(ev: dict, t_obj: float) -> float:
+    """Microprecio de Stoikov: (Pb*qa + Pa*qb) / (qa + qb).
+
+    ⚠ El §5.3 de la v4.0 exige medir el markout contra ESTO y no contra el punto
+    medio. El punto medio arrastra la deriva por desbalance de libro, asi que
+    atribuiria a seleccion adversa un movimiento que era **predecible desde el
+    propio libro** en el instante del llenado. El microprecio ya lo incorpora.
+    """
+    i = int(np.searchsorted(ev["bk_t"], t_obj, side="right") - 1)
+    if i < 0:
+        return float("nan")
+    i = min(i, len(ev["bk_t"]) - 1)
+    b, a = ev["bk_b"][i], ev["bk_a"][i]
+    qb, qa = ev["bk_B"][i], ev["bk_A"][i]
+    s = qb + qa
+    return float((b * qa + a * qb) / s) if s > 0 else float("nan")
+
+
+def ask_en(ev: dict, t_obj: float) -> float:
+    i = int(np.searchsorted(ev["bk_t"], t_obj, side="right") - 1)
+    if i < 0:
+        return float("nan")
+    return float(ev["bk_a"][min(i, len(ev["bk_a"]) - 1)])
+
+
+def coste_de_respaldo(ev: dict, res: list, S: float = 65000.0,
+                      taus=(10.0, 30.0, 60.0, 120.0)) -> dict:
+    """`C_respaldo`: lo que cuesta haber esperado y NO haberte llenado (§5 v4.0).
+
+    ⚠ **Este termino no existe en ningun documento del proyecto**, y sin el
+
+        C_maker = p*(comision_m + markout) + (1-p)*C_respaldo
+
+    se queda sin su segundo sumando, con lo que **maker gana siempre porque no
+    paga nada por fallar**. Con `p = 41.3 %` medido, el termino que faltaba pesa
+    el 58.7 % de la comparacion.
+
+    Para cada insercion NO llenada, a cada `tau`: lo que habria costado cruzar
+    en ese instante contra el precio de referencia del momento de la insercion.
+
+        C_respaldo(tau) = [ask(t0+tau) + c_taker] - [p0 + c_maker]
+
+    ⚠ **SESGO DE SELECCION DECLARADO:** no llenarse correlaciona con que el
+    precio se fue en tu contra, asi que esto **no es** el coste incondicional.
+    Por eso se reporta la distribucion entera y se separa SUPERADO de CENSURADO
+    -- el primero es justamente el caso en que el precio huyo.
+    """
+    c_maker = COMISION_MAKER * S
+    c_taker = COMISION_TAKER * S
+    out = {}
+    for desen in ("SUPERADO", "CENSURADO", "TODOS"):
+        sub = [r for r in res
+               if r["desenlace"] not in ("LLENADO", "LLENADO_ADVERSO")
+               and (desen == "TODOS" or r["desenlace"] == desen)]
+        if len(sub) < 10:
+            continue
+        fila = {}
+        for tau in taus:
+            v = []
+            for r in sub:
+                a = ask_en(ev, r["t0"] + tau)
+                if np.isfinite(a):
+                    v.append((a + c_taker) - (r["p0"] + c_maker))
+            v = np.array(v, dtype=float)
+            if v.size < 10:
+                continue
+            fila["%gs" % tau] = {
+                "n": int(v.size), "media": float(v.mean()),
+                "mediana": float(np.median(v)),
+                "p10": float(np.percentile(v, 10)),
+                "p90": float(np.percentile(v, 90)),
+                "frac_negativo": float(np.mean(v < 0)),
+            }
+        out[desen] = {"n_casos": len(sub), "por_tau": fila}
+    out["c_maker_pata"] = c_maker
+    out["c_taker_pata"] = c_taker
+    return out
+
+
 def cola_del_markout(marks: list, frac: float = 0.05) -> dict:
     """¿Que parte de la media viene del `frac` peor de los llenados?
 
