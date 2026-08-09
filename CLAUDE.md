@@ -2422,11 +2422,56 @@ volatilidad.**
 El nulo era obligatorio porque `G₀ = Σ(Δp·εq)/Σ(εq)²` y `φ′ ∝ 1/Σq` **comparten `q`**. No lo
 reproduce: la asociación es real.
 
-**Consecuencia:** φ′ deja de ser línea propia y pasa a ser una **predicción contrastable sobre un
-test ya preregistrado**. Si φ′ es proxy de `G₀` y φ′ se asocia a la volatilidad, entonces `G₀`
-varía con la volatilidad — que es exactamente la hipótesis **M1′** de la v3.2
-(`c_t = Y·σ_t/√V_best`), y su variante `G₀ → Y·σ_t` debería batir a `G₀` constante. Dos
-estimadores distintos sobre el mismo objeto vale más que cualquiera por separado.
+### ⚠ Segunda corrección, del mismo día: el enlace con `G₀` NO sobrevive
+
+**1. Retirar φ′ del vocabulario. Escribir `q̄` (tamaño medio de operación).** El
+`corr = +1.000000` no es un hallazgo: es una identidad algebraica, porque `log φ′ = log 64 −
+log Σq`. φ′ no es una variable, es un **nombre para `1/q̄`**, y el nombre hacía daño — invitaba a
+tratar como descubrimiento una reexpresión. Con `q̄` cada frase se lee sola: «φ′ alta se asocia a
+volatilidad» → «**operaciones pequeñas se asocian a volatilidad**».
+
+**2. Y así reformulado, el hallazgo tiene nombre en la literatura.** A igual número de
+operaciones, operaciones más pequeñas van con más volatilidad: eso es **Jones, Kaul & Lipson
+(1994)** — el número de transacciones, no su tamaño, es lo que porta la información de
+volatilidad. Uno de los hechos estilizados mejor replicados de la microestructura. **No es un
+descubrimiento.** Lo bueno es que la tubería mide cosas reales y el test disjunto lo confirma
+limpiamente; lo útil es que ahora la literatura dice qué esperar.
+
+**3. Mi nulo de φ′–`G₀` no contrastaba lo que yo creía.** Bajo desplazamiento circular el
+numerador de `G₀ = Σ(Δp·εq)/Σ(εq)²` se vuelve una suma de signos aleatorios, así que lo que se
+destruye es la **alineación precio-flujo** — no el acoplamiento por **escala de volumen**, que
+sobrevive porque la magnitud sigue yendo como `1/√Σq²`. El nulo acreditaba algo cierto pero
+distinto de lo que hacía falta.
+
+**El test que sí discrimina, y falla.** Con `Δp = G·ε·q^δ` y `q ≈ q̄` dentro del bloque sale
+`log G₀ = const + (1−δ)·log φ′`, así que la pendiente da `δ` por una ruta independiente. Medido:
+
+```
+pendiente = +1.6286   IC95 bootstrap [+1.4896, +1.7562]   ->   delta = -0.63
+```
+
+**`δ = −0.63` está fuera del rango admisible** (`δ ∈ [0,1]`): implicaría que operaciones más
+grandes mueven **menos** el precio en términos absolutos. La derivación supone `q` poco disperso
+dentro del bloque, y el **coeficiente de variación de `q` por bloque es 2.60 (p90 3.94)** — la
+aproximación `q ≈ q̄` está gruesamente violada. **El caveat resultó ser la restricción
+vinculante, no una nota al pie.** No hay `δ` que sellar como predicción.
+
+**4. Y la predicción sobre M1′ tampoco se sostiene.** La correlación parcial controlando por el
+tamaño medio:
+
+| | ρ(σ, G₀ \| q̄) |
+|---|---|
+| REAL | +0.2563 (976 bloques) |
+| **NULO — signo barajado dentro del bloque** | **+0.2625** (666 bloques) |
+
+El nulo conserva `Δp` y `q` intactos —y con ellos todo acoplamiento por escala— y rompe **solo**
+la alineación precio-flujo. **Lo reproduce exactamente**, así que la asociación es **mecánica**:
+`σ` y `G₀` comparten `Δp`, y condicionar a `G₀ > 0` selecciona bloques donde el precio se movió
+*con* el flujo. **M1′ no recibe apoyo por esta vía.**
+
+Lo que sí queda medido y no es mecánico: `ρ(q̄, G₀) = −0.7022`, o sea que operaciones más grandes
+tienen menor impacto **por unidad**, que es la concavidad del impacto (`δ < 1`). Pero cuantificar
+`δ` desde aquí exige bloques con `q` mucho menos disperso.
 
 **Dónde va en la arquitectura, y no es en `Q`.** Descomponiendo:
 

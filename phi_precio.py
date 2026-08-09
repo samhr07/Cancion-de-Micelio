@@ -16,6 +16,24 @@ cosas estan separadas: la escalera es del aparato y la asociacion es del
 mercado. Si la asociacion tambien sale constante, o si desaparece bajo el nulo,
 entonces no hay tal separacion.
 
+⚠ NOMENCLATURA (2026-08-09): USAR `q_barra`, NO `phi'`
+--------------------------------------------------------
+`phi' = 64/sum(q)` es **una reexpresion de `1/q_barra`**, el inverso del tamano
+medio de operacion: `corr(log phi', -log volumen) = +1.000000` EXACTAMENTE, que
+es una identidad algebraica y no una medicion. El nombre hacia dano porque
+invitaba a tratar como descubrimiento una reexpresion, y ademas se leyo como
+"ticks de PRECIO por BTC" -- o sea la lambda de Kyle -- cuando en este proyecto
+"tick" significa transaccion desde la v2.0.
+
+Con `q_barra` cada frase se lee sola: "phi' alta se asocia a volatilidad" pasa a
+ser "**operaciones pequenas se asocian a volatilidad**". Y asi reformulado el
+hallazgo tiene nombre: **Jones, Kaul & Lipson (1994)**, el numero de
+transacciones y no su tamano es lo que porta la informacion de volatilidad. Es un
+hecho estilizado bien replicado, no un descubrimiento de este proyecto.
+
+El codigo conserva `phi` como nombre de variable para no romper los logs ya
+escritos; la prosa y los reportes usan `q_barra`.
+
 DEFINICION DE phi'
 ------------------
 phi' = tasa de ticks por volumen inyectado [ticks/BTC]. Es la derivada del reloj
