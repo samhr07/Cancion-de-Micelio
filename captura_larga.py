@@ -122,6 +122,39 @@ class Bloque:
         return ruta, n_tr, n_bk, tam
 
 
+def impedir_suspension() -> bool:
+    """Pide a Windows que no suspenda el sistema mientras dura la captura.
+
+    ⚠ POR QUE. El hueco de 5 884 s de `captura_v32` NO fue un fallo de red ni del
+    watchdog: el registro de eventos de Windows lo fecha al segundo. A las
+    22:14:05 "Estado de conectividad en modo de espera: Disconnected. Motivo:
+    Adaptive Connected Standby" -- seis segundos despues de la ultima transaccion
+    -- y a las 22:48:43 el sistema entro en suspension (evento 42), congelando el
+    proceso hasta las 23:52. Los `getaddrinfo failed` del log eran sintoma: la red
+    ya estaba desconectada por politica de energia.
+
+    Que solo hubiera 5 lineas de error para 98 minutos de hueco es la firma: un
+    corte de red sostenido habria dejado del orden de 98 (el backoff se satura en
+    60 s). El watchdog no fallo -- dejo de ejecutarse.
+
+    `ES_SYSTEM_REQUIRED | ES_CONTINUOUS` mantiene el sistema despierto mientras el
+    proceso vive, sin tocar la configuracion global de energia del equipo. No
+    impide la espera moderna con pantalla apagada, solo la suspension.
+    """
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+        ES_CONTINUOUS = 0x80000000
+        ES_SYSTEM_REQUIRED = 0x00000001
+        r = ctypes.windll.kernel32.SetThreadExecutionState(
+            ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
+        return bool(r)
+    except Exception as err:
+        print("    [!] no se pudo impedir la suspension: %s" % err, flush=True)
+        return False
+
+
 async def capturar(horas: float, directorio: str, symbol: str = "btcusdt"):
     import aiohttp
 
@@ -407,6 +440,11 @@ def main(argv):
           f"mucho ese tramo.")
     print("Libro: se guardan b, B, a, A y u en cada cambio de cualquiera de los "
           "cuatro (sin perdida para el OFI; ver encabezado).")
+    if impedir_suspension():
+        print("Suspension del sistema IMPEDIDA mientras dure la captura.")
+    else:
+        print("AVISO: no se pudo impedir la suspension. Un ciclo de espera moderna")
+        print("       parte el tramo continuo, y la compuerta es sobre el mayor.")
     n = asyncio.run(capturar(horas, directorio))
     print(f"\nTerminado: {n} transacciones.")
     return 0

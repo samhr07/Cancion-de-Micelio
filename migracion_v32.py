@@ -309,6 +309,60 @@ def ll_por_obs(mod: dict, y: np.ndarray, eps: np.ndarray, v: np.ndarray) -> np.n
 
 
 # ===========================================================================
+# 2.bis  PROTOCOLO DE PERDIDA DE DATOS
+#
+# Una desconexion no solo quita datos: **corrompe los que quedan**, y de una
+# forma que no deja rastro. La convolucion causal mira K rezagos atras, asi que
+# las primeras K observaciones despues de un hueco se predicen con forzamiento
+# de ANTES del hueco -- de un mercado que puede estar a otro precio, otra `nu` y
+# otro regimen. El estimador no puede saberlo: el eje de indices es continuo
+# aunque el de tiempos no lo sea.
+#
+# Con huecos de 98 min medidos en captura_v32 (suspension de la maquina, no fallo
+# de red), eso son K observaciones envenenadas por cada corte. Con K = 2*embargo
+# = 3900, son 3900 filas por hueco.
+# ===========================================================================
+
+def segmentos_validos(t: np.ndarray, umbral_s: float = 300.0) -> list:
+    """Trocea por huecos temporales. Devuelve [(ini, fin), ...]."""
+    t = np.asarray(t, dtype=np.float64)
+    if t.size < 2:
+        return [(0, t.size)]
+    cortes = np.flatnonzero(np.diff(t) > umbral_s) + 1
+    ini = np.concatenate(([0], cortes))
+    fin = np.concatenate((cortes, [t.size]))
+    return [(int(a), int(b)) for a, b in zip(ini, fin)]
+
+
+def mascara_calentamiento(t: np.ndarray, K: int, umbral_s: float = 300.0) -> np.ndarray:
+    """`False` en las primeras K observaciones de CADA segmento.
+
+    Son las que la convolucion no puede formar sin cruzar el hueco. Descartarlas
+    cuesta `K` filas por corte y es la unica forma de que la muestra signifique
+    lo que dice: el resto del tramo sigue siendo valido.
+    """
+    n = len(t)
+    m = np.ones(n, dtype=bool)
+    for a, b in segmentos_validos(t, umbral_s):
+        m[a: min(a + K, b)] = False
+    return m
+
+
+def convolucion_por_segmentos(x: np.ndarray, h: np.ndarray,
+                              segmentos: list) -> np.ndarray:
+    """Convolucion causal calculada DENTRO de cada segmento, sin cruzar huecos.
+
+    Junto con `mascara_calentamiento` es el protocolo completo: aqui no se
+    arrastra forzamiento a traves del corte, y alli se descartan las filas que
+    de todas formas no tendrian historia suficiente.
+    """
+    z = np.zeros_like(np.asarray(x, dtype=np.float64))
+    for a, b in segmentos:
+        z[a:b] = convolucion_causal(np.asarray(x[a:b], dtype=np.float64), h)
+    return z
+
+
+# ===========================================================================
 # 3. Particion con embargo y bootstrap por bloques
 # ===========================================================================
 
@@ -909,6 +963,60 @@ def _autotest() -> int:
     ok("el sesgo de f_inf esta caracterizado en toda la malla", len(rels) > 0)
     print("     AVISO: f_inf NO esta identificado si no hay decaimiento (beta -> 0 lo")
     print("       hace irrelevante). Solo se estima si se rechazo D = 1.")
+
+    print("== 17. PROTOCOLO DE PERDIDA: la convolucion no puede cruzar un hueco ==")
+    # Dos mitades de mercado con precios MUY distintos, separadas por un hueco de
+    # 98 min -- el medido en captura_v32 por suspension de la maquina.
+    rng = np.random.default_rng(91)
+    n17, K17 = 8000, 100
+    d_a = generar(n17, G0=0.5, tau0=30.0, beta=0.4, delta=0.5, sigma=0.20,
+                  K=K17, semilla=92)
+    d_b = generar(n17, G0=0.5, tau0=30.0, beta=0.4, delta=0.5, sigma=0.20,
+                  K=K17, semilla=93)
+    y17 = np.concatenate([d_a["y"], d_b["y"]])
+    e17 = np.concatenate([d_a["eps"], d_b["eps"]])
+    v17 = np.concatenate([d_a["v"], d_b["v"]])
+    t17 = np.concatenate([np.arange(n17) * 0.1,
+                          n17 * 0.1 + 5884.0 + np.arange(n17) * 0.1])
+
+    segs = segmentos_validos(t17, 300.0)
+    print("     segmentos detectados: %d %s" % (len(segs), segs))
+    ok("detecta el hueco de 5884 s", len(segs) == 2)
+
+    x17 = forzamiento(e17, v17, 0.5)
+    h17 = nucleo_h(K17, 30.0, 0.4)
+    z_ingenua = convolucion_causal(x17, h17)
+    z_segmentada = convolucion_por_segmentos(x17, h17, segs)
+    # La diferencia vive EXACTAMENTE en las K filas posteriores al corte.
+    dif = np.abs(z_ingenua - z_segmentada)
+    fuera = np.concatenate([np.arange(0, n17), np.arange(n17 + K17, 2 * n17)])
+    print("     |diferencia| max dentro de las K filas tras el corte: %.4f"
+          % float(np.max(dif[n17: n17 + K17])))
+    print("     |diferencia| max en el RESTO de la serie              : %.2e"
+          % float(np.max(dif[fuera])))
+    ok("la contaminacion se limita a las K filas posteriores al hueco",
+       float(np.max(dif[fuera])) < 1e-12 and float(np.max(dif[n17: n17 + K17])) > 0)
+
+    m17 = mascara_calentamiento(t17, K17, 300.0)
+    print("     mascara: descarta %d de %d filas (%.2f %%) = K por segmento"
+          % (int(np.count_nonzero(~m17)), len(m17),
+             100.0 * np.count_nonzero(~m17) / len(m17)))
+    ok("descarta exactamente K filas por segmento",
+       int(np.count_nonzero(~m17)) == K17 * len(segs))
+
+    print("== 18. Y el coste de NO aplicarlo, en la magnitud que decide ==")
+    # Se ajusta sobre la serie con hueco, con y sin protocolo, y se compara D.
+    m_mal = ajustar(y17, e17, v17, K17, 0.5)
+    val = m17
+    m_bien = ajustar(y17[val], e17[val], v17[val], K17, 0.5)
+    print("     D sin protocolo = %.4f | D con protocolo = %.4f | verdad = %.4f"
+          % (decaimiento(m_mal), decaimiento(m_bien),
+             float(nucleo_G(K17, 30.0, 0.4))))
+    print("     (con un solo hueco y K/n pequeno el efecto es leve; escala con el")
+    print("      numero de cortes, y captura_v32 lleva 1 en 4 h)")
+    ok("el protocolo no empeora la estimacion",
+       abs(decaimiento(m_bien) - float(nucleo_G(K17, 30.0, 0.4)))
+       <= abs(decaimiento(m_mal) - float(nucleo_G(K17, 30.0, 0.4))) + 0.02)
 
     print("")
     print("RESULTADO: %d fallo(s)" % fallos)
