@@ -2392,9 +2392,59 @@ la innovación— y no se ha tocado `Micelio.py`.
 
 ### Pendiente
 
-- **Probar φ′ como modulador de `Q_k`** en lugar del término `γ_ω|ω_m|` de la Sec. 7.3.3, y
-  medirlo por NIS y blancura de la innovación. Es la consecuencia directa de que lo medible
-  sea amplitud y no frecuencia, y es lo primero que habría que ejecutar.
+- ⚠ **φ′ NO va en `Q_k`, y la propuesta de arriba está mal planteada.** Se corrige aquí en vez
+  de borrarla, porque el error es instructivo. Ver la nota siguiente.
+- Barrer `m` en φ′ y ver si la asociación vive en el reloj de ticks o en el de volumen.
+
+### ⚠ Corrección sobre φ′ (2026-08-09): qué es, qué no es, y dónde va
+
+**Qué es.** `φ′ = m/Σq` con `m = 64` **fijo**, así que `corr(log φ′, −log volumen) = +1.000000`
+exactamente: **φ′ es función solo del volumen**, y sus unidades son transacciones/BTC = 1/BTC.
+**No** es precio/volumen, así que no es dimensionalmente la λ de Kyle ni `G₀`. En este proyecto
+«tick» significa *transacción* desde la v2.0, y confundirlo con el tick de precio lleva justo a
+esa lectura.
+
+El hallazgo se reformula sin misterio: **a número de transacciones fijo, menos volumen va con más
+volatilidad.**
+
+**No es artefacto de construcción.** Test disjunto —φ′ de los ticks **pares**, σ de los
+**impares**, sin nada compartido—: mediana **+0.1883**, **14/16** ventanas, p de signos
+**0.0042**. Sobrevive.
+
+**Pero sí es un proxy de `G₀`, y eso importa más.** Estimando `G₀` por bloque con la regresión
+`Δp = G₀·ε·q`:
+
+| | mediana | signo | valores |
+|---|---|---|---|
+| **REAL** `ρ(log φ′, G₀)` | **+0.6323** | **8/8** | 0.618 0.600 0.691 0.602 0.734 0.549 0.670 0.646 |
+| **NULO** (desplazamiento circular de `q, ε` contra precios) | −0.0908 | 2/8 | −0.183 … +0.164 |
+
+El nulo era obligatorio porque `G₀ = Σ(Δp·εq)/Σ(εq)²` y `φ′ ∝ 1/Σq` **comparten `q`**. No lo
+reproduce: la asociación es real.
+
+**Consecuencia:** φ′ deja de ser línea propia y pasa a ser una **predicción contrastable sobre un
+test ya preregistrado**. Si φ′ es proxy de `G₀` y φ′ se asocia a la volatilidad, entonces `G₀`
+varía con la volatilidad — que es exactamente la hipótesis **M1′** de la v3.2
+(`c_t = Y·σ_t/√V_best`), y su variante `G₀ → Y·σ_t` debería batir a `G₀` constante. Dos
+estimadores distintos sobre el mismo objeto vale más que cualquiera por separado.
+
+**Dónde va en la arquitectura, y no es en `Q`.** Descomponiendo:
+
+```
+Δp  =  φ′·(flujo OBSERVADO)  +  φ′·(flujo NO observado)
+```
+
+El primer término es **medido** y pertenece a la ecuación de estado, con φ′ como coeficiente. Solo
+el segundo va a `Q`. Meter φ′ entero en `Q` es devolver al residuo una cantidad que se puede
+medir — **el mismo error que el §0 de la v3.1 diagnosticó en el AR(2)**, reaparecido en otro sitio.
+
+Y si algo de φ′ acaba en `Q`, dos correcciones más:
+1. **La dependencia es cuadrática**: `Var(Δp) = φ′²·Var(flujo)`. Un término `γ_φ|φ′|` es
+   incoherente con su propia derivación.
+2. **No es aditivo con lo que ya está.** `ρ_k = 1 + γ_ω|ω_m| + γ_Q|ΣQ|` trata flujo e impacto
+   como contribuciones independientes y no lo son: φ′ es impacto **por** flujo, así que la
+   cantidad física es el producto `(φ′·|ΣQ|)²`, no dos sumandos. Sustituir `γ_ω|ω_m|` por un
+   tercer sumando conserva la incoherencia y solo cambia la etiqueta.
 - Barrer `m` en φ′ y ver si la asociación vive en el reloj de ticks o en el de volumen.
 - Nulo de MC-SSA que funcione sobre series casi blancas (el sesgo anticonservador lo invalida).
 - SSA multivariante (M-SSA) sobre `[precio, φ′]`, que es el paso natural ahora que hay una
