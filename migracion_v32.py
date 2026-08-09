@@ -5,29 +5,43 @@ migracion_v32.py -- estimador de los modelos anidados M0 / M1 / M1' / M2 / M2-os
     python migracion_v32.py --autotest        controles con verdad conocida
     python migracion_v32.py --compuerta       evalua la compuerta y NO mide nada mas
 
-⚠ ESTE MODULO NO EJECUTA LA DECISION. `PREREGISTRO_3_2.md` (commit 190edda) prohibe
-ejecutar el §3 en adelante hasta que la compuerta de datos pase: >= 375*embargo
-ticks continuos y limpios (731 250 con el piso de 1950). Lo que hay aqui es el
-estimador y sus controles positivos, validados contra verdad conocida y sin tocar
-la captura -- llegar a los 731 k ticks con el estimador sin validar seria el
+⚠ ESTE MODULO NO EJECUTA LA DECISION. `PREREGISTRO_3_2.md` prohibe ejecutar el §3
+en adelante hasta que la compuerta de datos pase: >= 380*embargo ticks continuos
+y limpios en un SOLO tramo (741 000 con el piso de 1950). Lo que hay aqui es el
+estimador y sus controles, validados contra verdad conocida y sin tocar la
+captura -- llegar a los 741 k ticks con el estimador sin validar seria el
 desperdicio.
 
 EL ESPACIO DE MODELOS
 ---------------------
     Delta p_t = SUM_k h(k) * x_{t-k} + eta_t,    x_t = eps_t * f(v_t)
-    G(tau) = G0 * (1 + tau/tau0)^(-beta)         f(v) = v^delta
+    G(tau)/G0 = f_inf + (1 - f_inf)*(1 + tau/tau0)^(-beta)     f(v) = v^delta
     h(0) = G(0),   h(k) = G(k) - G(k-1)
 
 | id      | restriccion                | libres |
 |---------|----------------------------|--------|
 | M0      | G0 = 0                     | 0      |
-| M1      | beta = 0, delta = 0.5      | 1      |
-| M2      | ninguna                    | 4      |
-| M2-osc  | + cos(omega_G*tau + phi)   | 5      |
+| M1      | f_inf = 1, delta = 0.5     | 1      |
+| M2      | ninguna                    | 5      |
+| M2-osc  | + cos(omega_G*tau + phi)   | 7      |
 
-`beta = 0` deja `G(tau) = G0` constante: impacto **instantaneo y permanente**,
-o sea `h = [G0, 0, 0, ...]`. Esa es exactamente la especificacion de MkII, y por
-eso M1 es un punto del mismo espacio y no una arquitectura rival.
+`f_inf = 1` deja `G(tau) = G0` constante: impacto **instantaneo y permanente**,
+o sea `h = [G0, 0, 0, ...]`. Esa es la especificacion de MkII, y por eso M1 es un
+punto del mismo espacio y no una arquitectura rival.
+
+⚠ M1 esta en la FRONTERA del espacio de parametros (`f_inf = 1`), donde la
+asintotica de la razon de verosimilitud falla **incluso con observaciones
+independientes** (Self & Liang 1987). Con observaciones dependientes, doblemente.
+Que el nulo sea simulado deja de ser buena practica y pasa a ser obligatorio, y
+esa es la razon de fondo -- no la disciplina general del proyecto.
+
+LA PREGUNTA NO SE HA MOVIDO
+---------------------------
+El estadistico ha cambiado tres veces -- `R(final)/R(pico)` -> IC de `beta_hat`
+-> `D` -> `D` con `f_inf` -- y las tres por un control positivo que invalidaba
+al anterior. La PREGUNTA es la misma desde la v3.1: **permanente contra
+transitorio**. Enunciarla independiente del estimador es lo que impide que una
+cuarta sustitucion se lea desde fuera como mover la porteria.
 
 DECISIONES NUMERICAS
 --------------------
@@ -465,6 +479,84 @@ def curva_de_sesgo(n: int, K: int, delta: float, sigma: float, G0: float,
     return filas
 
 
+def curva_de_potencia(n: int, K: int, delta: float, sigma: float, G0: float,
+                      rejilla_D=(1.00, 0.99, 0.97, 0.95, 0.90, 0.80, 0.70, 0.50),
+                      gamma_signos: float = 0.0, n_sorteos: int = 30,
+                      n_nulo: int = 40, semilla: int = 0) -> dict:
+    """Talla Y POTENCIA del contraste, sobre la region donde de verdad se decide.
+
+    ⚠ Una malla que salta de 1.000 a 0.900 da la TALLA y no la potencia, y la
+    asimetria no es inocua: si la potencia es baja el contraste dira
+    "permanente" por defecto, y el paso 4 de la regla de decision (si M2 no
+    supera el margen, gana M1) convierte esa falta de potencia en una victoria
+    de MkII **que nadie declaro**.
+
+    ⚠ Y al reves, si la resolucion es fina: rechazar `D = 1` va a ocurrir aunque
+    el transitorio sea economicamente irrelevante. **El paso 4 NO es una prueba
+    economica y no debe leerse como tal.** El paso 3 sigue siendo la unica
+    compuerta con dinero detras.
+    """
+    nl = nulo_de_D(n, K, delta, sigma, G0, D_verdadero=1.0,
+                   gamma_signos=gamma_signos, n_sorteos=n_nulo, semilla=semilla)
+    umbral = nl["umbral_transitorio"]
+
+    filas = []
+    for i, Dv in enumerate(rejilla_D):
+        r = nulo_de_D(n, K, delta, sigma, G0, D_verdadero=Dv,
+                      gamma_signos=gamma_signos, n_sorteos=n_sorteos,
+                      semilla=semilla + 1000 + 37 * i)
+        pot = float(np.mean(r["muestras"] < umbral))
+        filas.append({"D_verdadero": Dv, "D_medida": r["D_mediana"],
+                      "sesgo": r["sesgo"], "potencia": pot,
+                      "q05": r["q05"], "q95": r["q95"]})
+    # Minima desviacion detectable con potencia >= 0.80.
+    # El detectable es el D MAS CERCANO A 1 con potencia suficiente, no el
+    # mas pequeno: lo que interesa es la desviacion minima que se distingue.
+    candidatos = [f["D_verdadero"] for f in filas
+                  if f["D_verdadero"] < 1.0 and f["potencia"] >= 0.80]
+    detectable = max(candidatos) if candidatos else None
+    return {"umbral": umbral, "talla": float(np.mean(nl["muestras"] < umbral)),
+            "filas": filas, "D_detectable_80": detectable,
+            "sd_nulo": float(np.std(nl["muestras"]))}
+
+
+def sesgo_de_f_inf(n: int, K: int, delta: float, sigma: float, G0: float,
+                   rejilla=(0.0, 0.2, 0.4, 0.6, 0.8), tau0: float = 15.0,
+                   beta: float = 1.2, gamma_signos: float = 0.0,
+                   n_sorteos: int = 10, semilla: int = 0) -> list:
+    """Malla de sesgo de `f_inf`, que NO es la de `D` y es mucho peor.
+
+    Medido en el control: `f_inf = 0.60` verdadero -> 0.572, o sea **-4.7 %
+    relativo**, contra el ~0.4 % de la tabla de `D`. Y el signo es el peligroso:
+    infravalorar el permanente **sobrestima el transitorio**, o sea predice mas
+    reversion de la que hay -> sobreoperacion, y justo en la magnitud que el §5
+    de la v3.1 designo referencia movil del sistema.
+
+    ⚠ Ademas `f_inf` hereda la degeneracion por el otro lado: con `beta -> 0` el
+    nucleo tiende a 1 sea cual sea `f_inf`, asi que **`f_inf` no esta
+    identificado cuando no hay decaimiento**. De ahi la regla secuencial del
+    preregistro: `f_inf` solo se estima y se reporta CONDICIONADO a haber
+    rechazado `D = 1`.
+    """
+    rng = np.random.default_rng(semilla)
+    filas = []
+    for fv in rejilla:
+        est = []
+        for _ in range(n_sorteos):
+            d = generar(n, G0=G0, tau0=tau0, beta=beta, delta=delta, sigma=sigma,
+                        K=K, gamma_signos=gamma_signos, f_inf=fv,
+                        semilla=int(rng.integers(1 << 30)))
+            m = ajustar(d["y"], d["eps"], d["v"], K, delta, con_suelo=True)
+            est.append(m["f_inf"])
+        est = np.array(est)
+        filas.append({"f_inf_verdadero": fv, "f_inf_medida": float(np.median(est)),
+                      "sesgo": float(np.median(est) - fv),
+                      "sesgo_rel": float((np.median(est) - fv) / fv) if fv > 0 else np.nan,
+                      "q05": float(np.percentile(est, 5)),
+                      "q95": float(np.percentile(est, 95))})
+    return filas
+
+
 def reloj_del_propagador(y, eps, v, t, bloques, K_ticks: int, T_seg: float,
                          delta: float) -> dict:
     """¿El impacto decae en tiempo de transacciones o en tiempo de pared?
@@ -512,7 +604,7 @@ def reloj_del_propagador(y, eps, v, t, bloques, K_ticks: int, T_seg: float,
 
 def generar(n: int, G0: float, tau0: float, beta: float, delta: float,
             sigma: float, K: int = 200, gamma_signos: float = 0.0,
-            semilla: int = 0) -> dict:
+            semilla: int = 0, f_inf: float = 0.0) -> dict:
     """Serie con propagador conocido. `gamma_signos` da memoria al flujo de
     ordenes, que es la propiedad que el nulo de signos iid NO reproduce (leccion
     de la sesion 2026-08-08 e)."""
@@ -529,11 +621,11 @@ def generar(n: int, G0: float, tau0: float, beta: float, delta: float,
         eps = rng.choice([-1.0, 1.0], size=n).astype(float)
     v = np.exp(rng.normal(0.0, 1.0, size=n))       # colas pesadas, como el volumen
     x = forzamiento(eps, v, delta)
-    h = nucleo_h(K, tau0, beta)
+    h = nucleo_h(K, tau0, beta, f_inf=f_inf)
     y = G0 * convolucion_causal(x, h) + rng.normal(0.0, sigma, size=n)
     return {"y": y, "eps": eps, "v": v,
             "verdad": {"G0": G0, "tau0": tau0, "beta": beta, "delta": delta,
-                       "sigma": sigma}}
+                       "sigma": sigma, "f_inf": f_inf}}
 
 
 # ===========================================================================
@@ -749,6 +841,74 @@ def _autotest() -> int:
           % (np.round(r13["D_segundos"], 3).tolist(), r13["dispersion_segundos"]))
     print("     lectura: %s" % r13["lectura"])
     ok("recupera el reloj verdadero (ticks)", r13["lectura"] == "tiempo de transacciones")
+
+    print("== 14. CONTROL ESPEJO del reloj: nucleo fijo en SEGUNDOS ==")
+    # ⚠ El control 13 solo tiene un lado: genera en ticks y recupera ticks. Sin
+    # el espejo no se distingue "el diagnostico detecta el reloj" de "D a rezago
+    # fijo en ticks es mecanicamente mas estable porque nu no entra en su
+    # definicion". Es el patron que las cinco enmiendas vinieron a cerrar.
+    rng = np.random.default_rng(61)
+    T_nucleo = 6.0                     # el nucleo dura 6 s, sea cual sea nu
+    nus_b = (4.0, 12.0, 30.0, 8.0, 20.0, 6.0)
+    nb = 12000
+    eps14, v14, t14, y14 = [], [], [], []
+    t_ac = 0.0
+    for nu_b in nus_b:
+        e = rng.choice([-1.0, 1.0], size=nb).astype(float)
+        vv = np.exp(rng.normal(0.0, 1.0, size=nb))
+        # El nucleo tiene la MISMA duracion en segundos, luego su longitud en
+        # ticks escala con nu.
+        K_b = max(8, int(round(T_nucleo * nu_b)))
+        hb = nucleo_h(K_b, max(K_b / 4.0, 1.0), 0.8)
+        xb = forzamiento(e, vv, 0.5)
+        y14.append(0.5 * convolucion_causal(xb, hb) + rng.normal(0, 0.20, nb))
+        eps14.append(e); v14.append(vv)
+        t14.append(t_ac + np.arange(nb) / nu_b)
+        t_ac = t14[-1][-1] + 1.0 / nu_b
+    eps14 = np.concatenate(eps14); v14 = np.concatenate(v14)
+    t14 = np.concatenate(t14); y14 = np.concatenate(y14)
+    bl14 = [(i * nb, (i + 1) * nb) for i in range(len(nus_b))]
+    r14 = reloj_del_propagador(y14, eps14, v14, t14, bl14, K_ticks=80,
+                               T_seg=T_nucleo, delta=0.5)
+    print("     D a K ticks fijo : %s (sd %.4f)"
+          % (np.round(r14["D_ticks"], 3).tolist(), r14["dispersion_ticks"]))
+    print("     D a T seg fijo   : %s (sd %.4f)"
+          % (np.round(r14["D_segundos"], 3).tolist(), r14["dispersion_segundos"]))
+    print("     lectura: %s" % r14["lectura"])
+    ok("el espejo INVIERTE la lectura (reloj de pared)",
+       r14["lectura"] == "tiempo de pared",
+       "sin esto, el control 13 no distingue diagnostico de artefacto")
+
+    print("== 15. Curva de POTENCIA en la region donde se decide ==")
+    cp = curva_de_potencia(20000, K=60, delta=0.5, sigma=0.20, G0=0.5,
+                           gamma_signos=0.3, n_sorteos=24, n_nulo=40, semilla=71)
+    print("     umbral q05 (bajo D=1) = %.4f | sd del nulo = %.4f | talla = %.2f"
+          % (cp["umbral"], cp["sd_nulo"], cp["talla"]))
+    print("     %-12s %-11s %-10s %s" % ("D verdadero", "D medida", "sesgo", "potencia"))
+    for f in cp["filas"]:
+        print("     %-12.3f %-11.4f %+-10.4f %.2f"
+              % (f["D_verdadero"], f["D_medida"], f["sesgo"], f["potencia"]))
+    print("     minima desviacion detectable con potencia >= 0.80: D = %s"
+          % cp["D_detectable_80"])
+    ok("la talla del contraste es ~5 %", cp["talla"] <= 0.15,
+       "%.2f" % cp["talla"])
+    ok("hay potencia >= 0.8 en algun punto de la malla",
+       cp["D_detectable_80"] is not None)
+    print("     AVISO: el paso 4 NO es una prueba economica: con resolucion fina se")
+    print("       rechaza D=1 aunque el transitorio no pague el coste.")
+
+    print("== 16. f_inf tiene su PROPIA malla de sesgo, y es peor que la de D ==")
+    sf = sesgo_de_f_inf(20000, K=60, delta=0.5, sigma=0.20, G0=0.5,
+                        gamma_signos=0.3, n_sorteos=8, semilla=81)
+    print("     %-14s %-12s %-10s %s" % ("f_inf verdad", "f_inf medida", "sesgo", "rel"))
+    for f in sf:
+        rel = "n/a" if not np.isfinite(f["sesgo_rel"]) else "%+.1f %%" % (100 * f["sesgo_rel"])
+        print("     %-14.2f %-12.4f %+-10.4f %s" % (f["f_inf_verdadero"],
+                                                    f["f_inf_medida"], f["sesgo"], rel))
+    rels = [abs(f["sesgo_rel"]) for f in sf if np.isfinite(f["sesgo_rel"])]
+    ok("el sesgo de f_inf esta caracterizado en toda la malla", len(rels) > 0)
+    print("     AVISO: f_inf NO esta identificado si no hay decaimiento (beta -> 0 lo")
+    print("       hace irrelevante). Solo se estima si se rechazo D = 1.")
 
     print("")
     print("RESULTADO: %d fallo(s)" % fallos)

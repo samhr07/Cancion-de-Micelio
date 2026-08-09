@@ -132,6 +132,14 @@ inferior para que un `H*_ticks` pequeño no anule el embargo. **El número resul
 antes de tocar validación**, se reporta explícitamente y se **verifica por test**, no por
 comentario.
 
+⚠ **El piso es un literal heredado, y hay que resolverlo cuando `H*_ticks` exista.** 1 950 sale
+de `ν = 39 tx/s`; a la `ν ≈ 11 tx/s` de la captura eso son **174 s**, no 50. Si `H*_ticks`
+estimado sobre entrenamiento sale del orden de 400, **el piso está haciendo todo el trabajo y
+multiplica por ~5 el requisito de datos sin justificación viva** — y el requisito de datos es lo
+que decide si hay decisión o no. No es un error de corrección, pero es justo la clase de
+constante que el `grep` del §13 busca. **Declarado ahora: en cuanto `H*_ticks` esté medido, o se
+justifica el piso con un argumento propio o se retira**, y el reporte dice cuál de las dos.
+
 ### 2.3 Métrica
 
 - **Decide: `LL/N` fuera de muestra** sobre el conjunto de prueba.
@@ -289,10 +297,69 @@ un suelo verdadero del 60 %.
 ⚠ **`K` se congela ANTES: `K = 2 · embargo`.** `D` depende del rango en que se evalúa, así que
 "`D ≈ 1`" no significa nada hasta que `K` esté declarado.
 
+### 5.2.bis Potencia, no sólo talla — y por qué eso cambia cómo se lee el paso 4
+
+Una malla que salta de 1.00 a 0.90 da la **talla** del contraste y no su **potencia**, y la
+asimetría no es inocua: con potencia baja el contraste diría "permanente" por defecto, y el paso
+4 de la regla de decisión (*si M2 no supera el margen, gana M1*) convertiría esa falta de
+potencia en **una victoria de MkII que nadie declaró**.
+
+Medido sobre la malla fina (`N = 20 000`, `K = 60`, `γ = 0.3`, 24–40 sorteos por punto):
+
+| `D` verdadero | 1.000 | 0.990 | 0.970 | 0.950 | 0.900 | 0.800 | 0.700 | 0.500 |
+|---|---|---|---|---|---|---|---|---|
+| `D̂` mediana | 0.9950 | 0.9848 | 0.9684 | 0.9487 | 0.9034 | 0.8032 | 0.6986 | 0.5006 |
+| **potencia** | 0.00 | **0.00** | 0.62 | **0.96** | 1.00 | 1.00 | 1.00 | 1.00 |
+
+`q05 = 0.9698`, `sd` del nulo `= 0.0158`, **talla = 0.05** (exactamente la nominal).
+
+**Desviación mínima detectable con potencia ≥ 0.80: `D = 0.95`**, o sea un **5 %**. Una
+extrapolación por normalidad desde `q05` y la mediana sugería `D ≈ 0.989`; la medición la
+desmiente por un factor 5. Es la razón de medir la potencia en vez de inferirla.
+
+⚠ **Consecuencia declarada ahora: el paso 4 NO es una prueba económica y no se leerá como tal.**
+Con esta resolución, rechazar `D = 1` puede ocurrir con un transitorio económicamente
+irrelevante. **El paso 3 sigue siendo la única compuerta con dinero detrás.**
+
+### 5.2.ter `f_∞` se estima SECUENCIALMENTE, y tiene su propia malla de sesgo
+
+`f_∞` hereda la degeneración por el otro lado: **con `β → 0` el núcleo tiende a 1 sea cual sea
+`f_∞`**, así que `f_∞` no está identificado cuando no hay decaimiento.
+
+**Se declara el orden:** `f_∞` se estima y se reporta **sólo condicionado a haber rechazado
+`D = 1`**. Si no se rechaza, `f_∞` no se reporta, porque no hay contenido que reportar.
+
+Su sesgo es **un orden de magnitud peor que el de `D`**, y el signo es el peligroso —
+infravalorar el permanente sobrestima el transitorio, o sea predice más reversión de la que hay,
+que es sobreoperación en la magnitud que el §5 de la v3.1 designó referencia móvil:
+
+| `f_∞` verdadero | 0.00 | 0.20 | 0.40 | 0.60 | 0.80 |
+|---|---|---|---|---|---|
+| `f̂_∞` mediana | 0.0115 | 0.1782 | 0.3713 | 0.5820 | 0.8130 |
+| sesgo relativo | — | **−10.9 %** | **−7.2 %** | −3.0 % | +1.6 % |
+
+⚠ **Nota de método, y es la razón de fondo del nulo simulado.** Con M1 anidado como `f_∞ = 1`,
+el nulo está en la **frontera del espacio de parámetros**, donde la asintótica de la razón de
+verosimilitud falla **incluso con observaciones independientes** (Self & Liang 1987). Con
+observaciones dependientes, doblemente. Que el nulo sea simulado deja de ser buena práctica y
+pasa a ser **obligatorio**; no es la disciplina general del proyecto, es este caso concreto.
+
+### 5.2.quater ⚠ `q05 = 0.9698` es PROVISIONAL — lo que se congela es el procedimiento
+
+Circulan tres configuraciones con tres resultados distintos: `0.9835` (`N=40 k, K=120`, iid),
+`1.0023` (`N=20 k, K=60, γ=0.3`) y `0.9950` (la malla fina). **Si el cuantil saliera de una y la
+curva de sesgo de otra, el umbral y la corrección serían incoherentes entre sí.**
+
+**Se declara:** lo congelado aquí es el **procedimiento**, no el número. El `q05` se **regenera
+cuando la captura cierre**, emparejado a la `γ̂`, la `ν` y la `K` medidas sobre el conjunto de
+entrenamiento. Y `γ` se estima del propio dato, así que su incertidumbre se propaga **simulando
+sobre la distribución bootstrap de `γ̂`**; si no, el umbral queda condicionado a un puntual y su
+cobertura no es la declarada.
+
 | contraste | regla declarada |
 |---|---|
-| **¿impacto permanente?** | `D̂ ≥ q05` de la distribución simulada bajo `D = 1` → MkII está bien especificada y **se prefiere por parsimonia**. Nunca contra el umbral 1 |
-| **¿cuánto es permanente?** | IC bootstrap de **`f_∞`**, más el perfil `D` a `K/4`, `K/2`, `K` |
+| **¿impacto permanente?** | `D̂ ≥ q05` de la distribución simulada bajo `D = 1`, regenerada con `γ̂`, `ν` y `K` medidas → MkII está bien especificada y **se prefiere por parsimonia**. Nunca contra el umbral 1 |
+| **¿cuánto es permanente?** | IC bootstrap de **`f_∞`**, **sólo si se rechazó `D = 1`**, más el perfil `D` a `K/4`, `K/2`, `K` |
 | **respaldo obligatorio** | el contraste anidado **M1 contra M2 fuera de muestra** (§9 y §10). Es el que decide si los dos discrepan |
 | **¿`δ = 0.5`?** | si `δ = 0.5` es el máximo en validación **o está dentro de su IC** → MkII acierta también aquí |
 
@@ -395,9 +462,18 @@ veces por bloque: una con el rezago tope **fijo en ticks** y otra **fijo en segu
 | decae en **tiempo de transacciones** | `D` a `K` ticks estable; `D` a `T` segundos varía con `ν` |
 | decae en **tiempo de pared** | al revés |
 
-Sin `τ₀`, sin regresión. Verificado sobre un control positivo con núcleo fijo **en ticks** y seis
-bloques de `ν` entre 4 y 30 tx/s: dispersión **0.0218 en ticks contra 0.1284 en segundos**, y la
-lectura recuperada es la verdadera. Implementado en `migracion_v32.reloj_del_propagador`.
+Sin `τ₀`, sin regresión. Implementado en `migracion_v32.reloj_del_propagador`, y validado **por
+los dos lados**, que es lo que lo hace un diagnóstico y no un artefacto:
+
+| control | generado con | `sd` de `D` a `K` ticks | `sd` de `D` a `T` segundos | lectura |
+|---|---|---|---|---|
+| directo | núcleo fijo **en ticks** | **0.0218** | 0.1284 | tiempo de transacciones ✔ |
+| **espejo** | núcleo fijo **en segundos** | 0.1201 | **0.0123** | tiempo de pared ✔ |
+
+⚠ **El control espejo es obligatorio y por poco no lo pongo.** Sin él no se distingue "el
+diagnóstico detecta el reloj" de "`D` a rezago fijo en ticks es mecánicamente más estable porque
+`ν` no entra en su definición". Es exactamente el patrón —control positivo sin su negativo— que
+las cinco enmiendas anteriores vinieron a cerrar, repetido una vez más.
 
 **Se reportan las dos dispersiones y las dos series de `D`, no un veredicto.**
 
@@ -643,9 +719,26 @@ y la constancia de que la captura no se había tocado.**
 | 4 | `2ad0700` → (esta) | núcleo `(1+τ/τ₀)^(−β)` con `G(∞) = 0` | núcleo con suelo `f_∞ + (1−f_∞)(1+τ/τ₀)^(−β)` | `D` no separa «decae a un suelo» de «decae a cero», y `G(∞)` es la referencia móvil del §5 de la v3.1 | **NO** |
 | 5 | `2ad0700` → (esta) | regresión de `log τ̂₀` contra `log ν` | dispersión de `D` en reloj de ticks contra reloj de pared | `τ̂₀` no está identificada individualmente, así que la regresión no mide nada | **NO** |
 
-**Las cinco enmiendas son anteriores a mirar un solo dato de `captura_v32`**, y las cinco las
-motivó un control positivo del propio estimador, no un resultado. Esa es la diferencia entre
-enmendar y ajustar el criterio al resultado, y por eso la columna de la derecha existe.
+
+
+| 6 | (esta) | malla de `D` sin puntos en `[0.95, 1.00]` | malla fina con potencia medida | la malla daba la **talla** y no la **potencia**; con potencia baja el paso 4 convertiría la falta de resolución en una victoria de MkII no declarada | **NO** |
+| 7 | (esta) | control del reloj de un solo lado | control **espejo** con núcleo fijo en segundos | sin el espejo no se distingue el diagnóstico del artefacto de que `ν` no entra en la definición de `D` a ticks fijos | **NO** |
+| 8 | (esta) | `f_∞` estimado siempre | `f_∞` **sólo si se rechazó `D = 1`** | con `β → 0` el núcleo tiende a 1 sea cual sea `f_∞`: no está identificado sin decaimiento | **NO** |
+
+**Las ocho enmiendas son anteriores a mirar un solo dato de `captura_v32`**, y las ocho las
+motivó un control positivo del propio estimador, no un resultado.
+
+### El estadístico ha cambiado tres veces; la pregunta, ninguna
+
+```
+R(final)/R(pico)  →  IC de β̂  →  D = G(K)/G(0)  →  D con suelo f_∞
+```
+
+Cada sustitución la forzó un control que invalidaba a la anterior: el primero era degenerado bajo
+el nulo, el segundo no estaba identificado, el tercero no separaba suelo de caída a cero. **La
+pregunta es la misma desde la v3.1: impacto permanente contra impacto transitorio.** Enunciarla
+independiente del estimador es lo que impide que una cuarta sustitución se lea desde fuera como
+mover la portería — y se enuncia así en el reporte, con esta tabla al lado.
 
 **Regla para el futuro: a partir del primer contacto con el conjunto de prueba, este documento
 queda congelado.** Cualquier cambio posterior invalida el carácter fuera de muestra del resultado
