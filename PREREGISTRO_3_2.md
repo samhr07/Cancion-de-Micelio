@@ -53,33 +53,40 @@ transacciones primario**, con `ν` variando por un factor 20 entre capturas: 8 h
 El umbral correcto sale de encadenar los requisitos que el propio documento ya impone:
 
 ```
-bloques efectivos ≥ 15   y   longitud de bloque ≥ 5·embargo   →   N_prueba ≥ 75·embargo
-prueba = 20 % del total                                        →   N_total  ≥ 375·embargo
+bloques efectivos ≥ 15   y   longitud ≥ 5·embargo    →   prueba UTILIZABLE ≥ 75·embargo
+la banda de embargo se DESCARTA de la prueba         →   0.20·N − embargo ≥ 75·embargo
+                                                     →   N ≥ 380·embargo
 ```
 
-Con el piso `embargo = 1 950` ticks eso son **≥ 731 250 ticks continuos y limpios**. Se
+Con el piso `embargo = 1 950` ticks eso son **≥ 741 000 ticks continuos y limpios**. Se
 **recalcula** si `H*_ticks` sale mayor que el piso, porque entonces el embargo crece y el
-requisito con él.
+requisito con él. El número se **deriva** en `migracion_v32.ticks_de_compuerta()`, no se escribe
+como literal.
+
+⚠ **Corrección sobre la primera versión de este documento**, que decía `375·embargo = 731 250`.
+Esa cuenta olvidaba que **el embargo se descarta del conjunto de prueba en lugar de repartirse**,
+y daba **14 bloques, no 15**. Lo caza el control 6 de `migracion_v32.py`, que además comprueba la
+contraprueba: con 375·embargo salen 14. Es exactamente el defecto que este documento obliga a
+marcar —presentar 12 bloques como 15— y apareció en su propio umbral.
 
 Lo que eso significa en horas depende del régimen, y por eso no es un umbral horario:
 
 | `ν` | horas necesarias |
 |---|---|
-| 3.35 tx/s (el de la captura al lanzarla) | **60.6 h** |
-| 5.6 tx/s | 36.3 h |
-| 9.28 tx/s (media de `captura_larga`) | 21.9 h |
-| 39 tx/s | 5.2 h |
+| 3.35 tx/s (el de la captura al lanzarla) | **61.4 h** |
+| 12.4 tx/s (medido a los 30 min) | 16.6 h |
+| 39 tx/s | 5.3 h |
 | 102 tx/s | 2.0 h |
 
 ⚠ **Consecuencia operativa declarada ahora: la captura de 48 h puede no bastar.** Si al terminar
-no hay 731 250 ticks limpios, la compuerta **no pasa** y hay que relanzar, por mucho que el
+no hay **741 000** ticks limpios, la compuerta **no pasa** y hay que relanzar, por mucho que el
 reloj de pared diga 48 h. No se rebajará el umbral para poder concluir.
 
 ### 1.2 La tabla
 
 | requisito | umbral |
 |---|---|
-| tramo continuo limpio | **≥ 375 · embargo ticks** (≥ 731 250 con el piso) |
+| tramo continuo limpio | **≥ 380 · embargo ticks** (≥ 741 000 con el piso) |
 | hueco temporal interno máximo | **< 300 s** |
 | `tr_maker` y `q` persistidos | obligatorio |
 | `bookTicker` con `b`, `B`, `a`, `A` | obligatorio |
@@ -221,12 +228,35 @@ Diagnóstico obligatorio, con umbral declarado:
 
 ### 5.2 Los dos contrastes que deciden la migración
 
+⚠ **CORRECCIÓN: `β̂` NO es interpretable por sí sola, y el contraste del §4.2 de la orden tal
+como está escrito no es válido.** Encontrado por el control positivo de `migracion_v32.py`
+**antes** de tocar dato real: sobre una serie generada con `β = 0` verdadero, el ajuste devuelve
+`β̂ = 5.0` (el borde) y **acierta igualmente la curva**. La razón es que con `τ₀` grande,
+`(1 + τ/τ₀)^(−5) ≈ 1` en todo el rango observado, o sea **observacionalmente idéntico a
+`β = 0`**. La pareja `(τ₀, β)` no está identificada por separado; lo que los datos determinan es
+la **curva `G(τ)` sobre `[0, K]`**.
+
+Se declara como cantidad identificada el **decaimiento relativo sobre el rango ajustado**:
+
+```
+D = G(K) / G(0)          D ≈ 1  ->  impacto permanente  ->  M1 / MkII
+                         D < 1  ->  impacto transitorio ->  propagador
+```
+
+Verificado: con verdad `β = 0.35` (`D` verdadero 0.6808) el ajuste da `D = 0.6994`; con verdad
+`β = 0` (`D = 1`) da `D = 0.9835`, pese a devolver `β̂ = 5.0` en ese segundo caso.
+
 | contraste | regla declarada |
 |---|---|
-| **¿`β = 0`?** | si el IC bootstrap al 95 % de `β̂` **contiene 0** → MkII está bien especificada y **se prefiere por parsimonia** |
+| **¿impacto permanente?** | IC bootstrap al 95 % de **`D = G(K)/G(0)`**. Si **contiene 1** → MkII está bien especificada y **se prefiere por parsimonia** |
+| **respaldo obligatorio** | el contraste anidado **M1 contra M2 fuera de muestra** (§9 y §10). Es el que decide si los dos discrepan |
 | **¿`δ = 0.5`?** | si `δ = 0.5` es el máximo en validación **o está dentro de su IC** → MkII acierta también aquí |
 
-**La respuesta a "¿migramos a OFI?" es el resultado de estos dos contrastes.** No se decide por
+**`β̂` y `τ̂₀` se reportan, pero marcados como NO identificados individualmente.** `τ₀` sigue
+siendo el sucesor honesto de `ω_m` como *escala*, pero su valor puntual sólo es interpretable
+junto con `β̂`, y su IC conjunto es lo que hay que mirar.
+
+**La respuesta a "¿migramos a OFI?" es el resultado de estos contrastes.** No se decide por
 preferencia arquitectónica, ni por elegancia, ni por lo que diga este documento.
 
 ### 5.3 Sobrepaso: `ω_G` contra nulo simulado
@@ -532,7 +562,7 @@ Se anotan ahora para que no se presenten después como matices:
 7. **Ningún resultado de esta tanda dice nada sobre la hipótesis (B)** —escala de decenas de
    minutos— que sigue sin decidir desde la v2.2.
 8. **La captura de 48 h puede no alcanzar la compuerta.** A la `ν` con que arrancó (3.35 tx/s)
-   harían falta 60.6 h para los 731 250 ticks. Si al terminar no llega, se relanza; no se rebaja
+   harían falta 61.4 h para los 741 000 ticks. Si al terminar no llega, se relanza; no se rebaja
    el umbral.
 9. **`e_t` se estima con `ε` que incluye transacciones de todo el mercado.** En Modo LECTURA no
    operamos, así que no hay impacto propio que descontar; la guarda del §7.3 de la orden
