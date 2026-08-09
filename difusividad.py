@@ -31,6 +31,38 @@ A `n` grande caben pocas ventanas no solapadas y la estimacion se vuelve ruido.
 Se reporta `n_indep` en cada fila y se marca la frontera a partir de la cual el
 numero cae por debajo de un minimo declarado.
 
+⚠ RETRACTACION (2026-08-09, posterior al commit b33fb85). Este modulo reporto
+"tres regimenes" -- reversion en `captura_larga`, difusion en `v31b`, momentum en
+`v32` -- y **esa lectura queda retirada**. Dos defectos, y el segundo es fatal
+para cualquier conclusion:
+
+1. **El rango de ajuste estaba fijo en TICKS, asi que la banda en SEGUNDOS
+   difiere por factor 7 entre capturas.** A `nu = 39` el ajuste de
+   `captura_larga` arrancaba en 6.6 s, dentro de la microestructura donde el
+   rebote bid-ask produce reversion (`R(1) = -0.0052`, ya medido en la v3.1).
+   Con banda comun [44, 202] s la reversion **desaparece**: -0.2311 -> +0.0158.
+   Quinta aparicion del mismo patron: mezclar relojes en un estimador.
+
+2. **Y sobre banda comun la pendiente no es estimable.** Cambiando solo la
+   densidad de la rejilla, con los mismos datos y la misma banda:
+
+       captura_larga:  +0.016 (4 pts) -> +1.074 (11) -> +1.519 (23)
+       captura_v31b:   +0.129        -> +0.072       -> +0.107
+       captura_v32:    +0.207        -> +0.120       -> +0.169
+
+   Una pendiente que se mueve de +0.02 a +1.52 con el numero de puntos no es una
+   medicion. La banda comun cubre 4.6x en escala (log-rango 1.52) y la curva
+   tiene curvatura: no hay brazo de palanca para una ley de potencias.
+
+**Lo que sobrevive:** el alcance verificado sigue siendo ~12 min, el estimador no
+tiene sesgo propio (controles barajados en ~0), y la difusividad a escalas largas
+**sigue sin verificarse** -- que era la pregunta. Lo que NO sobrevive es la
+afirmacion de que hay tres regimenes distintos.
+
+**Lo que haria falta**, y sale de la captura estacional: bandas de al menos una
+decada en escala, y ~100 estimaciones independientes a 10 min para tener
+distribucion muestral empirica del estimador en vez de discutir sobre tres puntos.
+
 ⚠ NO SE TOCA `captura_v33`. Es el dato de la decision de la v3.2 y mirarlo aqui
 seria contaminarlo. Se usan las capturas ya gastadas como banco de pruebas.
 """
