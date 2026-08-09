@@ -82,11 +82,28 @@ def simular_insercion(ev: dict, k0: int, horizonte_s: float = 60.0) -> dict:
     Devuelve el desenlace y, cuando lo hay, el instante de llenado bajo las dos
     atribuciones del horquillado (§4).
 
-    Desenlaces:
-      LLENADO      la cola por delante se agoto y me tocaria
-      NIVEL_BARRIDO el bid bajo de p0 sin haberme llenado -- el precio se fue
-      SUPERADO     el bid subio por encima de p0: quedo detras del mejor nivel
-      CENSURADO    se acabo el horizonte sin desenlace
+    Desenlaces, y sus signos economicos son OPUESTOS:
+      LLENADO         la cola por delante se agoto por transaccion y me tocaria
+      LLENADO_ADVERSO todos los de delante se fueron, quedo SOLO al frente del
+                      nivel mientras el precio cae, y me barre el siguiente
+                      vendedor agresor. Es el llenado toxico.
+      SUPERADO        el bid subio por encima de p0: quedo detras del mejor
+                      nivel y no me llenan. Coste de OPORTUNIDAD, no perdida.
+      CENSURADO       se acabo el horizonte sin desenlace
+
+    ⚠ CORRECCION DE UNA VERSION ANTERIOR. Habia un desenlace `NIVEL_BARRIDO`
+    para cuando el mejor bid observado cae por debajo de `p0`, y se contaba como
+    NO llenado. Eso es imposible: con mi orden en reposo a `p0`, si el resto del
+    nivel se vacia **mi orden pasa a ser el mejor bid**, no desaparece. Lo que
+    ese evento dice de verdad es que todos los de delante se marcharon y quedo
+    al frente, expuesto justo cuando el precio se mueve en mi contra.
+
+    Consecuencia del fallo: el 25.2 % de los casos que caian ahi eran llenados
+    -- y los PEORES-- y quedaban excluidos del markout, que salia optimista.
+
+    ⚠ Y hay un regalo: si el nivel entero desaparece del libro, los de delante
+    se fueron **con certeza**. No es una atribucion, es una implicacion de lo
+    observado, y por tanto un ancla independiente para el horquillado.
     """
     t = ev["t"]; tipo = ev["tipo"]; idx = ev["idx"]
     # Estado del libro en k0: hace falta que k0 sea una actualizacion de libro.
@@ -105,12 +122,22 @@ def simular_insercion(ev: dict, k0: int, horizonte_s: float = 60.0) -> dict:
     fill_opt = None      # todas las cancelaciones DELANTE (optimista)
     fill_pes = None      # todas las cancelaciones DETRAS (pesimista)
 
+    solo_al_frente = False   # el resto del nivel se vacio: soy el mejor bid
+    t_solo = None
+
     k = k0 + 1
     n = len(t)
     while k < n and t[k] <= t_fin:
         if tipo[k] == 1:                                  # transaccion
             j = int(idx[k])
-            if ev["tr_maker"][j] and abs(ev["tr_p"][j] - p0) <= TOL:
+            if solo_al_frente:
+                # Soy el mejor bid: cualquier vendedor agresor me barre, y a un
+                # precio <= p0 porque no hay nadie mas por encima.
+                if ev["tr_maker"][j] and ev["tr_p"][j] <= p0 + TOL:
+                    return _cierre("LLENADO_ADVERSO", t, k, t0, p0, Q0,
+                                   consumido, cancelado, float(t[k]), float(t[k]),
+                                   ev, None, t_solo)
+            elif ev["tr_maker"][j] and abs(ev["tr_p"][j] - p0) <= TOL:
                 consumido += float(ev["tr_q"][j])
         else:                                             # actualizacion de libro
             i = int(idx[k])
@@ -132,11 +159,15 @@ def simular_insercion(ev: dict, k0: int, horizonte_s: float = 60.0) -> dict:
                 cancelado = max(0.0, (Q0 - consumido) - B_now)
                 B_prev = B_now
             elif p_now < p0 - TOL:
-                return _cierre("NIVEL_BARRIDO", t, k, t0, p0, Q0, consumido,
-                               cancelado, fill_opt, fill_pes, ev, i)
+                # El nivel se vacio: mi orden pasa a ser el mejor bid y quedo
+                # SOLA al frente. No termina aqui -- se sigue hasta que llegue
+                # el vendedor que me barra, o se agote el horizonte.
+                if not solo_al_frente:
+                    solo_al_frente = True
+                    t_solo = float(t[k])
             else:
                 return _cierre("SUPERADO", t, k, t0, p0, Q0, consumido,
-                               cancelado, fill_opt, fill_pes, ev, i)
+                               cancelado, fill_opt, fill_pes, ev, i, t_solo)
             p_prev = p_now
 
         # ¿Me tocaria ya, bajo cada atribucion?
@@ -146,16 +177,17 @@ def simular_insercion(ev: dict, k0: int, horizonte_s: float = 60.0) -> dict:
             fill_opt = float(t[k])
         if fill_pes is not None:
             return _cierre("LLENADO", t, k, t0, p0, Q0, consumido, cancelado,
-                           fill_opt, fill_pes, ev, None)
+                           fill_opt, fill_pes, ev, None, t_solo)
         k += 1
 
     return _cierre("CENSURADO", t, min(k, n - 1), t0, p0, Q0, consumido,
-                   cancelado, fill_opt, fill_pes, ev, None)
+                   cancelado, fill_opt, fill_pes, ev, None, t_solo)
 
 
 def _cierre(desenlace, t, k, t0, p0, Q0, consumido, cancelado,
-            fill_opt, fill_pes, ev, i_b):
+            fill_opt, fill_pes, ev, i_b, t_solo=None):
     return {"desenlace": desenlace, "t0": t0, "t_fin": float(t[k]),
+            "t_solo_al_frente": t_solo,
             "duracion": float(t[k] - t0), "p0": p0, "Q0": Q0,
             "consumido": consumido, "cancelado": cancelado,
             "t_fill_optimista": fill_opt, "t_fill_pesimista": fill_pes,
@@ -269,10 +301,118 @@ def estudio(d: dict, n_inserciones: int = 1500, horizonte_s: float = 60.0,
         if r.get("desenlace") == "INVALIDO":
             continue
         res.append(r)
-        if r["desenlace"] == "LLENADO" and r["t_fill_pesimista"]:
-            marks.append(markout(ev, r["t_fill_pesimista"], r["p0"]))
+        # ⚠ El markout va sobre TODOS los llenados, incluidos los adversos.
+        # Excluirlos era lo que hacia que la cifra saliera optimista.
+        if r["desenlace"] in ("LLENADO", "LLENADO_ADVERSO") and r["t_fill_pesimista"]:
+            m = markout(ev, r["t_fill_pesimista"], r["p0"])
+            m["adverso"] = (r["desenlace"] == "LLENADO_ADVERSO")
+            m["Q0"] = r["Q0"]; m["t_fill"] = r["t_fill_pesimista"]
+            marks.append(m)
     return {"ev": ev, "resultados": res, "markouts": marks,
             "agotamiento": descomponer_agotamiento(ev)}
+
+
+COMISION_MAKER = 0.0002      # VIP 0, ASUMIDA (no legible sin credenciales)
+COMISION_TAKER = 0.0005
+
+
+def coste_con_llenado(p_llenado: float, S: float = 65000.0,
+                      s_eff: float = 0.2062) -> dict:
+    """`c(u)` de ida y vuelta con la PROBABILIDAD DE LLENADO dentro.
+
+    ⚠ La tabla del §1 de la v3.1 -- 25.97 USD/BTC para maker+maker, de donde sale
+    `H* ~ 50 s` -- supone que **las dos patas se llenan como maker**. Esta sesion
+    mide que una pata pasiva se llena el `p_llenado` de las veces a 60 s.
+
+    La entrada puede esperar; la salida NO: con posicion abierta, o esperas
+    asumiendo riesgo o cruzas la horquilla. Modelo grueso y declarado como tal:
+
+        c = c_maker  +  [ p*c_maker + (1-p)*c_taker ]
+
+    ⚠ Supone independencia entre patas y salida forzada al horizonte. Es una
+    implicacion de ORDEN DE MAGNITUD, no una medicion: `c(u)` bien hecho exige
+    medir tambien la probabilidad de llenado de la pata de SALIDA, que no es la
+    misma que la de entrada -- se sale bajo presion.
+    """
+    c_maker = COMISION_MAKER * S + s_eff / 2.0
+    c_taker = COMISION_TAKER * S + s_eff / 2.0
+    c_salida = p_llenado * c_maker + (1.0 - p_llenado) * c_taker
+    total = c_maker + c_salida
+    return {"c_maker_pata": c_maker, "c_taker_pata": c_taker,
+            "c_salida_esperado": c_salida, "c_total": total,
+            "c_maker_maker": 2 * c_maker, "c_taker_taker": 2 * c_taker,
+            "razon_contra_maker_maker": total / (2 * c_maker)}
+
+
+def cola_del_markout(marks: list, frac: float = 0.05) -> dict:
+    """¿Que parte de la media viene del `frac` peor de los llenados?
+
+    Si casi toda, no es toxicidad general: es **riesgo de barrido concentrado en
+    eventos raros**, y eso si se puede evitar retirando el lado -- siempre que
+    la senal los anticipe.
+    """
+    out = {}
+    for h in (1.0, 5.0, 50.0):
+        v = np.array([m["mk_%gs" % h] for m in marks], float)
+        v = v[np.isfinite(v)]
+        if v.size < 20:
+            continue
+        k = max(1, int(np.ceil(frac * v.size)))
+        peores = np.sort(v)[:k]
+        media = float(v.mean())
+        media_sin = float(np.sort(v)[k:].mean())
+        out["%gs" % h] = {
+            "media": media, "media_sin_peores": media_sin,
+            "aporte_de_los_peores": media - media_sin,
+            "frac_de_la_media": ((media - media_sin) / media) if media != 0 else np.nan,
+            "peor": float(peores.min()), "n": int(v.size), "k": int(k)}
+    return out
+
+
+def anticipabilidad(ev: dict, marks: list, ventana_s: float = 5.0,
+                    frac: float = 0.05) -> dict:
+    """¿El desbalance de flujo PREVIO anticipa los llenados catastroficos?
+
+    Para cada llenado se mide el flujo firmado neto en los `ventana_s` segundos
+    ANTERIORES (suma de eps*q, con eps=-1 si el agresor vendia) y se compara su
+    distribucion entre el `frac` peor de markouts y el resto.
+
+    Si los peores llegan tras un flujo vendedor mucho mas negativo, son
+    anticipables y el uso primario de la senal es **retirar el lado envenenado**
+    -- con metrica propia (reduccion de markout), no con LL/N.
+    """
+    tt, tq, tm = ev["tr_t"], ev["tr_q"], ev["tr_maker"]
+    eps = np.where(tm, -1.0, 1.0)
+    flujo = eps * tq
+    acum = np.concatenate(([0.0], np.cumsum(flujo)))
+
+    def flujo_previo(t_fill):
+        j1 = int(np.searchsorted(tt, t_fill, side="right"))
+        j0 = int(np.searchsorted(tt, t_fill - ventana_s, side="left"))
+        return float(acum[j1] - acum[j0])
+
+    out = {}
+    for h in (1.0, 5.0, 50.0):
+        v = np.array([m["mk_%gs" % h] for m in marks], float)
+        f = np.array([flujo_previo(m["t_fill"]) for m in marks], float)
+        ok_m = np.isfinite(v) & np.isfinite(f)
+        v, f = v[ok_m], f[ok_m]
+        if v.size < 20:
+            continue
+        k = max(1, int(np.ceil(frac * v.size)))
+        orden = np.argsort(v)
+        peores, resto = orden[:k], orden[k:]
+        # Correlacion de rangos entre flujo previo y markout: si es positiva,
+        # mas venta previa -> peor markout.
+        r = lambda x: np.argsort(np.argsort(x)).astype(float)
+        a, b = r(f) - r(f).mean(), r(v) - r(v).mean()
+        rho = float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b)))
+        out["%gs" % h] = {
+            "flujo_previo_peores": float(np.median(f[peores])),
+            "flujo_previo_resto": float(np.median(f[resto])),
+            "spearman_flujo_markout": rho,
+            "n": int(v.size), "k": int(k)}
+    return out
 
 
 def _fmt_pct(x):
@@ -293,11 +433,11 @@ def informe(est: dict, horizonte_s: float) -> None:
     desen = {}
     for r in res:
         desen[r["desenlace"]] = desen.get(r["desenlace"], 0) + 1
-    for k in ("LLENADO", "NIVEL_BARRIDO", "SUPERADO", "CENSURADO"):
+    for k in ("LLENADO", "LLENADO_ADVERSO", "SUPERADO", "CENSURADO"):
         c = desen.get(k, 0)
         print("   %-14s %5d  (%s)" % (k, c, _fmt_pct(c / n)))
 
-    llenos = [r for r in res if r["desenlace"] == "LLENADO"]
+    llenos = [r for r in res if r["desenlace"] in ("LLENADO", "LLENADO_ADVERSO")]
     if llenos:
         esp = np.array([r["espera_pesimista"] for r in llenos], float)
         print("   espera hasta el llenado [s]: p25=%.2f  MED=%.2f  p75=%.2f  max=%.2f"
@@ -325,7 +465,7 @@ def informe(est: dict, horizonte_s: float) -> None:
         for tau in (1.0, 5.0, 15.0, 60.0):
             sin_llenar = sum(
                 1 for r in sub
-                if not (r["desenlace"] == "LLENADO"
+                if not (r["desenlace"] in ("LLENADO", "LLENADO_ADVERSO")
                         and r["espera_pesimista"] is not None
                         and r["espera_pesimista"] <= tau))
             fila.append(sin_llenar / len(sub))
@@ -375,6 +515,47 @@ def informe(est: dict, horizonte_s: float) -> None:
     print("     rotacion de cola (bajadas/transado): %10.1f x" % ag["rotacion"])
     print("     bajadas de B a precio constante   : %d" % ag["n_bajadas"])
     print("     cambios de precio del bid         : %d" % ag["n_cambios_de_precio"])
+
+    # --- 2.bis cola del markout y anticipabilidad ---
+    if mk and len(mk) >= 20:
+        print("")
+        print("   DE DONDE VIENE LA MEDIA: aporte del 5 % peor de llenados")
+        cm = cola_del_markout(mk, 0.05)
+        print("   %-6s %10s %14s %12s %10s"
+              % ("h", "media", "sin el 5 % peor", "aporte", "peor"))
+        for h, r in cm.items():
+            print("   %-6s %+10.4f %+14.4f %+12.4f %+10.2f"
+                  % (h, r["media"], r["media_sin_peores"],
+                     r["aporte_de_los_peores"], r["peor"]))
+        print("")
+        print("   SON ANTICIPABLES? flujo firmado en los 5 s previos al llenado")
+        an = anticipabilidad(est["ev"], mk, 5.0, 0.05)
+        print("   %-6s %16s %14s %14s"
+              % ("h", "flujo 5 % peor", "flujo resto", "rho(flujo,mk)"))
+        for h, r in an.items():
+            print("   %-6s %+16.4f %+14.4f %+14.4f"
+                  % (h, r["flujo_previo_peores"], r["flujo_previo_resto"],
+                     r["spearman_flujo_markout"]))
+        print("   (rho > 0 = mas venta previa anticipa peor markout)")
+
+        # --- coste con probabilidad de llenado dentro ---
+        n_tot = len(res)
+        n_llen = sum(1 for r in res if r["desenlace"] in ("LLENADO", "LLENADO_ADVERSO"))
+        p_ll = n_llen / n_tot
+        cc = coste_con_llenado(p_ll)
+        print("")
+        print("-" * 74)
+        print("2.ter  c(u) CON LA PROBABILIDAD DE LLENADO DENTRO")
+        print("-" * 74)
+        print("   p(llenado a %.0f s) medida        : %s" % (horizonte_s, _fmt_pct(p_ll)))
+        print("   c maker+maker (lo que se usaba)  : %8.2f USD/BTC" % cc["c_maker_maker"])
+        print("   c con salida forzada             : %8.2f USD/BTC" % cc["c_total"])
+        print("   razon                            : %8.2f x" % cc["razon_contra_maker_maker"])
+        print("   -> H* escala con el CUADRADO: %.0f s pasarian a ~%.0f s"
+              % (50.0, 50.0 * cc["razon_contra_maker_maker"] ** 2))
+        print("   AVISO: implicacion de ORDEN DE MAGNITUD, no medicion. Supone")
+        print("          independencia entre patas y salida forzada; la p de la")
+        print("          pata de SALIDA no es la de entrada -- se sale bajo presion.")
 
     print("")
     print("-" * 74)
@@ -453,7 +634,7 @@ def _autotest() -> int:
     ok("el optimista SI llena", r2["espera_optimista"] is not None)
     print("     (ese es el horquillado: mismo dato, dos respuestas)")
 
-    print("== 3. El precio se va y el nivel queda barrido ==")
+    print("== 3a. El nivel se vacia: NO desaparezco, quedo SOLO al frente ==")
     bk_b3 = np.full(11, 100.0); bk_b3[4:] = 99.9
     d3 = dict(d); d3["bk_b"] = bk_b3
     d3["bk_B"] = np.full(11, 3.0)
@@ -462,8 +643,21 @@ def _autotest() -> int:
     ev3 = construir_eventos(d3)
     k0 = int(np.flatnonzero((ev3["tipo"] == 0) & (ev3["t"] == 0.0))[0])
     r3 = simular_insercion(ev3, k0, horizonte_s=10.0)
-    print("     desenlace=%s a los %.1f s" % (r3["desenlace"], r3["duracion"]))
-    ok("detecta el barrido", r3["desenlace"] == "NIVEL_BARRIDO")
+    print("     desenlace=%s | quedo solo al frente en t=%s"
+          % (r3["desenlace"], r3["t_solo_al_frente"]))
+    ok("marca que quedo solo al frente", r3["t_solo_al_frente"] is not None)
+    ok("sin vendedor entrante NO llena", r3["desenlace"] == "CENSURADO")
+
+    print("== 3b. Y con un vendedor entrante, es el LLENADO ADVERSO ==")
+    d3b = dict(d3)
+    d3b["tr_t"] = np.array([6.5]); d3b["tr_precio"] = np.array([99.9])
+    d3b["tr_cant"] = np.array([1.0]); d3b["tr_maker"] = np.array([1], np.uint8)
+    ev3b = construir_eventos(d3b)
+    k0 = int(np.flatnonzero((ev3b["tipo"] == 0) & (ev3b["t"] == 0.0))[0])
+    r3b = simular_insercion(ev3b, k0, horizonte_s=10.0)
+    print("     desenlace=%s a los %.1f s" % (r3b["desenlace"], r3b["duracion"]))
+    ok("llenado adverso", r3b["desenlace"] == "LLENADO_ADVERSO",
+       "-- el caso que la version anterior contaba como NO llenado")
 
     print("== 4. El markout mide el signo correcto ==")
     # Compra a 100.0 y el mid sube a 100.5: markout POSITIVO.
