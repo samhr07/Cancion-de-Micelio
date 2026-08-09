@@ -69,7 +69,24 @@ class Bloque:
     def __init__(self, directorio: str):
         self.dir = directorio
         os.makedirs(directorio, exist_ok=True)
+        # ⚠ La numeracion CONTINUA desde el ultimo bloque que ya haya en el
+        # directorio. Arrancando siempre en 0, relanzar sobre un directorio
+        # existente sobrescribia `bloque_00000.npz` en adelante **en silencio**:
+        # la captura parecia ir bien y por detras se estaba comiendo la anterior.
+        # Con capturas que cuestan decenas de horas, ese fallo se descubre tarde.
+        import glob as _glob
+        previos = _glob.glob(os.path.join(directorio, "bloque_*.npz"))
         self.n = 0
+        if previos:
+            ultimos = []
+            for p in previos:
+                try:
+                    ultimos.append(int(os.path.basename(p)[7:12]))
+                except ValueError:
+                    continue
+            self.n = (max(ultimos) + 1) if ultimos else 0
+            print("    [i] %d bloque(s) previo(s) en %s; se continua desde %05d"
+                  % (len(previos), directorio, self.n), flush=True)
         self.reiniciar()
 
     def reiniciar(self):
