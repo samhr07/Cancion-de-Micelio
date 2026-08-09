@@ -357,7 +357,15 @@ def tramos_continuos(t: np.ndarray, hueco_max: float = HUECO_MAX) -> list:
 
 def resumen(directorio: str) -> int:
     """Comprueba la compuerta de datos del Sec. 2.1 de la v3.2 y lo dice sin adornos."""
-    d = cargar_larga(directorio)
+    # Esta funcion se corre a menudo sobre una captura EN CURSO, asi que el
+    # directorio vacio no es un error del usuario: es el primer minuto. Un
+    # traceback ahi no informa de nada.
+    try:
+        d = cargar_larga(directorio)
+    except FileNotFoundError:
+        print("aun no hay bloques en %s." % directorio)
+        print("El primero se escribe a los %.0f s de arrancar." % PERIODO_BLOQUE)
+        return 1
     n_tr = len(d.get("tr_t", []))
     if n_tr == 0:
         print("sin transacciones en %s" % directorio)

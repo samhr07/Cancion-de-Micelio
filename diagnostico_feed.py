@@ -141,7 +141,14 @@ def main() -> int:
     ap.add_argument("--umbral", type=float, default=HUECO_MIN)
     a = ap.parse_args()
 
-    d = cl.cargar_larga(a.dir)
+    # Igual que en `captura_larga.resumen`: esto se corre sobre capturas en
+    # curso, y "todavia no hay nada" no es un error que merezca un traceback.
+    try:
+        d = cl.cargar_larga(a.dir)
+    except FileNotFoundError:
+        print("aun no hay bloques en %s (el primero tarda %.0f s)."
+              % (a.dir, cl.PERIODO_BLOQUE))
+        return 1
     t = d["tr_t"]
     ident = d.get("tr_id")
     n = len(t)
