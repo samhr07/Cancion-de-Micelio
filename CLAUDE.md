@@ -32,7 +32,7 @@ mirar dato) y `PREREGISTRO_4_0.md` (1 enmienda). Los dos llevan registro de enmi
 antes/después y constancia de si había resultado a la vista.
 
 **Suites:** `tests_v13.py` 56/56 · `ssa.py` 11/11 · `migracion_v32.py` **20/20** · `cola.py` 9/9 ·
-`difusividad.py` 5/5.
+`difusividad.py` 5/5 · `tick_grande.py` **19/19**.
 
 ⚠ **Retractaciones vigentes — no citar lo retirado:**
 - **El impacto «transitorio» de la v3.1 §2 era el REBOTE BID-ASK** (sesión 2026-08-10). Sobre el
@@ -140,6 +140,9 @@ corregir el filtro 90 veces con la misma medición, y eso está corregido en ori
   w-correlación de **cada** `L`) y las figuras de matplotlib sobre ese log.
 - `phi_precio.py` — **v3.2**: φ′ = ticks por volumen inyectado contra el precio, en bloques
   disjuntos, con nulo por desplazamiento circular y por barajado.
+- `tick_grande.py` — **v3.3**: `γ` como exponente (no `C(1)`), `H`, `β` implícita, `η̂` de
+  Robert-Rosenbaum, costes en pb y `N_eff` bajo memoria larga. `--autotest` → **19/19**.
+  **No se importa desde `Micelio.py`.**
 - `experimento_v32.py` — **v3.2**: **el ejecutor del preregistro**. Etapas `muestra`, `fuga`,
   `delta`, `A`, `osc`, `B`, `decision`; abre el conjunto de prueba sólo en la última. `log()`
   transcribe a ASCII por sí sola, para que la consola cp1252 deje de ser una regla que recordar.
@@ -2890,6 +2893,206 @@ sin escala.
 - **La forma del núcleo** (creciente contra permanente contra transitorio) queda como medición
   puntual sin contraste con potencia detrás.
 - **El §7**, por diseño del propio preregistro.
+
+## Sesión 2026-08-10 (b) — v3.3 §6, §1, §2 y §3. La compuerta de tick grande CIERRA el marco
+
+Ejecuta `ORDEN_TRABAJO_TICK_GRANDE_3_3.md` en su orden de prioridad. **Ningún estadístico nuevo**,
+como manda su §7. `Micelio.py` sin cambios. Módulo nuevo: `tick_grande.py`, **19 controles**.
+
+### ⚠ LO PRIMERO: `γ` significaba dos cosas, y la orden mezcló las dos
+
+La tabla del §1 escribe `γ̂ = 0.798` y lo etiqueta «autocorrelación de signos». Ese número es el
+que midió la v3.2 y es **`C(1) = corr(ε_t, ε_{t+1})`**, la autocorrelación **a rezago 1**.
+
+Pero `H = (2−γ)/2 − β` viene del marco del propagador (Bouchaud, Gefen, Potters & Wyart 2004),
+donde `γ` es el **exponente de decaimiento** de `C(ℓ) ~ ℓ^(−γ)`. Son dos cantidades distintas y no
+hay razón para que coincidan. Medidas las dos sobre el mismo tramo:
+
+| | valor |
+|---|---|
+| `C(1)` — lo que la v3.2 llamó `γ̂` | **+0.7981** |
+| **exponente `γ` de `C(ℓ) ~ ℓ^(−γ)`** | **+0.5217** |
+
+`C(ℓ)`: 0.798 (ℓ=1) · 0.762 (2) · 0.666 (10) · 0.586 (25) · 0.061 (2000). Ajuste log-log sobre
+rezagos [10, 2000], 42 puntos, R² = 0.939.
+
+**Con el `γ` correcto la predicción del §1 no se cumple.** La orden anticipaba
+`β implícita ≈ +0.010`, «impacto esencialmente permanente». Sale:
+
+| | valor |
+|---|---|
+| `H_p` (firma en ticks, n ∈ [256, 16384]) | 0.5907 |
+| **`β` implícita = (2−γ)/2 − H** | **+0.1484** |
+| `β` de difusividad = (1−γ)/2 | +0.2392 |
+
+`β` implícita no es 0 (permanencia) ni 0.239 (difusividad): **cae en medio**, al 62 % del camino.
+La conclusión que la orden esperaba —«no se puede rechazar impacto permanente»— **venía del `γ`
+equivocado**.
+
+### ⚠ Y el bootstrap por bloques NO SIRVE para estos estimadores. Se exhibe el fallo
+
+Con bloque `= N^(1/2) = 1015`, que es lo que el §6 de la orden pide:
+
+```
+gamma  0.5217  ->  IC de bootstrap [0.7551, 0.9900]
+H      0.5907  ->  IC de bootstrap [0.0904, 0.1826]
+```
+
+**Los intervalos no contienen el punto estimado.** No es ruido: remuestrear bloques de longitud
+`b` produce una serie cuya dependencia **muere en `b`**, y los dos estimadores ajustan sobre
+rezagos **mayores** que `b` (hasta 2 000 y 16 384). Miden la longitud del bloque, no el mercado.
+
+Sustituto correcto: **submuestreo contiguo**, que conserva la estructura temporal de cada réplica.
+8 sub-series de 77 336 ticks:
+
+| sub-serie | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+|---|---|---|---|---|---|---|---|---|
+| `γ` | 0.384 | 0.508 | 0.624 | 0.616 | 0.438 | 0.560 | 0.724 | 0.585 |
+| `H` | 0.665 | 0.725 | 0.689 | 0.542 | 0.432 | 0.601 | 0.639 | 0.627 |
+| **`β`** | +0.143 | +0.021 | **−0.000** | +0.150 | **+0.349** | +0.119 | **−0.001** | +0.081 |
+
+```
+beta media +0.1076   sd 0.1152   intervalo t OPTIMISTA [+0.0135, +0.2017]
+```
+
+**Tres sub-series dan `β ≈ 0` exacto (permanencia) y una da +0.349 (más allá de difusividad).**
+El intervalo excluye tanto 0 como 0.239, pero **por muy poco y con un intervalo que es cota
+inferior de la incertidumbre** (supone sub-series independientes, y con memoria larga no lo son).
+
+**Lectura honesta: el §1 tampoco cierra la pregunta.** Da un `β` central positivo y pequeño, con
+una heterogeneidad entre tramos que abarca desde permanencia hasta pasada la difusividad. Es la
+misma inestabilidad que la v3.0 encontró en `k` y que la propia orden anota (`β` cambiando de signo
+entre tramos). Sólo que ahora está cuantificada y con el `γ` correcto. Sólo 8 réplicas:
+**subpotenciado**, declarado.
+
+**Los tres `β` juntos, sin elegir** (§1.1 punto 4):
+
+```
+implicita por H y gamma       +0.1484
+ajuste M2 sobre punto medio   -0.1600
+ajuste M2 sobre precio trans. +4.6900
+```
+
+La discrepancia es el resultado.
+
+### ⚠ §2 — `η̂ = 0.62 ≥ 1/2`: el marco de tick grande NO APLICA. §4 y §5 no se ejecutan
+
+La compuerta que la orden puso para poder rechazar barato ha hecho justo eso.
+
+| variante | `η̂` | `N_c` | `N_a` |
+|---|---|---|---|
+| **sólo saltos de 1 tick** (la del artículo) | **0.6200** | 98 718 | 79 616 |
+| todos los saltos (control del modo de fallo 3) | 1.1614 | 197 468 | 85 011 |
+
+El control del modo de fallo 3 funciona: contar saltos de más de un tick casi **duplica** `η̂`. Con
+la definición correcta sale 0.62, por encima de 1/2.
+
+**Consecuencia declarada por la propia orden: `§4` (propagador sobre el precio eficiente `X_t`) y
+`§5` (la predicción falsable del agotamiento de cola) NO se ejecutan.** Y ese `§5` era «el apartado
+con más valor de información del documento». Se cierra sin gastarlo, que es exactamente para lo que
+sirve una compuerta barata.
+
+⚠ **Y la reserva del §2 sobre el tick relativo queda confirmada por el número:**
+
+```
+alpha/P = 0.10 / 65 076 = 1.54e-6 = 0.0154 pb por tick
+```
+
+En renta variable «tick grande» significa `α/P` de 1e−4 a 1e−3: **dos o tres órdenes de magnitud
+mayor**. BTCUSDT tiene la horquilla clavada en 1 tick **y** un tick relativo diminuto, y esa
+combinación no está en los artículos. Con `η̂ = 0.62` la cuestión es académica aquí, pero se anota.
+
+27.4 % de los ticks mueven el precio de transacción (282 480 de 1 031 153).
+
+### §6 — `N_eff` medido, y el paso 2 de la v3.2 SOBREVIVE
+
+El §6 propone `N_eff = N^γ` con la `γ` de los signos. **Se mide en vez de suponerse**, y sobre la
+serie que toca — la de `ΔLL`, no la de signos, que no tienen por qué compartir exponente. Método:
+ajustar `Var(media de bloque)` contra el tamaño de bloque y evaluar en `b = N`.
+
+| serie | `γ_eff` | R² | `N` | `N_eff` | pérdida | inflación del error estándar |
+|---|---|---|---|---|---|---|
+| **`ΔLL` de prueba** | **0.7421** | 0.993 | 199 532 | **8 574** | **23.3×** | **3.15×** |
+| signos `ε` | 0.3539 | 0.927 | 618 692 | **112** | **5 518×** | 115.4× |
+| incrementos de precio | 0.8630 | 0.981 | 618 691 | 99 510 | 6.2× | 0.71× |
+
+**Recálculo del IC del paso 2:**
+
+```
+publicado en la v3.2 (bloques de 5*embargo) : [+6.857e-03, +8.084e-03]
+corregido por memoria larga                 : [+6.649e-03, +8.456e-03]
+```
+
+**El paso 2 sigue pasando.** El error estándar se ensancha 3.15× pero la media está a ~15 errores
+estándar de cero, así que el intervalo sigue excluyendo 0 con holgura. La preocupación del §6 era
+legítima y el resultado es que no muerde **en este IC**.
+
+⚠ **Donde sí muerde es en los estimadores basados en signos: `N_eff = 112` sobre 618 692 ticks,
+pérdida de 5 518×.** Eso explica mejor que cualquier defecto de diseño por qué han muerto cuatro
+estadísticos: todos dependían de la relación entre signo y precio, y ahí el tamaño muestral
+efectivo es de tres cifras. **No se arregla capturando más** — con `γ_eff = 0.354`, multiplicar
+`N` por 10 sólo multiplica `N_eff` por 2.3.
+
+⚠ **Nota de procedimiento:** este recálculo toca el conjunto de prueba. El §7 prohíbe **reabrirlo
+para un veredicto nuevo**; el §6 **ordena** recalcular un IC ya publicado. Se recomputó el mismo
+estadístico sobre los mismos modelos, sin ajustar ni elegir nada, y no se deriva ninguna decisión
+nueva de él.
+
+### §3 — La sospecha del precio NO se cumple, y la aritmética en pb
+
+La orden sospecha que el tramo pudiera haber corrido cerca de 96 000, con lo que `c(u)` serían 38.4
+y el factor pasaría de 3.46 a 5.1. **Medido: el tramo va de 64 794.4 a 65 482.7, mediana 65 076.4.**
+`c(u) = 26.03 USD/BTC` es correcta para este tramo y **el factor 3.46 se mantiene**.
+
+| magnitud | USD/BTC | pb | ticks |
+|---|---|---|---|
+| 1 tick | 0.100 | **0.0154** | 1.0 |
+| comisión ida y vuelta maker | 26.031 | **4.0000** | 260.3 |
+| `\|μ̂\|` q90 medida (v3.2) | 11.297 | 1.7360 | 113.0 |
+| **umbral `1.5·c(u)`** | **39.046** | **6.0000** | **390.5** |
+
+**Hay que predecir 390 ticks de movimiento para pagar la ida y vuelta. Un agotamiento de cola da
+1 tick.** La capa de microestructura opera **390× por debajo** del umbral de rentabilidad. Y en pb
+la tabla ya no envejece con el precio: la comisión son 4 pb sea cual sea el nivel de BTC.
+
+### Un control que falló y lo que enseñó
+
+El control 2 de `tick_grande.py` —¿recupera el estimador un `γ` conocido?— falló al primer intento
+con **R² = 0.87**, por debajo del umbral de 0.95 que yo mismo había puesto. **El fallo era del
+generador, no del estimador**: una suma finita de seis AR(1) es ley de potencias sólo a trozos, con
+ondulaciones entre las `τ`. Bajar el umbral para que pasara habría sido ajustar el control al
+resultado. Se sustituyó por **ruido gaussiano fraccionario**, cuyo exponente sí es verdad conocida
+(`C(ℓ) ~ ℓ^(2H−2)`, o sea `γ = 2−2H`).
+
+Y así apareció algo que cambia cómo hay que leer el R² sobre dato real:
+
+| `H` verdadera | `γ` verdadera | `γ` medida | **R²** | `C(1)` |
+|---|---|---|---|---|
+| 0.75 | 0.50 | 0.5436 | **0.977** | 0.243 |
+| 0.65 | 0.70 | 0.6647 | **0.660** | 0.129 |
+
+**Con memoria débil el R² se desploma mientras `γ` sigue bien recuperada**, porque `C(ℓ)` es más
+pequeña y el ruido muestral domina el logaritmo. Yo había escrito una compuerta «R² < 0.90 → la
+relación no aplica»: **habría descartado un caso donde el estimador funciona perfectamente.** El R²
+pasa a reportarse como diagnóstico, nunca como compuerta.
+
+### Qué queda de la v3.3
+
+**Cerrado:**
+- **§2**: `η̂ = 0.62` → el marco de tick grande no aplica. **§4 y §5 quedan cancelados por la
+  compuerta**, no pendientes.
+- **§3**: precio del tramo verificado, `c(u)` correcta, factor 3.46 confirmado, tabla en pb.
+- **§6**: `N_eff` medido en tres series; el paso 2 de la v3.2 sobrevive al IC corregido.
+
+**Ejecutado pero sin cerrar:**
+- **§1**: la relación se verificó en sus dos límites y `γ` se midió bien, pero `β` implícita sale
+  +0.148 con sub-series entre −0.001 y +0.349. **No separa permanencia de difusividad**, y el
+  intervalo disponible es una cota inferior de la incertidumbre con sólo 8 réplicas.
+
+**Lo que esto añade a la lectura de fondo:** las tres rutas de la v3.3 no rescatan la economía —el
+§3 de la orden ya lo decía— y la que podía cerrar la ciencia (§1) tropieza con la misma
+heterogeneidad entre tramos que viene apareciendo desde la v3.0. El `N_eff = 112` de los signos es
+la explicación cuantitativa de por qué.
 
 ## AUDITORÍA DE `Micelio.py` (2026-08-09) — qué pasaría si se arrancara hoy
 
