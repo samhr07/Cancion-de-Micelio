@@ -225,10 +225,15 @@ def forzamiento(eps: np.ndarray, v: np.ndarray, delta: float,
 def ajustar(y: np.ndarray, eps: np.ndarray, v: np.ndarray, K: int,
             delta: float, beta_libre: bool = True,
             con_oscilacion: bool = False, con_suelo: bool = False,
-            v_mediana: float | None = None) -> dict:
+            v_mediana: float | None = None,
+            inicio=None) -> dict:
     """Ajusta el modelo sobre (y, eps, v). Devuelve parametros y sigma.
 
     `con_suelo=True` libera `f_inf = G(inf)/G(0)`, la fraccion permanente.
+
+    `inicio` fija el punto de arranque del optimizador. Sirve para SEMBRAR el
+    modelo grande en la solucion del anidado, que es lo que garantiza que la
+    razon de verosimilitud sea >= 0.
     """
     x = forzamiento(eps, v, delta, v_mediana)
     y = np.asarray(y, dtype=np.float64)
@@ -259,14 +264,25 @@ def ajustar(y: np.ndarray, eps: np.ndarray, v: np.ndarray, K: int,
         # constante sin depender de tau0 ni de beta.
         tau0, beta, f_inf, om, ph = 1.0, 0.0, 1.0, 0.0, 0.0
     else:
-        p0 = [np.log(50.0), 0.4]
-        if con_suelo:
-            p0.append(0.3)
-        if con_oscilacion:
-            p0 += [0.01, 0.0]
+        if inicio is not None:
+            p0 = list(inicio)
+        else:
+            p0 = [np.log(50.0), 0.4]
+            if con_suelo:
+                p0.append(0.3)
+            if con_oscilacion:
+                p0 += [0.01, 0.0]
         r = optimize.minimize(sse, p0, method="Nelder-Mead",
                               options={"maxiter": 6000, "xatol": 1e-6, "fatol": 1e-10})
-        tau0, beta, f_inf, om, ph = desempaquetar(r.x)
+        # ⚠ Nelder-Mead sobre 5 parametros desde un arranque fijo NO garantiza
+        # mejorar el punto de partida. Si el arranque venia del modelo anidado,
+        # aceptar un optimo peor rompe el anidamiento y produce razones de
+        # verosimilitud NEGATIVAS -- que fue exactamente lo que devolvio el
+        # contraste de omega_G la primera vez (2*dLL = -149 con el nulo igual de
+        # roto). Quedarse con el mejor de los dos es la correccion NUMERICA que
+        # hace que el estadistico sea el que dice ser; no cambia su definicion.
+        mejor = r.x if sse(r.x) <= sse(np.asarray(p0, float)) else np.asarray(p0, float)
+        tau0, beta, f_inf, om, ph = desempaquetar(mejor)
 
     h = nucleo_h(K, tau0, beta, om, ph, f_inf)
     z = convolucion_causal(x, h)
@@ -441,9 +457,20 @@ def contraste_omega_G(y, eps, v, K, delta, n_sorteos: int = 40,
     ⚠ Prohibido comparar 2*dLL contra la tabla chi2: con observaciones
     dependientes esa distribucion no se cumple, y seria la TERCERA vez que este
     proyecto usa una asintotica donde la finita es otra.
+
+    ⚠ EL MODELO GRANDE SE SIEMBRA EN EL PEQUENO. Sin eso, Nelder-Mead sobre 5
+    parametros desde un arranque fijo devuelve optimos peores que el anidado y
+    el estadistico sale NEGATIVO -- medido: 2*dLL = -149 sobre datos reales, con
+    el 37.5 % de los sorteos del nulo aun mas abajo. Un estadistico negativo en
+    modelos anidados no es un resultado, es un fallo del optimizador, y leerlo
+    como "omega_G = 0" seria reportar una no convergencia como veredicto.
     """
+    def _par(m):
+        return [np.log(max(m["tau0"], 1e-3)), m["beta"], m["omega_G"], m["phi"]]
+
     m2 = ajustar(y, eps, v, K, delta, beta_libre=True)
-    mo = ajustar(y, eps, v, K, delta, con_oscilacion=True)
+    mo = ajustar(y, eps, v, K, delta, con_oscilacion=True,
+                 inicio=_par(m2))
     ll2 = float(np.sum(ll_por_obs(m2, y, eps, v)))
     llo = float(np.sum(ll_por_obs(mo, y, eps, v)))
     obs = 2.0 * (llo - ll2)
@@ -456,12 +483,15 @@ def contraste_omega_G(y, eps, v, K, delta, n_sorteos: int = 40,
     for s in range(n_sorteos):
         y_s = base + rng.normal(0.0, m2["sigma"], size=len(y))
         a = ajustar(y_s, eps, v, K, delta, beta_libre=True)
-        b = ajustar(y_s, eps, v, K, delta, con_oscilacion=True)
+        b = ajustar(y_s, eps, v, K, delta, con_oscilacion=True,
+                    inicio=_par(a))
         nulo[s] = 2.0 * (float(np.sum(ll_por_obs(b, y_s, eps, v)))
                          - float(np.sum(ll_por_obs(a, y_s, eps, v))))
     p = float(np.mean(nulo >= obs))
     return {"estadistico": obs, "p_simulado": p, "omega_G": mo["omega_G"],
-            "nulo_p95": float(np.percentile(nulo, 95)), "n_sorteos": n_sorteos}
+            "nulo_p95": float(np.percentile(nulo, 95)), "n_sorteos": n_sorteos,
+            "nulo_min": float(nulo.min()), "nulo_negativos": int((nulo < 0).sum()),
+            "anidamiento_ok": bool(obs >= 0.0 and (nulo >= 0).all())}
 
 
 # ===========================================================================
@@ -1017,6 +1047,42 @@ def _autotest() -> int:
     ok("el protocolo no empeora la estimacion",
        abs(decaimiento(m_bien) - float(nucleo_G(K17, 30.0, 0.4)))
        <= abs(decaimiento(m_mal) - float(nucleo_G(K17, 30.0, 0.4))) + 0.02)
+
+    print("== 19. El anidamiento se respeta: 2*dLL NUNCA puede ser negativo ==")
+    # ⚠ EL CONTROL QUE FALTABA, y lo encontro el DATO antes que el test. La
+    # primera ejecucion del contraste de omega_G sobre `captura_v33` devolvio
+    # 2*dLL = -149 con el 37.5 % del nulo aun mas abajo. M2-osc CONTIENE a M2,
+    # asi que un estadistico negativo solo puede ser no convergencia del
+    # optimizador: M2 y M2-osc arrancaban del mismo punto fijo y aterrizaban en
+    # cuencas distintas. Sin este control, el p = 0.6250 resultante se habria
+    # leido como "omega_G = 0, el propagador es monotono" y habria borrado
+    # `omega_m,max` y `gamma_omega` de `constantes_micelio.py` sobre un fallo
+    # numerico.
+    #
+    # ⚠ Y AQUI ESTA LA RAZON DE QUE LOS 18 CONTROLES ANTERIORES NO LO VIERAN:
+    # el fallo solo aparece con nucleo CRECIENTE (beta < 0, tau0 pegada a su
+    # cota), que es justo el regimen donde cayo el mercado real y que ningun
+    # control sintetico anterior visitaba. La configuracion de abajo lo
+    # reproduce, y el control lleva su propio negativo: se comprueba que SIN
+    # sembrar falla y CON sembrar pasa. Un control que no puede fallar no
+    # discrimina -- con `beta = +0.5` los dos caminos coinciden y el test seria
+    # vacuo.
+    d19 = generar(20000, G0=0.05, tau0=0.01, beta=-0.16, delta=0.0, sigma=0.25,
+                  K=600, gamma_signos=0.8, semilla=77)
+    y19, e19, v19 = d19["y"], d19["eps"], d19["v"]
+    m19 = ajustar(y19, e19, v19, 600, 0.0, beta_libre=True)
+    ll19 = float(np.sum(ll_por_obs(m19, y19, e19, v19)))
+    est = {}
+    for etiq, ini in (("sin sembrar", None),
+                      ("sembrado", [np.log(max(m19["tau0"], 1e-3)),
+                                    m19["beta"], 0.0, 0.0])):
+        mo19 = ajustar(y19, e19, v19, 600, 0.0, con_oscilacion=True, inicio=ini)
+        est[etiq] = 2.0 * (float(np.sum(ll_por_obs(mo19, y19, e19, v19))) - ll19)
+    print("     2*dLL sin sembrar = %+10.3f   sembrado = %+10.3f"
+          % (est["sin sembrar"], est["sembrado"]))
+    ok("el estadistico anidado es >= 0 al sembrar", est["sembrado"] >= -1e-9)
+    ok("y el control DISCRIMINA: sin sembrar sale negativo",
+       est["sin sembrar"] < -1e-6)
 
     print("")
     print("RESULTADO: %d fallo(s)" % fallos)

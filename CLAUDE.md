@@ -31,7 +31,7 @@ cualquier cosa entre 0.0 y 7.3. Capturar más no lo arregla; hace falta otro est
 mirar dato) y `PREREGISTRO_4_0.md` (1 enmienda). Los dos llevan registro de enmiendas con hash
 antes/después y constancia de si había resultado a la vista.
 
-**Suites:** `tests_v13.py` 56/56 · `ssa.py` 11/11 · `migracion_v32.py` 18/18 · `cola.py` 9/9 ·
+**Suites:** `tests_v13.py` 56/56 · `ssa.py` 11/11 · `migracion_v32.py` **20/20** · `cola.py` 9/9 ·
 `difusividad.py` 5/5.
 
 ⚠ **Retractaciones vigentes — no citar lo retirado:**
@@ -2745,6 +2745,61 @@ celda `δ = 0.5` se reporta aunque no gane, como manda el §5.1.
 Todos por debajo del umbral declarado `|ρ₁| < 0.05`, así que **ningún modelo queda descalificado
 por residuo estructurado**. Nótese que M2 no deja residuo pese a `D = 11.5`.
 
+### ⚠ §5.3 — `ω_G`: el estadístico salió NEGATIVO, y eso no es un resultado
+
+Primera ejecución del contraste sobre `captura_v33`:
+
+```
+2*dLL observado = -149.078     nulo p95 = 1.159     p simulado = 0.6250
+```
+
+**M2-osc contiene a M2, así que `2·ΔLL` no puede ser negativo.** Y el 37.5 % de los sorteos del
+nulo caían aún más abajo. Eso no es evidencia de nada: es que M2 y M2-osc arrancaban del **mismo
+punto fijo** y aterrizaban en cuencas distintas, con Nelder-Mead sobre 5 parámetros.
+
+Leído sin mirar el signo, el `p = 0.6250` decía «`ω_G = 0`, el propagador es monótono» y la
+consecuencia declarada del §5.3 es borrar `ω_m,max` y `γ_ω` de `constantes_micelio.py`. **Se
+habría borrado sobre un fallo del optimizador.**
+
+**Corrección numérica, no de la regla:** el modelo grande se **siembra en la solución del
+anidado** (`migracion_v32.contraste_omega_G`). No cambia la definición del estadístico; hace que
+sea el que dice ser. Con eso:
+
+```
+2*dLL observado = +134.009     nulo p95 = 5.336     p simulado = 0.0000
+anidamiento: obs >= 0 y nulo >= 0 en los 40 sorteos
+```
+
+⚠ **Pero el rechazo NO sostiene «oscilador forzado», y la guarda de banda lo dice.**
+
+| | valor |
+|---|---|
+| `ω_G` ajustado | **+0.000009 rad/tick** |
+| período implícito | **737 227 ticks = 42 151 s ≈ 11.7 h** a ν = 17.49 |
+| `K` (rango ajustado) | 4 466 ticks |
+| razón período/`K` | **165.1×** |
+
+Dentro de `[0, K]` el coseno recorre el **0.606 % de un ciclo**: no oscila. Para `ω·K ≪ 1`,
+`cos(ωτ+φ) ≈ cos φ − ωτ·sin φ`, o sea que el término está actuando como una **inclinación lenta
+del núcleo**, no como un ciclo. Es la misma situación que la guarda de banda de la v2.1 §2 cazó
+para `ω_m`, y por eso se implementó aquí la equivalente.
+
+**`ω_G` queda SIN DECIDIR como frecuencia. No se borra ni se resucita nada en
+`constantes_micelio.py`** — la consecuencia del §5.3 estaba condicionada a `ω_G = 0`, y eso no es
+lo que salió; y el rechazo tampoco apoya un ciclo.
+
+**Control nuevo, el 19, y lleva su propio negativo.** `migracion_v32.py` pasa a **20 controles**.
+Y hay una lección en por qué los 18 anteriores no lo vieron: **el fallo sólo aparece con núcleo
+CRECIENTE** (`β < 0`, `τ₀` pegada a su cota), que es justo el régimen donde cayó el mercado real y
+que ningún control sintético anterior visitaba. Medido en el test:
+
+```
+2*dLL sin sembrar = -866.363      sembrado = +0.417      -> el control DISCRIMINA
+```
+
+Con `β = +0.5` los dos caminos coinciden y el test sería vacuo — por eso el control comprueba las
+dos ramas y no sólo la buena.
+
 ### TABLA DE MEDICIONES — v3.2
 
 **Compuerta (§1), salida literal de `--resumen`**
@@ -2829,6 +2884,9 @@ sin escala.
 - **Permanente contra transitorio sigue sin resolverse.** No por falta de datos: porque el
   estimador de `D` no tiene potencia a `γ̂ = 0.798`. Hace falta un estadístico cuyo nulo no se
   ensanche con la memoria del flujo — que es la misma lección de la sesión (e) por cuarta vez.
+- **`ω_G` sin decidir.** El contraste corregido rechaza `ω_G = 0`, pero el `ω_G` ajustado tiene
+  un período **165×** mayor que el rango ajustado: es una inclinación del núcleo, no un ciclo.
+  **`ω_m,max` y `γ_ω` NO se borran de `constantes_micelio.py`, y tampoco se resucitan.**
 - **La forma del núcleo** (creciente contra permanente contra transitorio) queda como medición
   puntual sin contraste con potencia detrás.
 - **El §7**, por diseño del propio preregistro.

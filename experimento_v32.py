@@ -610,7 +610,32 @@ def etapa_osc(args):
     log("  2*dLL observado = %.3f      nulo p95 = %.3f      p simulado = %.4f"
         % (r["estadistico"], r["nulo_p95"], r["p_simulado"]))
     log("  omega_G ajustado = %+.6f rad/tick" % r["omega_G"])
-    if r["p_simulado"] < 0.05:
+    log("  anidamiento: obs >= 0 y nulo >= 0 -> %s   (nulo min %.4f, %d negativos)"
+        % (r["anidamiento_ok"], r["nulo_min"], r["nulo_negativos"]))
+    if not r["anidamiento_ok"]:
+        log("  *** ESTADISTICO INVALIDO: M2-osc contiene a M2, asi que 2*dLL no")
+        log("      puede ser negativo. Es no convergencia del optimizador, NO un")
+        log("      resultado. omega_G queda SIN DECIDIR y no se borra nada de")
+        log("      constantes_micelio.py sobre esta base. ***")
+        return r
+    # ⚠ GUARDA DE BANDA, la misma idea que la v2.1 §2 aplico a omega_m: un
+    # contraste puede rechazar omega_G = 0 con un omega_G cuyo periodo no cabe
+    # en el rango ajustado. Ahi el coseno no oscila -- actua como una
+    # INCLINACION lenta del nucleo, porque cos(w*tau + phi) ~ cos(phi) -
+    # w*tau*sin(phi) para w*K << 1. Llamar a eso "oscilador forzado" seria
+    # exactamente el error que el §5.3 existe para evitar.
+    per = (2.0 * np.pi / abs(r["omega_G"])) if r["omega_G"] != 0 else np.inf
+    log("  periodo implicito = %.0f ticks = %.0f s a nu = %.2f   contra K = %d"
+        % (per, per / cfg["nu"], cfg["nu"], K))
+    log("  razon periodo/K = %.1f   (el coseno recorre %.3f %% de un ciclo en [0,K])"
+        % (per / K, 100.0 * K / per))
+    if per > K:
+        log("  *** FUERA DE BANDA: el periodo NO CABE en el rango ajustado. El")
+        log("      rechazo de omega_G = 0 es real pero NO sostiene 'oscilador")
+        log("      forzado': el coseno esta actuando como inclinacion del nucleo,")
+        log("      no como ciclo. omega_G queda SIN DECIDIR como frecuencia, y no")
+        log("      se borra ni se resucita nada en constantes_micelio.py. ***")
+    elif r["p_simulado"] < 0.05:
         log("  -> omega_G != 0: el sistema es un OSCILADOR FORZADO.")
     else:
         log("  -> omega_G = 0: el propagador es MONOTONO.")
