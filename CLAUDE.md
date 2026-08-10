@@ -32,7 +32,7 @@ mirar dato) y `PREREGISTRO_4_0.md` (1 enmienda). Los dos llevan registro de enmi
 antes/después y constancia de si había resultado a la vista.
 
 **Suites:** `tests_v13.py` 56/56 · `ssa.py` 11/11 · `migracion_v32.py` **20/20** · `cola.py` 9/9 ·
-`difusividad.py` 5/5 · `tick_grande.py` **19/19**.
+`difusividad.py` 5/5 · `tick_grande.py` **19/19** · `horizonte.py` **14/14**.
 
 ⚠ **Retractaciones vigentes — no citar lo retirado:**
 - **El impacto «transitorio» de la v3.1 §2 era el REBOTE BID-ASK** (sesión 2026-08-10). Sobre el
@@ -140,6 +140,8 @@ corregir el filtro 90 veces con la misma medición, y eso está corregido en ori
   w-correlación de **cada** `L`) y las figuras de matplotlib sobre ese log.
 - `phi_precio.py` — **v3.2**: φ′ = ticks por volumen inyectado contra el precio, en bloques
   disjuntos, con nulo por desplazamiento circular y por barajado.
+- `horizonte.py` — **v4.1**: `H_p` en los dos relojes con control barajado, `σ₁` en pb, y las
+  dos curvas del §1 (`R²` medido contra `R²` requerido). `--autotest` → **14/14**.
 - `tick_grande.py` — **v3.3**: `γ` como exponente (no `C(1)`), `H`, `β` implícita, `η̂` de
   Robert-Rosenbaum, costes en pb y `N_eff` bajo memoria larga. `--autotest` → **19/19**.
   **No se importa desde `Micelio.py`.**
@@ -3093,6 +3095,151 @@ pasa a reportarse como diagnóstico, nunca como compuerta.
 §3 de la orden ya lo decía— y la que podía cerrar la ciencia (§1) tropieza con la misma
 heterogeneidad entre tramos que viene apareciendo desde la v3.0. El `N_eff = 112` de los signos es
 la explicación cuantitativa de por qué.
+
+## Sesión 2026-08-10 (c) — v4.1 §2 y §1. Las dos curvas NO se cruzan donde hay potencia
+
+Ejecuta `ORDEN_TRABAJO_HORIZONTE_4_1.md` en su orden de prioridad: §11 (compuerta de
+infraestructura) → §2 (`H_p`) → §1 (las dos curvas). `Micelio.py` sin cambios. Módulo nuevo:
+`horizonte.py`, **14 controles**.
+
+### ⚠ §11 PRIMERO: la captura estacional muere por BATERÍA, no por suspensión por inactividad
+
+`captura_estacional` es «el único activo del proyecto que puede dar potencia al §1 por encima de
+30 min», y lleva **dos apagones sólo hoy**. Los dos capturadores tienen **exactamente los mismos
+huecos**, así que es la máquina y no los procesos:
+
+```
+Evento 524  10:52:05  "Critical desencadenador de bateria cumplido"
+Evento 42   10:52:05  "El sistema esta entrando en suspension"
+Bateria: estado 1 = DESCARGANDO      nivel critico configurado: 2 %
+```
+
+**El portátil está con batería, no enchufado.** `STANDBYIDLE = 0` —que sí está configurado
+correctamente, verificado— **no protege de esto**: la suspensión por batería crítica pasa por
+encima de todo, y `impedir_suspension()` (`SetThreadExecutionState`) tampoco la evita. Es una causa
+**distinta** de la que se corrigió el 2026-08-09.
+
+Cobertura acumulada del estacional: **1 080 min = 0.75 días equivalentes**, 147 casillas vacías de
+168, mínimo por casilla 0 contra los ≥ 30 que pide su compuerta. Apagones de hoy: 01:00–06:00 y
+10:52–16:47 local.
+
+⚠ **Con 21 días continuos, `H = 1 h` da ~500 ventanas y `H = 4 h` da ~126. Cada apagón parte el
+tramo continuo, y es el tramo continuo el que fija `H_max ≈ T_continuo/30`.** Sin resolver la
+alimentación, el §1 no puede pasar de piloto en la banda que importa.
+
+### ⚠ §2 — `H_p = 0.591` NO sobrevive, y la compuerta resuelve por BANDA
+
+Firma de volatilidad sobre las **cuatro** capturas, **reloj de pared** (que es donde vive la curva
+requerida: comisión y financiación se pagan en tiempo de calendario), con **control barajado en
+todas**, ajuste en `H ∈ [60, 600] s`:
+
+| captura | `ν` | `H_p` real | barajado | **corregido** | \|sesgo\| | efecto | fiable |
+|---|---|---|---|---|---|---|---|
+| `captura_larga` | 38.97 | 0.407 | 0.401 | 0.506 | 0.099 | 0.093 | **NO** |
+| `captura_v31b` | 5.76 | 0.414 | 0.543 | **0.371** | 0.043 | 0.086 | sí |
+| `captura_v32` | 10.13 | 0.527 | 0.520 | **0.508** | 0.020 | 0.027 | sí |
+| `captura_v33` | 17.49 | 0.548 | 0.496 | **0.552** | 0.004 | 0.048 | sí |
+
+**El 0.591 de la v3.3 era del reloj de TICKS.** En reloj de pared, sobre la misma captura y con su
+control, `captura_v33` da **0.552**. Y entre capturas la banda es **[0.371, 0.552]**, que **cruza
+0.5**: la superdifusión no es una propiedad estable.
+
+⚠ **Dos cosas que hay que declarar sobre cómo se llegó a esa tabla.**
+
+1. **La rejilla de horizontes se densificó a mitad de camino**, y no es cosmético. Con la rejilla
+   original el ajuste de `[60, 600]` tenía **4 puntos** y el propio control barajado —que debe dar
+   0.5 exacto— salía entre **0.254 y 0.528**. Ahí la corrección mueve más ruido que señal. Con 11
+   puntos los controles quedan en 0.401–0.543.
+2. **El criterio de fiabilidad se escribió DESPUÉS de ver la primera corrida**, y la fila que
+   descarta es justo la que rompe la monotonía con `ν`. Eso es selección post-hoc y se reporta con
+   las dos correlaciones, sin elegir:
+
+```
+corr(log nu, H_p)  con las 4 filas : +0.6821   (n = 4)
+corr(log nu, H_p)  solo fiables    : +0.9616   (n = 3)
+```
+
+**Con `n ≤ 4` una correlación no es evidencia**: para `n = 3` hace falta `|r| > 0.997` para
+`p < 0.05`. La rama de correlación del §2.2 **no se puede invocar**, y se aplica la **tercera**:
+la curva requerida va como **banda `[0.371, 0.552]`** y el §1 se lee contra la banda entera.
+
+`σ₁` reexpresada en pb (§2.1 punto 3), recalculada por cada `H_p` sobre la firma de `captura_v33`:
+
+| `H_p` | 0.371 | 0.500 | 0.552 |
+|---|---|---|---|
+| `σ₁` [pb·s^(−H_p)] | 0.7356 | 0.4061 | 0.3196 |
+
+### ⚠ §1 — LAS DOS CURVAS NO SE CRUZAN, y donde podrían cruzarse no hay potencia
+
+Predictor deliberadamente tonto (§1.3): regresión de `r_{t→t+H}` del punto medio sobre flujo
+firmado acumulado en `{H/4, H/2, H, 2H}`. Sin `G(τ)`, sin `τ₀`, sin `β`. Ventanas **no solapadas**
+(verificado por test). Entrenado en el 60 % de entrenamiento, medido en validación. **El conjunto
+de prueba de la v3.2 NO se abrió.**
+
+| `H` | `n_vent` | **`R²_medido`** | `R²_barajado` | `R²_req` (0.371) | (0.500) | (0.552) | |
+|---|---|---|---|---|---|---|---|
+| 60 s | 112 | **−0.0008** | −0.0070 | 68.72 % | 78.40 % | 82.67 % | |
+| 120 s | 56 | **+0.0019** | **+0.0146** | 41.09 % | 39.20 % | 38.46 % | |
+| 300 s | 23 | −0.0264 | −0.0051 | 20.82 % | 15.68 % | 13.99 % | piloto |
+| 600 s | 11 | −0.0554 | −0.0195 | 12.45 % | 7.84 % | 6.51 % | piloto |
+| 900 s | 8 | −0.0763 | +0.0062 | 9.21 % | 5.23 % | 4.16 % | piloto · extrapola |
+| 1800 s | 4 | −0.0461 | **+0.1292** | 5.51 % | 2.61 % | 1.93 % | piloto · extrapola |
+| 3600 s | 2 | insuficiente | | | | | |
+
+**Aplicando el §1.4 literalmente, el desenlace es doble:**
+
+1. **Donde hay potencia (60 y 120 s, `n ≥ 30`): fallo categórico.** `R²_medido ≈ 0` contra un
+   requerido de **38–83 %**. No es una brecha que un predictor mejor cierre: aunque un predictor
+   perfecto alcanzara `R² = 0.5`, seguiría sin pagar a 60 s. Y en las dos filas el barajado es
+   comparable o **mayor** que el real, que por el §1.4 se lee como «la medición no tiene potencia
+   a esa `H`» — o, dicho de otro modo, no hay nada que medir.
+2. **Donde el requerido se vuelve plausible (≥ 15 min, 1.9–5.5 %): sólo 4–8 ventanas.** Por el
+   §1.4 eso es **NO DECIDIBLE**, no un fallo — y la única acción admisible es esperar a
+   `captura_estacional`. Que es justo lo que el §11 está bloqueando.
+
+⚠ **Y una reconciliación que hay que escribir para que las dos cifras no se lean como
+contradicción.** La v3.2 reportó `R² = 0.014` a 128 s y aquí sale ~0. **No es la misma cantidad.**
+El `R²` de la v3.2 predice `Δp_t` con un núcleo que incluye `h(0)·x_t`, o sea **el signo de la
+transacción que está ocurriendo**: es ajuste contemporáneo, y no es operable. El `R²` de aquí
+predice el retorno **futuro** a `H` desde flujo **pasado**, que es lo único que se puede negociar.
+Que uno sea 1.4 % y el otro 0 no es inconsistencia: es la diferencia entre explicar y predecir.
+(El `μ̂` del paso 3 de la v3.2 ya usaba sólo rezagos ≥ 1, así que aquella parte estaba bien.)
+
+### Dos controles míos que fallaron, y lo que enseñaron
+
+**El control de la curva requerida pasa a la primera** y reproduce la tabla del §11.1 del
+`PREREGISTRO_3_2.md` con tres decimales: 41.77 % contra 41.8 a 103 s, 7.17 contra 7.2 a 10 min,
+1.20 contra 1.2 a 1 h. La forma está verificada contra lo ya publicado.
+
+⚠ **El control de superdifusión estaba mal planteado y era mío.** Fabricaba superdifusión con una
+**tendencia lineal**, y una tendencia constante **no aparece en la firma de volatilidad**: añade la
+misma constante a todos los incrementos y `std(x + c) = std(x)`. Superdifusión es incrementos
+**positivamente autocorrelacionados**, no deriva. Sustituido por movimiento browniano fraccionario,
+cuyo `H` es verdad conocida:
+
+| fBm | real | barajado | corregido |
+|---|---|---|---|
+| `H = 0.65` | 0.6833 | 0.5372 | **0.6461** |
+| `H = 0.35` | 0.3977 | 0.5224 | **0.3754** |
+
+Recupera la verdad por los dos lados y el barajado vuelve a 0.5 en los dos, que es lo que hace del
+control un discriminador y no un adorno.
+
+### Qué queda de la v4.1
+
+**Hecho:**
+- **§11**: causa de los apagones identificada (**batería**, no inactividad) y cuantificada.
+- **§2**: `H_p` sobre las cuatro capturas, dos relojes, control en todas, `σ₁` en pb. Resuelve por
+  **banda [0.371, 0.552]**. `H_p = 0.591` retirado.
+- **§1**: las dos curvas, con control barajado y ventanas no solapadas. **No se cruzan donde hay
+  potencia; donde podrían, no hay potencia.**
+
+**Pendiente, en el orden del §10:**
+- **§3** (correcciones a la v3.3): tercer estimador de `γ` por Whittle/GPH, `β` implícita como
+  curva contra la ventana de ajuste, tabla de `N_eff` con la definición coherente, la identidad
+  `β = 0 ⟺ γ = 2−2H`, y reclasificar `D = 11.53`.
+- **§6** (micro-precio): sólo la fracción de ceros contra el 96.67 %.
+- **§5** (`C_respaldo`) y **§4** (`η̂` con barrido de colapso), en ese orden.
 
 ## AUDITORÍA DE `Micelio.py` (2026-08-09) — qué pasaría si se arrancara hoy
 
