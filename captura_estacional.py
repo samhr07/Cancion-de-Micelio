@@ -178,7 +178,8 @@ def informe_cobertura(directorio: str) -> int:
     return 0 if ok else 2
 
 
-async def capturar(dias: float, directorio: str, symbol: str = "btcusdt"):
+async def capturar(dias: float, directorio: str, symbol: str = "btcusdt",
+                   umbral_v33: float = UMBRAL_V33):
     import aiohttp
 
     url = ("wss://fstream.binance.com/stream?streams="
@@ -238,7 +239,7 @@ async def capturar(dias: float, directorio: str, symbol: str = "btcusdt"):
                             esc = buf.volcar()
                             t_ultimo = ahora
                             # PRIORIDAD DE LA v3.2 (§8, fallo 1)
-                            viva, edad = v33_esta_viva()
+                            viva, edad = v33_esta_viva(umbral=umbral_v33)
                             if not viva:
                                 print("    [!!] captura_v33 lleva %.0f s sin datos."
                                       " ESTA captura se detiene: la v3.2 tiene"
@@ -298,6 +299,16 @@ def main(argv):
     ap.add_argument("--dias", type=float, default=21.0)
     ap.add_argument("--dir", default=DIR_POR_DEFECTO)
     ap.add_argument("--cobertura", action="store_true")
+    # ⚠ MIGRACION A OTRA MAQUINA. Esta captura se detiene sola si `captura_v33`
+    # lleva `UMBRAL_V33` sin datos, porque la v3.2 tiene prioridad sobre el
+    # ancho de banda de ESTA maquina. En una maquina donde la v3.2 NO corre, esa
+    # guarda es un modo de fallo silencioso: basta con que alguien copie
+    # `telemetria/captura_v33` para que la captura de 21 dias se pare al primer
+    # volcado sin decir por que. La salvaguarda que habia --devolver "viva" si
+    # el directorio no existe-- protegia por accidente, no por diseno.
+    ap.add_argument("--sin-guarda-v33", dest="sin_guarda", action="store_true",
+                    help="desactiva la prioridad de captura_v33 (usar cuando "
+                         "esta captura corre SOLA en su maquina)")
     a = ap.parse_args(argv[1:])
 
     if a.cobertura:
@@ -314,15 +325,24 @@ def main(argv):
     if libre < 10.0:
         print("ABORTA: menos de 10 GB libres.")
         return 1
-    viva, edad = v33_esta_viva()
-    print("captura_v33  : %s (ultimo dato hace %.0f s)"
-          % ("viva" if viva else "SIN DATOS", edad))
-    print("AVISO: la v3.2 tiene prioridad. Si captura_v33 lleva mas de %.0f s"
-          % UMBRAL_V33)
-    print("       sin datos, ESTA captura se detiene sola.")
+    umbral = float("inf") if a.sin_guarda else UMBRAL_V33
+    if a.sin_guarda:
+        print("guarda v33   : DESACTIVADA (--sin-guarda-v33). Esta captura corre")
+        print("               sola en su maquina y no cede prioridad a nadie.")
+    else:
+        viva, edad = v33_esta_viva()
+        print("captura_v33  : %s (ultimo dato hace %.0f s)"
+              % ("viva" if viva else "SIN DATOS", edad))
+        print("AVISO: la v3.2 tiene prioridad. Si captura_v33 lleva mas de %.0f s"
+              % UMBRAL_V33)
+        print("       sin datos, ESTA captura se detiene sola. Si has copiado el")
+        print("       proyecto a otra maquina donde la v3.2 NO corre, arranca con")
+        print("       --sin-guarda-v33 o se parara al primer volcado.")
     if cl.impedir_suspension():
         print("Suspension del sistema IMPEDIDA.")
-    n = asyncio.run(capturar(a.dias, a.dir))
+        print("[!] Eso NO protege de la suspension por BATERIA CRITICA, que pasa")
+        print("    por encima. Para una captura de dias, la maquina va ENCHUFADA.")
+    n = asyncio.run(capturar(a.dias, a.dir, umbral_v33=umbral))
     print("\nTerminado: %d transacciones." % n)
     return 0
 
