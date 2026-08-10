@@ -13,12 +13,17 @@ IPOPT y qpOASES). No se han validado contra CUDA ni acados.**
 
 ### Lo primero que hay que saber
 
-**Dos líneas abiertas, ninguna cerrada, y las dos esperando datos.** No se abre una tercera.
+**La v3.2 ya se ejecutó y su regla de decisión se paró en el paso 3.** Queda una línea abierta.
+No se abre una tercera.
 
 | línea | qué decide | estado |
 |---|---|---|
-| **v3.2** `ORDEN_TRABAJO_MIGRACION_3_2` | impacto permanente contra transitorio (M0/M1/M1′/M2) | **congelada** hasta que `captura_v33` alcance **741 000 ticks continuos**. Va por 292 107 (39 %), un solo tramo, faltan ~12 h |
+| **v3.2** `ORDEN_TRABAJO_MIGRACION_3_2` | impacto permanente contra transitorio (M0/M1/M1′/M2) | **EJECUTADA** el 2026-08-10 sobre 1 031 155 ticks continuos. Paso 2 pasa, **paso 3 falla**: `q90(\|μ̂\|) = 11.30` contra `1.5·c(u) = 39.05`. Falta el §7 (exige captura completa) |
 | **v4.0** `ORDEN_TRABAJO_EJECUCION_4_0` | cuánto cuesta operar | `captura_estacional` corriendo, 21 días. §4.2 y §5 ya resueltos |
+
+⚠ **Lo que la v3.2 dejó sin decidir NO es por falta de datos**: el estimador de `D` **no tiene
+potencia** a la autocorrelación de signos real (`γ̂ = 0.798`) — bajo `D = 1` verdadero devuelve
+cualquier cosa entre 0.0 y 7.3. Capturar más no lo arregla; hace falta otro estadístico.
 
 **`Micelio.py` no se toca desde la v2.2.** Todo lo posterior es código de análisis aparte.
 
@@ -30,6 +35,12 @@ antes/después y constancia de si había resultado a la vista.
 `difusividad.py` 5/5.
 
 ⚠ **Retractaciones vigentes — no citar lo retirado:**
+- **El impacto «transitorio» de la v3.1 §2 era el REBOTE BID-ASK** (sesión 2026-08-10). Sobre el
+  precio de transacción `D = 0.107`; sobre el punto medio, que no tiene rebote, `D = 11.53` y el
+  signo se invierte. El spread mediano de la captura es 1 tick exacto.
+- **La difusividad de la sesión (e) NO replica.** Sobre `captura_v33` la pendiente de la firma en
+  ticks es **+0.091** (`H_p = 0.591`) con control barajado plano (−0.012), contra el +0.007 que
+  dio `captura_larga`. **Este tramo es super-difusivo.**
 - **Los «tres regímenes» de difusividad NO existen** (commit `432f459`). El rango de ajuste
   estaba fijo en ticks y la banda en segundos difería por factor 7; a banda común la reversión
   desaparece, y sobre banda común la pendiente **no es estimable** (cambia de +0.02 a +1.52 solo
@@ -129,6 +140,10 @@ corregir el filtro 90 veces con la misma medición, y eso está corregido en ori
   w-correlación de **cada** `L`) y las figuras de matplotlib sobre ese log.
 - `phi_precio.py` — **v3.2**: φ′ = ticks por volumen inyectado contra el precio, en bloques
   disjuntos, con nulo por desplazamiento circular y por barajado.
+- `experimento_v32.py` — **v3.2**: **el ejecutor del preregistro**. Etapas `muestra`, `fuga`,
+  `delta`, `A`, `osc`, `B`, `decision`; abre el conjunto de prueba sólo en la última. `log()`
+  transcribe a ASCII por sí sola, para que la consola cp1252 deje de ser una regla que recordar.
+- `migracion_v32.py` — **v3.2**: el estimador M0/M1/M2/M2-osc y sus 18 controles.
 - `oscilador.py` / `experimento_v30.py` — **v3.0**: primitivas `k`, `m`, `γ`, `Q` por AR(2) con
   hipótesis nula, verificación dimensional y descomposición del rebote bid-ask.
   `python experimento_v30.py`. **No se importa desde `Micelio.py`.**
@@ -2527,6 +2542,296 @@ Y si algo de φ′ acaba en `Q`, dos correcciones más:
   asociación establecida entre los dos canales.
 - Sigue en pie todo lo de la v3.1: núcleo paramétrico del propagador, `γ` de la
   autocorrelación de signos y la comprobación `pendiente ≈ (1−γ)/2 − β`.
+
+## Sesión 2026-08-10 — v3.2 EJECUTADA: la compuerta pasó y la decisión se para en el paso 3
+
+Ejecuta `PREREGISTRO_3_2.md` de punta a punta sobre `captura_v33`, con el preregistro
+**congelado desde el 2026-08-09** y sus 9 enmiendas todas anteriores a mirar dato.
+`Micelio.py` sin cambios (`git diff --stat` vacío). Suite **56/56**.
+Ejecutor nuevo: `experimento_v32.py`.
+
+### ⚠ VEREDICTO: el paso 2 pasa, el paso 3 falla. Hay señal medible y está 3.5× por debajo del coste
+
+```
+PASO 1  compuerta          1 031 154 ticks continuos contra 741 000     PASA
+PASO 2  LL/N contra M0     M2 gana; IC95 [+6.857e-03, +8.084e-03]       PASA
+PASO 3  criterio economico q90(|mu|) = 11.30  contra  1.5*c(u) = 39.05  FALLA
+PASOS 4 y 5                no se ejecutan: la regla se para en el primero que falla
+```
+
+**No es «no hay señal».** M2 bate a M0 fuera de muestra con un IC que excluye 0 con holgura,
+`R²` fuera de muestra +0.014, y el residuo es blanco (`|ρ₁| < 0.007` en los tres modelos). La
+estructura está ahí y está medida. Lo que falla es que **no llega a pagar las comisiones**:
+
+| | valor |
+|---|---|
+| `\|μ̂\|` de M2 en prueba | q50 **5.16** · q90 **11.30** · q99 15.39 · **máx 17.12** USD/BTC |
+| umbral `1.5·c(u)` | **39.05** USD/BTC |
+| `c(u)` que el paso 3a exigiría | 7.53 USD/BTC = **0.579 pb** por lado |
+| comisión maker VIP 0 **asumida** | **2.000 pb** por lado → falta un **factor 3.46** |
+
+`c(u)` es aquí **comisión pura**: maker+maker no cruza el spread, así que
+`c = 2 × 0.0002 × 65 100 = 26.03 USD/BTC`. El obstáculo no es la microestructura, son 4 pb.
+
+⚠ **`μ̂` de M1 es CERO IDÉNTICAMENTE, y no es un fallo del cálculo.** Con impacto permanente
+(`f_∞ = 1`) el núcleo es constante, así que `μ̂_t(H) = G₀·Σ_j x_{t−j}·[G(H+j) − G(j)] ≡ 0`: el
+movimiento ya ocurrió y no queda nada que capturar. Es el contenido económico de la hipótesis de
+MkII, y por eso el paso 3 se evalúa sobre `μ̂` y no sobre el ajuste.
+
+⚠ **El §11 (abandono) NO se activa**, y hay que decir por qué con precisión. El §9.2 lo
+condiciona a «3a falla **con 3b satisfecha**». Aquí 3b también falla, pero **3b es degenerado en
+este caso**: `frac(|μ̂| ≥ 1.5c) = 0` exactamente porque `máx|μ̂| = 17.12 < 39.05`, o sea que su
+fallo es una *consecuencia* de 3a y no una medida de potencia. La potencia sí está acreditada por
+otro lado —el paso 2 detecta la estructura con un IC que excluye 0—, así que el caso real no es
+ninguno de los dos que el §9 contempla: **señal medible, por debajo del coste.**
+
+### ⚠ El resultado que reordena la lectura: el signo de `D` se INVIERTE entre observables
+
+El §3 del preregistro declara el punto medio como observable primario y el precio de transacción
+como control secundario, con regla falsable escrita antes. Ajustando **la misma M2 sobre las dos
+columnas**, con la misma muestra y la misma malla:
+
+| observable | `β` | `τ₀` | `D = G(K)/G(0)` | lectura |
+|---|---|---|---|---|
+| **punto medio** (primario) | **−0.160** | pegada al límite | **11.53** | núcleo **creciente** |
+| precio de transacción (control) | **+4.69** | pegada al límite | **0.107** | decae al 11 % |
+
+**El impacto «transitorio» que la v3.1 §2 midió sobre el precio de transacción era el rebote
+bid-ask.** El spread mediano de esta captura es **0.1000 USD = exactamente 1 tick** (p90 igual),
+así que una compra imprime en el ask y la siguiente vuelve al bid: el 89 % de la «reversión» es
+Roll, no un propagador. Sobre el punto medio, que no tiene rebote, **la reversión desaparece y el
+signo se invierte**.
+
+Es la misma familia de hallazgo que el §5.2 de la v2.0 y la Adenda A: una cantidad que parecía del
+mercado y era del instrumento. Aquí el preregistro lo cazó porque obligaba a llevar **las dos
+columnas siempre**.
+
+### ⚠ `D > 1` no es «permanente»: la dicotomía del §5.2 no contiene el resultado
+
+`D = 11.53` con `β < 0` significa núcleo que **crece** con el rezago: ni permanente (`D = 1`) ni
+transitorio (`D < 1`). El perfil lo confirma: `D(K/4) = 9.24 → D(K/2) = 10.32 → D(K) = 11.53`.
+
+La regla escrita del §5.2 es **de una cola** —«`D̂ ≥ q05` → no se rechaza `D = 1` → permanente»— y
+aplicada literalmente habría declarado **impacto permanente y MkII bien especificada** sobre datos
+que dicen lo contrario. Se lee la distribución simulada **completa**, que el propio §5.2 manda
+generar, y por arriba también:
+
+```
+D_hat = 11.5252     q05 = 0.0000     q95 = 7.2704     ->  se rechaza D = 1 POR ARRIBA
+```
+
+Esto **no es una enmienda**: es leer entera la misma simulación. Callarlo sería reportar
+«permanente» sobre evidencia de lo contrario.
+
+### ⚠ Y el contraste de `D` se derrumba a la γ real — el nulo emparejado lo delata
+
+El §5.2.quater obliga a **regenerar `q05` con la `γ̂` medida**, y ahí está el hallazgo:
+
+| | γ = 0.3 (§5.2.bis, antes de datos) | **γ̂ = 0.798 (medido)** |
+|---|---|---|
+| `D̂` mediana bajo `D = 1` verdadero | 0.9950 | **0.2854** |
+| `q05` | 0.9698 | **0.0000** |
+| `q95` | — | **7.2704** |
+| sd del nulo | 0.0158 | enorme |
+
+**Con la autocorrelación de signos real, el estimador de `D` devuelve cualquier cosa entre 0 y 7.3
+cuando la verdad es exactamente 1.** El contraste permanente-contra-transitorio **no tiene
+potencia a la γ de este mercado**, y eso lo dice el propio procedimiento que el preregistro
+congeló. La malla de potencia del §5.2.bis se midió a γ = 0.3 y no transporta.
+
+Dicho de otro modo: `D̂ = 11.53` cae fuera del nulo, pero el nulo es tan ancho que la cifra no
+sostiene una lectura fina. Lo que sí sostiene es que **el signo del efecto no es el que la
+dicotomía esperaba**.
+
+⚠ Reserva: el nulo se regeneró con **24 sorteos**, no más, por coste (206 s). `q95` con 24
+muestras es una estimación pobre.
+
+### ⚠ Este tramo es SUPER-DIFUSIVO — la sesión 2026-08-08 (e) NO replica
+
+Firma de volatilidad en **tiempo de ticks**, no solapada, sobre entrenamiento, **con su control de
+incrementos barajados al lado** (que es lo que la sesión (e) estableció como obligatorio):
+
+| n [ticks] | 2 | 8 | 32 | 64 | 256 | 1024 | 4096 | 16384 |
+|---|---|---|---|---|---|---|---|---|
+| σ/√n **real** | 0.799 | 0.520 | 0.343 | **0.327** | 0.433 | 0.505 | 0.588 | **0.634** |
+| σ/√n **barajado** | 1.102 | 1.102 | 1.100 | 1.097 | 1.099 | 1.127 | 1.138 | 0.993 |
+
+```
+pendiente [256, 16384]   real +0.0907     barajado -0.0123
+H_p                      real  0.591      barajado  0.488     (0.5 = difusivo)
+```
+
+**El control barajado sale plano y el real no.** La sesión 2026-08-08 (e) concluyó «más allá de la
+microestructura el precio es difusivo» con pendiente +0.007 sobre `captura_larga` (ν = 39 tx/s);
+sobre `captura_v33` (ν = 17.5 tx/s) la pendiente es **+0.091**, trece veces mayor y con el control
+limpio. **La difusividad no es una propiedad estable del mercado**, o al menos no lo es entre estas
+dos capturas. Y encaja por dos vías con el núcleo creciente: un `G` que crece y un `H_p > 0.5` son
+el mismo hecho medido desde dos sitios.
+
+⚠ **No hay plateau, y eso obligó a resolver una ambigüedad del preregistro.** El §2.2 escribe
+`H*_ticks = (c/σ_tick)²` sin decir **cuál** `σ_tick`. Esa fórmula es la solución de `σ(H) = c`
+*bajo difusión exacta*, y aquí la curva es en **U**: `(c/σ)²` da **6347** con el σ del mínimo y
+**1688** con el del extremo, y **ninguno cumple `σ(H*) = c`**. Se resuelve por **punto fijo**
+—interpolar `log σ` contra `log n` y despejar—, que es lo que la fórmula quiere decir y que bajo
+difusión coincide exactamente con ella. **La elección se tomó después de ver la firma y se declara
+como lectura, no como enmienda.**
+
+### El §2.2 queda resuelto: el piso de 1 950 se puede retirar
+
+Era una pregunta abierta declarada en el preregistro («o se justifica el piso con un argumento
+propio o se retira, y el reporte dice cuál de las dos»):
+
+```
+H*_ticks medido (punto fijo)  =  2233 ticks  =  127.7 s a nu = 17.49
+piso heredado                 =  1950 ticks
+```
+
+**El `H*_ticks` medido ata, el piso no.** El piso no está multiplicando el requisito de datos, y
+como es un literal heredado sin argumento vivo, **se retira**. Con el embargo medido la compuerta
+exige 848 540 ticks y hay 1 031 154 → sigue pasando.
+
+### §4.2 — el test de fuga pasa, y el control con poder pasa por un factor 1 000
+
+Cuatro variantes, las cuatro al reporte como exige el preregistro. Métrica: `ΔLL/N` de M1 contra
+**su propio** M0 en validación (los niveles absolutos no son comparables entre variantes porque
+cambia el observable).
+
+| variante | `ΔLL/N` vs su M0 | `G₀` | expectativa declarada | resultado |
+|---|---|---|---|---|
+| **correcta** | +4.290e-04 | +0.001101 | el valor a reportar | — |
+| adelantada +1 | **+1.841e-03** | +0.002285 | debe subir claramente | **4.3×** ✔ |
+| retrasada −10 | +4.098e-04 | +0.001083 | debe bajar | baja ✔ |
+| **BARAJADA** | **+4.359e-07** | +0.010056 | debe caer al nivel de M0 | **0.1 %** ✔ |
+
+La barajada —el único control con poder— cae a la milésima parte de la ganancia. **La ganancia de
+M1 viene del emparejamiento libro-transacción**, no de la marginal de `e_t` ni de la
+especificación.
+
+### §4.3 — esto es OFI-L1 APROXIMADO, y los dos diagnósticos obligatorios
+
+| diagnóstico | valor | umbral declarado |
+|---|---|---|
+| `q` excede la cantidad del mejor nivel del último snapshot | **2.77 %** | 20 % → **M1 es medición, no cota inferior** |
+| residuo de reconciliación `ΔV` contra transacciones | **93.5 %** | — (es actividad de límite no observada) |
+
+El 93.5 % no es un error: dice que el libro se mueve casi todo por actividad de límite invisible
+entre snapshots, que es exactamente lo que el §4.3 advierte. La etiqueta «OFI-L1 aproximado» se
+mantiene en todo el reporte.
+
+Y la predicción falsable del signo se sostiene sobre el observable primario:
+`E[y_mid·ε] = +0.017275 > 0`.
+
+### §5.1 — `δ = 0` gana en validación, y `δ = 0.5` (MkII) NO es el máximo
+
+| δ | M1 `ΔLL/N` | M2 `ΔLL/N` | `β` de M2 | `D` de M2 |
+|---|---|---|---|---|
+| **0.00** | **+3.173e-03** | **+7.763e-03** | −0.160 | 11.53 |
+| 0.25 | +1.641e-03 | +6.356e-03 | −0.166 | 12.70 |
+| **0.50** (MkII) | +4.244e-04 | **+4.387e-03** | −0.191 | 18.62 |
+| 1.00 | +1.677e-05 | +1.571e-03 | −0.312 | 118.07 |
+
+`δ = 0.5` da **1.77× menos** ganancia que `δ = 0` sobre el punto medio, y el orden es monótono en
+los dos observables y los dos modelos. **El volumen no ayuda: lo que informa es el signo.** La
+celda `δ = 0.5` se reporta aunque no gane, como manda el §5.1.
+
+### §5.4 — el residuo es blanco en los tres modelos
+
+| modelo | ρ₁ | ρ₂ | ρ₃ | ρ₁₀ | ρ₁₀₀ | ρ a rezago `embargo` |
+|---|---|---|---|---|---|---|
+| M0 | +0.0070 | +0.0086 | +0.0111 | +0.0145 | +0.0081 | +0.0022 |
+| M1 | −0.0017 | −0.0003 | +0.0021 | +0.0056 | +0.0037 | +0.0020 |
+| M2 | −0.0068 | −0.0053 | −0.0027 | +0.0010 | +0.0015 | +0.0019 |
+
+Todos por debajo del umbral declarado `|ρ₁| < 0.05`, así que **ningún modelo queda descalificado
+por residuo estructurado**. Nótese que M2 no deja residuo pese a `D = 11.5`.
+
+### TABLA DE MEDICIONES — v3.2
+
+**Compuerta (§1), salida literal de `--resumen`**
+
+| magnitud | valor |
+|---|---|
+| transacciones | 1 031 155 en 16.38 h → **ν = 17.49 tx/s** |
+| **tramo continuo más largo** | **1 031 155 ticks**, uno solo (corte a 300 s) |
+| hueco máximo | 8.8 s |
+| snapshots de libro | 8 097 860 (137.4 msg/s guardados) |
+| OFI-L1 | 8 097 859 valores, mediana \|e\| = 0.1290, 100 % no nulos |
+| `updateId` | **0 retrocesos, 0 repetidos** |
+| `tr_maker`, `q`, cantidades de `bookTicker` | los tres persistidos |
+| criterio en rojo | **sólo la vitalidad** (suspensión de la máquina), no la calidad del dato |
+
+**Muestra y partición**
+
+| magnitud | valor |
+|---|---|
+| observaciones tras alinear | 1 031 154 |
+| precio | 64 794.4 – 65 482.7 USD |
+| spread mediano | **0.1000 USD = 1 tick exacto** (p90 igual) |
+| `y_mid` nulos | **96.67 %** |
+| `y_tr` nulos | 72.61 % |
+| `s_eff` de Roll (limpio) | 1.1280 USD/BTC (ρ₁ = −0.4260) |
+| `c(u)` maker+maker | **26.0306 USD/BTC** ⚠ tarifas ASUMIDAS VIP 0 |
+| embargo / `K` | **2233 / 4466** ticks |
+| partición 60/20/20 | 618 692 / 203 998 / 203 998 (embargo verificado por test) |
+| bloques de bootstrap en prueba | **19** en el diseño, **18** efectivos en el paso 2 (> 15) |
+| `γ̂` de signos (entrenamiento) | **+0.7981** |
+
+**Ajuste M2 elegido (δ = 0, punto medio, entrenamiento)**
+
+```
+G0 = +0.003541    tau0 pegada al limite    beta = -0.1596    f_inf = 0    sigma = 0.2583
+```
+
+`β` y `τ₀` **no están identificados individualmente** (§5.2): `τ₀` se pega a su cota inferior y
+lo que los datos determinan es la curva `G(τ)` sobre `[0, K]`, que aquí es una potencia creciente
+sin escala.
+
+**LL/N fuera de muestra (conjunto de prueba, N = 203 998, abierto una sola vez)**
+
+| modelo | LL/N |
+|---|---|
+| M0 | −0.09905503 |
+| M1 | −0.09857358 |
+| **M2** | **−0.09150251** |
+
+`ΔLL/N`(M2 − M0) = **+7.553e-03**, IC95 bootstrap por bloques móviles
+**[+6.857e-03, +8.084e-03]**, 18 bloques efectivos.
+
+### Limitaciones de esta ejecución, declaradas
+
+1. **La verosimilitud gaussiana está mal especificada en la marginal**: `y_mid` es **96.7 % ceros
+   exactos**. Los `ΔLL/N` son comparables **entre modelos** (misma familia, misma muestra) pero su
+   nivel no es interpretable como bondad de ajuste. El preregistro no anticipó esto.
+2. **`c(u)` usa tarifas asumidas VIP 0**, criterio del §8 **no cumplido** (endpoint firmado, Modo
+   LECTURA sin credenciales). Igual que en la v3.1.
+3. **El nulo de `D` se regeneró con 24 sorteos** y el contraste de `ω_G` con 40; no más, por coste.
+4. **Un solo tramo, 16.38 h, un solo régimen de ν.** La comparación con la sesión (e) ya muestra
+   que la firma de volatilidad no es estable entre capturas.
+5. **El §7 (Test C, en qué reloj vive el propagador) NO se ejecuta**: su §7.1 exige la captura
+   completa y prohíbe expresamente correrlo con un tramo parcial.
+6. **Nada de esto dice nada sobre la hipótesis (B)** —escala de decenas de minutos—, que sigue sin
+   decidir desde la v2.2. El §11.1 lo deja escrito: el abandono estaba acotado a segundos y ni
+   siquiera se activa.
+7. **Se volvió al conjunto de prueba una segunda vez** para añadir descriptivos de `|μ̂|` (q50,
+   q99, máx y el `c(u)` equivalente). **Ningún modelo, umbral ni regla cambió**, y ninguna decisión
+   depende de esas cifras; se declara por la regla del §2.1.
+
+### Qué queda decidido y qué no
+
+**Decidido:**
+- La regla de decisión se para en el **paso 3**, y así se reporta.
+- El **piso de embargo de 1 950 se retira**: `H*_ticks` medido es 2233 y ata él.
+- **`δ = 0`**: el volumen no aporta al forzamiento; informa el signo.
+- El impacto transitorio de la v3.1 §2 **era rebote bid-ask**; sobre el punto medio no está.
+- Este tramo es **super-difusivo** con control barajado limpio.
+
+**No decidido, y por qué:**
+- **Permanente contra transitorio sigue sin resolverse.** No por falta de datos: porque el
+  estimador de `D` no tiene potencia a `γ̂ = 0.798`. Hace falta un estadístico cuyo nulo no se
+  ensanche con la memoria del flujo — que es la misma lección de la sesión (e) por cuarta vez.
+- **La forma del núcleo** (creciente contra permanente contra transitorio) queda como medición
+  puntual sin contraste con potencia detrás.
+- **El §7**, por diseño del propio preregistro.
 
 ## AUDITORÍA DE `Micelio.py` (2026-08-09) — qué pasaría si se arrancara hoy
 
