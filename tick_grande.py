@@ -129,12 +129,22 @@ def ic_memoria_larga(x: np.ndarray, z: float = 1.96) -> dict:
     var_n = float(np.exp(esc["log_var_1"] + (-esc["gamma_eff"]) * np.log(n)))
     se = np.sqrt(max(var_n, 0.0))
     med = float(np.mean(x))
-    n_eff = float(n ** esc["gamma_eff"])
     var_iid = float(np.var(x, ddof=1) / n)
+    inflacion = float(np.sqrt(var_n / max(var_iid, 1e-300)))
+    # [!] v4.1 Sec.3.2 -- LA TABLA DE LA v3.3 ERA INTERNAMENTE INCOHERENTE.
+    # `n_eff_potencia = N^gamma_eff` DESCARTA la constante `c_var` del escalado,
+    # asi que no es un numero de observaciones independientes: es `N^gamma` a
+    # secas, y no satisface `inflacion = sqrt(N/N_eff)` en ninguna fila.
+    # La definicion coherente despeja de la propia inflacion, que si usa el
+    # intercepto ajustado. Se conservan las dos para poder exhibir la
+    # discrepancia; la que se cita es `n_eff`.
+    n_eff = float(n / max(inflacion ** 2, 1e-300))
+    n_eff_potencia = float(n ** esc["gamma_eff"])
     return {"media": med, "se": se, "ic": (med - z * se, med + z * se),
             "gamma_eff": esc["gamma_eff"], "r2": esc["r2"],
-            "n": n, "n_eff": n_eff,
-            "inflacion_vs_iid": float(np.sqrt(var_n / max(var_iid, 1e-300))),
+            "n": n, "n_eff": n_eff, "n_eff_potencia": n_eff_potencia,
+            "inflacion_vs_iid": inflacion,
+            "antipersistente": bool(n_eff > n),
             "escalado": esc}
 
 
@@ -177,6 +187,127 @@ def gamma_de_signos(eps: np.ndarray, l_min: int = 10, l_max: int = 2000) -> dict
             "l_min": l_min, "l_max": l_max}
 
 
+# ---------------------------------------------------------------------------
+# v4.1 Sec.3.1 -- el TERCER estimador de gamma, en el dominio de la frecuencia
+#
+# Los dos que ya habia -- regresion log-log de C(l) y escalado de Var(media de
+# bloque) -- son los dos temporales y dan 0.5217 y 0.3539 sobre la misma serie.
+# GPH y Whittle local no comparten su modo de fallo dominante, y la razon es
+# exacta y no aproximada: en las frecuencias de Fourier `lambda_j = 2*pi*j/N`
+# con `j >= 1` se cumple `SUM_t exp(-i*lambda_j*t) = 0`, asi que el
+# periodograma es INVARIANTE a la media muestral. El sesgo por centrado que
+# deprime `C_hat(l)` a rezagos grandes no existe por esta via.
+#
+# Traduccion al vocabulario del proyecto (PREDICCION_SESGO_GAMMA_4_1.md Sec.2):
+#
+#     C(l) ~ l^(-gamma)   <=>   f(lambda) ~ lambda^(-2d)   <=>   gamma = 1 - 2d
+#
+# [!] `d = (1-gamma)/2` es la misma EXPRESION que la beta de difusividad del
+#     Sec.1. Son cantidades distintas que comparten formula. Coincidencia
+#     algebraica, no evidencia.
+# ---------------------------------------------------------------------------
+
+def d_desde_gamma(gamma: float) -> float:
+    return (1.0 - gamma) / 2.0
+
+
+def gamma_desde_d(d: float) -> float:
+    return 1.0 - 2.0 * d
+
+
+def _periodograma(x: np.ndarray, m: int):
+    """`I(lambda_j)` en las `m` frecuencias de Fourier mas bajas, `j = 1..m`."""
+    x = np.asarray(x, dtype=np.float64)
+    n = x.size
+    F = np.fft.rfft(x - x.mean())          # restar la media es irrelevante en j>=1
+    I = (np.abs(F) ** 2) / (2.0 * np.pi * n)
+    lam = 2.0 * np.pi * np.arange(F.size) / n
+    return lam[1:m + 1], I[1:m + 1]
+
+
+def _banda(n: int, m=None, alpha: float = 0.5) -> int:
+    return int(m) if m is not None else max(8, int(n ** alpha))
+
+
+def gph(x: np.ndarray, m=None, alpha: float = 0.5) -> dict:
+    """Regresion log-periodograma de Geweke & Porter-Hudak (1983).
+
+    Regresa `log I(lambda_j)` sobre `log(4 sin^2(lambda_j/2))`; la pendiente es
+    `-d`. Error estandar asintotico `pi/sqrt(24 m)`, que es el resultado
+    estandar (la varianza del residuo de log-periodograma es `pi^2/6`).
+
+    [!] SESGO PROPIO, declarado antes de medir (prediccion P3): la validez es
+    solo en `lambda -> 0`. Al ensanchar la banda entran frecuencias donde manda
+    la estructura de CORTO alcance -- y este flujo tiene `C(1) = 0.798` -- lo
+    que aplana el espectro lejos del origen, REDUCE `d_hat` y por tanto SUBE
+    `gamma_hat`. Por eso `m` se barre y no se elige.
+    """
+    x = np.asarray(x, dtype=np.float64)
+    m = _banda(x.size, m, alpha)
+    lam, I = _periodograma(x, m)
+    sel = I > 0
+    lam, I = lam[sel], I[sel]
+    X = np.log(4.0 * np.sin(lam / 2.0) ** 2)
+    A = np.column_stack([X, np.ones_like(X)])
+    coef, *_ = np.linalg.lstsq(A, np.log(I), rcond=None)
+    d = float(-coef[0])
+    se_d = float(np.pi / np.sqrt(24.0 * lam.size))
+    return {"d": d, "se_d": se_d, "gamma": gamma_desde_d(d),
+            "se_gamma": 2.0 * se_d, "m": int(lam.size), "n": int(x.size)}
+
+
+def whittle_local(x: np.ndarray, m=None, alpha: float = 0.5,
+                  d_lo: float = -0.49, d_hi: float = 0.99) -> dict:
+    """Whittle local de Robinson (1995), por busqueda en rejilla + refinado.
+
+    Minimiza  `R(d) = log( (1/m) SUM lambda_j^(2d) I_j ) - (2d/m) SUM log lambda_j`.
+    Es asintoticamente mas eficiente que GPH y no arrastra su sesgo de
+    regresion; error estandar `1/(2 sqrt(m))`.
+
+    Se resuelve por rejilla porque `R` es escalar en un intervalo acotado: es
+    mas robusto que un optimizador y elimina la dependencia del punto inicial,
+    que es justo el fallo que costo el estadistico de `omega_G` en la v3.2.
+    """
+    x = np.asarray(x, dtype=np.float64)
+    m = _banda(x.size, m, alpha)
+    lam, I = _periodograma(x, m)
+    llam = np.log(lam)
+    med_llam = float(np.mean(llam))
+
+    def R(d):
+        return float(np.log(np.mean(lam ** (2.0 * d) * I)) - 2.0 * d * med_llam)
+
+    rej = np.linspace(d_lo, d_hi, 601)
+    val = np.array([R(v) for v in rej])
+    i = int(np.argmin(val))
+    lo = rej[max(i - 1, 0)]
+    hi = rej[min(i + 1, rej.size - 1)]
+    fina = np.linspace(lo, hi, 401)
+    d = float(fina[int(np.argmin([R(v) for v in fina]))])
+    se_d = float(1.0 / (2.0 * np.sqrt(lam.size)))
+    return {"d": d, "se_d": se_d, "gamma": gamma_desde_d(d),
+            "se_gamma": 2.0 * se_d, "m": int(lam.size), "n": int(x.size),
+            "en_borde": bool(d <= d_lo + 1e-6 or d >= d_hi - 1e-6)}
+
+
+def barrido_banda(x: np.ndarray, alphas=(0.4, 0.5, 0.6, 0.7)) -> list:
+    """`gamma` por GPH y Whittle local contra el ancho de banda `m = N^alpha`.
+
+    La prediccion P3 dice que `gamma_hat` CRECE con `m`. Si se cumple con
+    fuerza, ninguno de los tres numeros es «la» gamma y la discrepancia del
+    Sec.3.1 pasa a ser ausencia de un regimen de escala unico -- que es lo
+    mismo que el Sec.3.3 pregunta por la via de la ventana de ajuste.
+    """
+    out = []
+    for a in alphas:
+        g, w = gph(x, alpha=a), whittle_local(x, alpha=a)
+        out.append({"alpha": a, "m": g["m"],
+                    "gamma_gph": g["gamma"], "se_gph": g["se_gamma"],
+                    "gamma_lw": w["gamma"], "se_lw": w["se_gamma"],
+                    "d_gph": g["d"], "d_lw": w["d"]})
+    return out
+
+
 def H_de_firma(precio: np.ndarray, n_lo: int = 256, n_hi: int = 16384) -> dict:
     rej = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384]
     filas = P.firma_en_ticks(precio, rej, solapada=False)
@@ -185,8 +316,68 @@ def H_de_firma(precio: np.ndarray, n_lo: int = 256, n_hi: int = 16384) -> dict:
 
 
 def beta_implicita(gamma: float, H: float) -> float:
-    """`beta = (2 - gamma)/2 - H`, despejada de `H = (2-gamma)/2 - beta`."""
+    """`beta = (2 - gamma)/2 - H`, despejada de `H = (2-gamma)/2 - beta`.
+
+    [!] v4.1 Sec.3.1 -- ESTO NO ES UNA TERCERA MEDICION DEL NUCLEO, y la v3.3 lo
+    presento como si lo fuera. La identidad estructural es:
+
+        beta_implicita = 0   <=>   gamma = 2 - 2H
+
+    que es exactamente la relacion entre exponente de ACF y exponente de Hurst
+    del RUIDO GAUSSIANO FRACCIONARIO. O sea que `beta` implicita mide cuanto se
+    desvia el par (signos, precio) de la relacion fGn. Si signos y precio
+    comparten el mismo proceso de memoria larga, `beta` sale 0 MECANICAMENTE,
+    sin decir nada sobre permanencia del impacto. Es un contraste de coherencia
+    entre dos exponentes, no una medida del propagador.
+    """
     return (2.0 - gamma) / 2.0 - H
+
+
+def gamma_2menos2H(H: float) -> float:
+    """La `gamma` que anula `beta` implicita. Ver la nota de `beta_implicita`."""
+    return 2.0 - 2.0 * H
+
+
+# Rejilla log para las firmas de la CURVA del Sec.3.3. Mas densa que la de
+# potencias de 2, porque una ventana estrecha como [256, 2000] solo contiene
+# tres potencias de 2 y `pendiente_en_ticks` exige tres puntos como minimo.
+REJILLA_FINA = sorted(set(int(round(v)) for v in
+                          np.logspace(np.log10(2), np.log10(32768), 46)))
+
+
+def curva_beta_implicita(eps: np.ndarray, precio: np.ndarray,
+                         ventanas=None) -> list:
+    """`gamma`, `H` y `beta` implicita AJUSTADAS EN LA MISMA VENTANA DE ESCALA.
+
+    v4.1 Sec.3.3. La v3.3 ajusto `gamma` en rezagos [10, 2000] y `H` en escalas
+    [256, 16384]: solapamiento de menos de una decada. La relacion
+    `H = (2-gamma)/2 - beta` es asintotica en un regimen de escala CONCRETO, asi
+    que combinar exponentes de ventanas distintas no la satisface por
+    construccion.
+
+    Se devuelve una CURVA, no un punto. Regla de lectura declarada: si `beta`
+    implicita se mueve mas que la distancia entre las dos hipotesis
+    (permanencia `beta = 0` contra difusividad `beta = (1-gamma)/2`) al variar
+    la ventana, el Sec.1 de la v3.3 NO ESTA MIDIENDO NADA.
+    """
+    if ventanas is None:
+        ventanas = [(16, 128), (32, 256), (64, 512), (128, 1024),
+                    (256, 2000), (256, 2048), (512, 4096), (1024, 8192),
+                    (2048, 16384), (10, 2000), (256, 16384)]
+    filas = P.firma_en_ticks(precio, REJILLA_FINA, solapada=False)
+    out = []
+    for lo, hi in ventanas:
+        g = gamma_de_signos(eps, l_min=lo, l_max=hi)
+        r = P.pendiente_en_ticks(filas, lo, hi)
+        H = r.get("H_p", float("nan"))
+        out.append({"lo": lo, "hi": hi,
+                    "gamma": g["gamma"], "r2_gamma": g["r2"],
+                    "n_pts_gamma": g["n_puntos"],
+                    "H": H, "n_pts_H": r.get("n", 0),
+                    "beta": beta_implicita(g["gamma"], H),
+                    "beta_dif": (1.0 - g["gamma"]) / 2.0,
+                    "gamma_que_anula_beta": gamma_2menos2H(H)})
+    return out
 
 
 def bootstrap_bloques_movil(x, estimador, longitud, n_sorteos, semilla=0):
@@ -427,6 +618,96 @@ def _autotest() -> int:
        abs(t65["maker_maker_pb"] - t96["maker_maker_pb"]) < 1e-9)
     ok("los USD/BTC SI dependen del precio",
        abs(t65["maker_maker"] - t96["maker_maker"]) > 10.0)
+
+    log("== 6. v4.1 Sec.3.1 -- GPH y Whittle local sobre fGn de `d` CONOCIDA (P4) ==")
+    # Para fGn de Hurst H:  C(l) ~ l^(2H-2)  ->  gamma = 2-2H  ->  d = H - 1/2.
+    # Es la MISMA verdad conocida que salvo el control 2 de la v3.3, y por la
+    # misma razon: un generador cuyo exponente se sabe de antemano.
+    rng6 = np.random.default_rng(4102)
+    peor = 0.0
+    for H_v in (0.85, 0.75, 0.65, 0.55):
+        d_v = H_v - 0.5
+        dg, dw = [], []
+        for s in range(6):
+            x = _fgn(2 ** 16, H_v, np.random.default_rng(4102 + s))
+            dg.append(gph(x)["d"])
+            dw.append(whittle_local(x)["d"])
+        dg, dw = float(np.mean(dg)), float(np.mean(dw))
+        log("     H=%.2f -> d verdadera %+.3f | GPH %+.3f (err %.3f) | LW %+.3f (err %.3f)"
+            % (H_v, d_v, dg, abs(dg - d_v), dw, abs(dw - d_v)))
+        peor = max(peor, abs(dg - d_v), abs(dw - d_v))
+    ok("P4: los dos recuperan `d` conocida con error < 0.05",
+       peor < 0.05, "peor error %.4f" % peor)
+
+    # El control NEGATIVO que hace del anterior un discriminador: sobre ruido
+    # blanco (sin memoria) los dos deben dar d = 0, o sea gamma = 1.
+    #
+    # [!] LA PRIMERA VERSION DE ESTE CONTROL FALLABA, Y EL FALLO ERA DEL UMBRAL.
+    # Puse `|d| < 0.06` sin calcular el error estandar. Con N = 2^16 y
+    # m = N^(1/2) = 256 el error estandar de GPH es `pi/sqrt(24m) = 0.0401`, asi
+    # que un sorteo suelto en 0.0684 esta a 1.7 sigma de cero: dentro del ruido
+    # muestral. Un umbral fijo por debajo del propio error del estimador
+    # rechaza estimadores correctos.
+    #
+    # La version correcta promedia `k` sorteos -- lo que encoge el error del
+    # promedio por sqrt(k) sin mover un sesgo si lo hubiera -- y contrasta
+    # contra el error estandar QUE EL PROPIO ESTIMADOR DECLARA. Asi el control
+    # es mas exigente que el original, no menos: si el estimador estuviera
+    # sesgado, promediar lo dejaria lejos de cero mientras el umbral se
+    # estrecha; y si su `se` declarado fuera optimista, tambien falla.
+    K_SORTEOS = 8
+    db, dw2 = [], []
+    for s in range(K_SORTEOS):
+        xb = np.random.default_rng(9100 + s).normal(size=2 ** 16)
+        db.append(gph(xb)["d"])
+        dw2.append(whittle_local(xb)["d"])
+    se_g = gph(np.zeros(2 ** 16) + rng6.normal(size=2 ** 16))["se_d"] / np.sqrt(K_SORTEOS)
+    se_w = whittle_local(rng6.normal(size=2 ** 16))["se_d"] / np.sqrt(K_SORTEOS)
+    mg, mw = float(np.mean(db)), float(np.mean(dw2))
+    log("     ruido blanco, media de %d sorteos:" % K_SORTEOS)
+    log("        GPH d=%+.4f  (umbral 2*se = %.4f)   sorteo suelto = %+.4f"
+        % (mg, 2 * se_g, db[0]))
+    log("        LW  d=%+.4f  (umbral 2*se = %.4f)   sorteo suelto = %+.4f"
+        % (mw, 2 * se_w, dw2[0]))
+    ok("sin memoria los dos dan d = 0 dentro de 2 errores estandar",
+       abs(mg) < 2 * se_g and abs(mw) < 2 * se_w)
+
+    # La traduccion gamma <-> d tiene que ser una involucion exacta.
+    ok("gamma_desde_d y d_desde_gamma son inversas",
+       all(abs(gamma_desde_d(d_desde_gamma(g)) - g) < 1e-12
+           for g in (0.1, 0.3539, 0.5217, 0.9)))
+
+    log("== 7. v4.1 Sec.3.1 -- la identidad beta = 0 <=> gamma = 2 - 2H ==")
+    # Sobre fGn los signos y el precio comparten proceso, asi que beta implicita
+    # debe salir ~0 MECANICAMENTE. Es la demostracion de que beta implicita no
+    # mide el nucleo: aqui no hay propagador ninguno y aun asi da cero.
+    for H_v in (0.65, 0.75):
+        ok("gamma_2menos2H(%.2f) invierte la identidad" % H_v,
+           abs(beta_implicita(gamma_2menos2H(H_v), H_v)) < 1e-12)
+    x7 = _fgn(2 ** 17, 0.70, np.random.default_rng(77))
+    g7 = whittle_local(x7)["gamma"]
+    b7 = beta_implicita(g7, 0.70)
+    log("     fGn H=0.70: gamma medida %.4f, la que anula beta es %.4f -> beta %+.4f"
+        % (g7, gamma_2menos2H(0.70), b7))
+    ok("sobre fGn puro beta implicita sale ~0 SIN que haya propagador",
+       abs(b7) < 0.06, "beta = %+.4f" % b7)
+
+    log("== 8. v4.1 Sec.3.2 -- N_eff coherente satisface inflacion = sqrt(N/N_eff) ==")
+    for etiq, serie in (("fGn H=0.80", _fgn(2 ** 15, 0.80, np.random.default_rng(8))),
+                        ("iid", np.random.default_rng(81).normal(size=2 ** 15))):
+        r = ic_memoria_larga(serie)
+        rel = abs(r["inflacion_vs_iid"] - np.sqrt(r["n"] / r["n_eff"]))
+        log("     %-11s N=%d  infl=%.3f  N_eff coherente=%.0f  N^gamma=%.0f"
+            % (etiq, r["n"], r["inflacion_vs_iid"], r["n_eff"], r["n_eff_potencia"]))
+        ok("%s: N_eff coherente satisface la identidad" % etiq, rel < 1e-9)
+    # Y el control que da contenido al Sec.3.2: sobre una serie ANTIPERSISTENTE
+    # (incrementos con rebote) la inflacion es < 1 y N_eff > N. Eso no es una
+    # «perdida»: es informacion de mas, y la tabla de la v3.3 lo escondia.
+    ra = ic_memoria_larga(np.diff(np.random.default_rng(82).normal(size=2 ** 15)))
+    log("     antipersistente: infl=%.3f  N=%d  N_eff=%.0f  -> N_eff %s N"
+        % (ra["inflacion_vs_iid"], ra["n"], ra["n_eff"],
+           ">" if ra["antipersistente"] else "<="))
+    ok("serie antipersistente da N_eff > N y queda marcada", ra["antipersistente"])
 
     log("")
     log("RESULTADO: %d fallo(s)" % fallos)

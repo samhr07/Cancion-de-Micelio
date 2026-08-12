@@ -20,6 +20,17 @@ No se abre una tercera.
 |---|---|---|
 | **v3.2** `ORDEN_TRABAJO_MIGRACION_3_2` | impacto permanente contra transitorio (M0/M1/M1′/M2) | **EJECUTADA** el 2026-08-10 sobre 1 031 155 ticks continuos. Paso 2 pasa, **paso 3 falla**: `q90(\|μ̂\|) = 11.30` contra `1.5·c(u) = 39.05`. Falta el §7 (exige captura completa) |
 | **v4.0** `ORDEN_TRABAJO_EJECUCION_4_0` | cuánto cuesta operar | `captura_estacional` corriendo, 21 días. §4.2 y §5 ya resueltos |
+| **v4.1** `ORDEN_TRABAJO_HORIZONTE_4_1` | a qué horizonte (si a alguno) la señal paga el peaje | §11, §2, §1 y **§3 ejecutados**. El §1 quedó **NO DECIDIBLE** por falta de ventanas — y el tramo de 23.33 h del 2026-08-12 lo desatasca (93/46/23 ventanas a 15/30/60 min). Quedan §6, §5, §4 |
+
+⚠ **Estado de la captura estacional (2026-08-12):** 3 537 604 transacciones y 26 860 269 snapshots
+de libro, **0 partes ilegibles**, span 57.25 h en cuatro tramos. El más largo es de **23.33 h
+continuas** (1 829 242 ticks, ν = 21.78 tx/s). Cobertura 2 665 min = 1.85 días equivalentes, 120
+de 168 casillas vacías: **su compuerta sigue sin pasar**. Tres causas de corte identificadas y
+todas distintas de la batería del 2026-08-10: (1) `captura_v33` **terminó sola** sus 60 h y dejó
+de refrescar su marca de vitalidad, (2) la **guarda `--sin-guarda-v33` del estacional no distingue
+«v33 terminó» de «v33 murió»** y se paró 35 min después, (3) **reinicio forzado por Windows
+Update** (`TrustedInstaller`, 02:55). Relanzada con `--sin-guarda-v33` y con
+`NoAutoRebootWithLoggedOnUsers = 1`.
 
 ⚠ **Lo que la v3.2 dejó sin decidir NO es por falta de datos**: el estimador de `D` **no tiene
 potencia** a la autocorrelación de signos real (`γ̂ = 0.798`) — bajo `D = 1` verdadero devuelve
@@ -32,12 +43,29 @@ mirar dato) y `PREREGISTRO_4_0.md` (1 enmienda). Los dos llevan registro de enmi
 antes/después y constancia de si había resultado a la vista.
 
 **Suites:** `tests_v13.py` 56/56 · `ssa.py` 11/11 · `migracion_v32.py` **20/20** · `cola.py` 9/9 ·
-`difusividad.py` 5/5 · `tick_grande.py` **19/19** · `horizonte.py` **14/14**.
+`difusividad.py` 5/5 · `tick_grande.py` **28/28** · `horizonte.py` **14/14**.
 
 ⚠ **Retractaciones vigentes — no citar lo retirado:**
+- ⚠ **No existe «la» `γ` de este mercado** (v4.1 §3.1, 2026-08-12). Estimada por GPH y Whittle
+  local, `γ̂` recorre de **+0.69 a −0.26** según el ancho de banda `m = N^α`, en las dos capturas.
+  El mismo barrido sobre fGn de `γ` conocida es **plano** (salto máximo 0.06–0.13 contra 0.45–0.48
+  sobre el dato), así que el fallo es de la serie: **el flujo de órdenes no tiene un régimen de
+  escala único.** Cualquier fórmula que use `γ` hereda esa indeterminación.
+- ⚠ **`β` implícita NO mide el núcleo, y en el §1 de la v3.3 no medía nada** (v4.1 §3.3). Es la
+  identidad `β = 0 ⟺ γ = 2−2H` del ruido gaussiano fraccionario: un contraste de coherencia entre
+  dos exponentes. Ajustando `γ` y `H` **en la misma ventana**, `β` recorre 0.40 (v33) y 0.49
+  (estacional) contra una distancia entre hipótesis de 0.21 y 0.16. El **+0.148** que la v3.3
+  publicó es un punto arbitrario de esa curva.
 - **El impacto «transitorio» de la v3.1 §2 era el REBOTE BID-ASK** (sesión 2026-08-10). Sobre el
   precio de transacción `D = 0.107`; sobre el punto medio, que no tiene rebote, `D = 11.53` y el
   signo se invierte. El spread mediano de la captura es 1 tick exacto.
+- ⚠ **`D = 11.53` NO es «núcleo creciente medido»** (v4.1 §3.4, sesión 2026-08-12). Se cita como
+  **«ajuste no identificado en el régimen `τ₀` en cota»** y nada más. `β = −0.160` con `τ₀` pegada
+  a su cota inferior es firma de **mala especificación del estimador**: `β` se reporta en la
+  literatura en `(0, 1)`, y un núcleo que crece sin cota sobre `[0, K]` implica impacto de mercado
+  creciente indefinidamente, que es económicamente imposible (arbitraje ilimitado). El propio
+  §5.2 de la v3.2 ya decía que `β` y `τ₀` no están identificados por separado. **No se abre un
+  quinto estadístico para arreglarlo: se degrada la afirmación.**
 - **La difusividad de la sesión (e) NO replica.** Sobre `captura_v33` la pendiente de la firma en
   ticks es **+0.091** (`H_p = 0.591`) con control barajado plano (−0.012), contra el +0.007 que
   dio `captura_larga`. **Este tramo es super-difusivo.**
@@ -142,9 +170,13 @@ corregir el filtro 90 veces con la misma medición, y eso está corregido en ori
   disjuntos, con nulo por desplazamiento circular y por barajado.
 - `horizonte.py` — **v4.1**: `H_p` en los dos relojes con control barajado, `σ₁` en pb, y las
   dos curvas del §1 (`R²` medido contra `R²` requerido). `--autotest` → **14/14**.
-- `tick_grande.py` — **v3.3**: `γ` como exponente (no `C(1)`), `H`, `β` implícita, `η̂` de
-  Robert-Rosenbaum, costes en pb y `N_eff` bajo memoria larga. `--autotest` → **19/19**.
-  **No se importa desde `Micelio.py`.**
+- `tick_grande.py` — **v3.3 + v4.1 §3**: `γ` como exponente (no `C(1)`), `H`, `β` implícita, `η̂`
+  de Robert-Rosenbaum, costes en pb y `N_eff` bajo memoria larga. La v4.1 añade los dos
+  estimadores **espectrales** de `γ` (`gph`, `whittle_local`), el barrido de banda, `N_eff`
+  coherente y `curva_beta_implicita`. `--autotest` → **28/28**. **No se importa desde `Micelio.py`.**
+- `correcciones_v41.py` — **v4.1 §3**: el ejecutor de las correcciones a la v3.3, sobre las **dos**
+  series (entrenamiento de `captura_v33` y el tramo continuo de 23.33 h de `captura_estacional`).
+  `PREDICCION_SESGO_GAMMA_4_1.md` lleva las cuatro predicciones congeladas antes de medir.
 - `experimento_v32.py` — **v3.2**: **el ejecutor del preregistro**. Etapas `muestra`, `fuga`,
   `delta`, `A`, `osc`, `B`, `decision`; abre el conjunto de prueba sólo en la última. `log()`
   transcribe a ASCII por sí sola, para que la consola cp1252 deje de ser una regla que recordar.
@@ -2598,7 +2630,7 @@ columnas**, con la misma muestra y la misma malla:
 
 | observable | `β` | `τ₀` | `D = G(K)/G(0)` | lectura |
 |---|---|---|---|---|
-| **punto medio** (primario) | **−0.160** | pegada al límite | **11.53** | núcleo **creciente** |
+| **punto medio** (primario) | **−0.160** | pegada al límite | **11.53** | ~~núcleo creciente~~ → **ajuste no identificado** (v4.1 §3.4) |
 | precio de transacción (control) | **+4.69** | pegada al límite | **0.107** | decae al 11 % |
 
 **El impacto «transitorio» que la v3.1 §2 midió sobre el precio de transacción era el rebote
@@ -2612,6 +2644,12 @@ mercado y era del instrumento. Aquí el preregistro lo cazó porque obligaba a l
 columnas siempre**.
 
 ### ⚠ `D > 1` no es «permanente»: la dicotomía del §5.2 no contiene el resultado
+
+⚠ **RECLASIFICADO por la v4.1 §3.4 (2026-08-12).** Todo este apartado se leyó en su día como
+«núcleo creciente medido». **No lo es.** `β < 0` con `τ₀` en cota es firma de mala especificación
+del estimador, no del mercado, y la afirmación queda degradada a **«ajuste no identificado en el
+régimen `τ₀` en cota»**. Lo que sigue se conserva como registro de lo que se midió y de por qué
+la regla de una cola del §5.2 no contenía el caso — no como evidencia sobre la forma del núcleo.
 
 `D = 11.53` con `β < 0` significa núcleo que **crece** con el rezago: ni permanente (`D = 1`) ni
 transitorio (`D < 1`). El perfil lo confirma: `D(K/4) = 9.24 → D(K/2) = 10.32 → D(K) = 11.53`.
@@ -2670,8 +2708,11 @@ H_p                      real  0.591      barajado  0.488     (0.5 = difusivo)
 microestructura el precio es difusivo» con pendiente +0.007 sobre `captura_larga` (ν = 39 tx/s);
 sobre `captura_v33` (ν = 17.5 tx/s) la pendiente es **+0.091**, trece veces mayor y con el control
 limpio. **La difusividad no es una propiedad estable del mercado**, o al menos no lo es entre estas
-dos capturas. Y encaja por dos vías con el núcleo creciente: un `G` que crece y un `H_p > 0.5` son
-el mismo hecho medido desde dos sitios.
+dos capturas. ~~Y encaja por dos vías con el núcleo creciente: un `G` que crece y un `H_p > 0.5`
+son el mismo hecho medido desde dos sitios.~~ ⚠ **Esa última frase se retira** (v4.1, 2026-08-12):
+el «núcleo creciente» está reclasificado como ajuste no identificado (§3.4) y `H_p = 0.591` no
+sobrevivió al reloj de pared (§2, banda [0.371, 0.552]). Dos cifras retiradas no se corroboran
+entre sí.
 
 ⚠ **No hay plateau, y eso obligó a resolver una ambigüedad del preregistro.** El §2.2 escribe
 `H*_ticks = (c/σ_tick)²` sin decir **cuál** `σ_tick`. Esa fórmula es la solución de `σ(H) = c`
@@ -3240,6 +3281,210 @@ control un discriminador y no un adorno.
   `β = 0 ⟺ γ = 2−2H`, y reclasificar `D = 11.53`.
 - **§6** (micro-precio): sólo la fracción de ceros contra el 96.67 %.
 - **§5** (`C_respaldo`) y **§4** (`η̂` con barrido de colapso), en ese orden.
+
+## Sesión 2026-08-12 — v4.1 §3. No hay «la» `γ`, y `β` implícita no mide nada
+
+Ejecuta el §3 completo de `ORDEN_TRABAJO_HORIZONTE_4_1.md`. **Ningún quinto estadístico**, como
+manda su §7; el §3.4 **degrada** una afirmación en vez de intentar mejorarla. `Micelio.py` sin
+cambios. Módulos: `tick_grande.py` pasa a **28 controles**, ejecutor nuevo `correcciones_v41.py`.
+
+Todo se corre sobre **dos series**, que es lo que la v3.3 no pudo hacer:
+
+| serie | `N` | `ν` | duración |
+|---|---|---|---|
+| `captura_v33` entrenamiento — la que la v3.3 midió | 618 692 | 17.49 tx/s | — |
+| **`captura_estacional`, tramo continuo más largo** — réplica independiente | **1 829 242** | 21.78 tx/s | **23.33 h** |
+
+### ⚠ LO PRIMERO: la orden esperaba que el §3 fuera cosmético. No lo es
+
+El §3 se escribió como «correcciones baratas, ninguna cambia un veredicto». Dos de las cuatro
+**retiran una cantidad del vocabulario del proyecto**, y las dos replican en la captura nueva.
+
+### §3.1 — El tercer estimador no arbitra entre los dos primeros: los explica
+
+`gph()` y `whittle_local()` en `tick_grande.py`, con la traducción `γ = 1 − 2d` escrita en
+`PREDICCION_SESGO_GAMMA_4_1.md` (commit `f1fd84f`, **congelado antes de calcular ninguna cifra**).
+
+| método | dominio | `γ` en `captura_v33` | `γ` en `estacional` |
+|---|---|---|---|
+| A — regresión log-log de `C(ℓ)`, `[10, 2000]` | tiempo | +0.5217 | +0.6336 |
+| B — escalado de `Var(media de bloque)` | tiempo | +0.3539 | +0.4201 |
+| **C1 — GPH**, `m = N^0.5` | frecuencia | **+0.4187** ±0.046 | **+0.6263** ±0.035 |
+| **C2 — Whittle local**, `m = N^0.5` | frecuencia | **+0.4216** ±0.036 | **+0.6482** ±0.027 |
+| `C(1)` (lo que la v3.2 llamó `γ̂`) | — | +0.7981 | +0.8093 |
+
+**Las cuatro predicciones congeladas, y cómo salieron:**
+
+| | predicción | `captura_v33` | `estacional` |
+|---|---|---|---|
+| **P1** | `γ_espectral < γ_A` (sesgo por centrado con la media muestral) | **se cumple** | **REFUTADA** (LW 0.6482 > 0.6336) |
+| **P2** | `γ_espectral ∈ [0.28, 0.46]`, o sea más cerca de B | **se cumple** | **REFUTADA** (0.63 y 0.65) |
+| **P3** | `γ̂` **crece** con la banda `m` | **REFUTADA** | **REFUTADA** |
+| **P4** | los dos recuperan `d` conocida sobre fGn con error < 0.05 | **se cumple** (peor 0.0117) | ídem |
+
+**P1 y P2 no replican.** Sobre la captura nueva los dos estimadores espectrales caen **encima de
+A**, no de B. La hipótesis de la orden —«0.5217 es el sesgado y 0.3539 el más cercano»— **no
+recibe apoyo**: se cumple en un tramo y falla en el otro.
+
+⚠ **P3 falló, y mi mecanismo declarado estaba al revés.** Escribí que la estructura de corto
+alcance «aplana el espectro lejos del origen», lo que reduciría `d̂` y subiría `γ̂`. Es falso para
+autocorrelación **positiva**: un proceso con `C(1) = 0.80` tiene espectro que **decae** al alejarse
+del origen, así que ampliar la banda **empina** la pendiente, sube `d̂` y **baja** `γ̂`. Eso es lo
+que se midió, en las dos series y en los dos estimadores.
+
+### ⚠ Y la consecuencia de P3 es el hallazgo de la sesión: **no existe «la» `γ`**
+
+| `α` (`m = N^α`) | `m` | GPH v33 | LW v33 | GPH estacional | LW estacional |
+|---|---|---|---|---|---|
+| 0.4 | 207 / 319 | +0.5116 | +0.5440 | +0.6513 | +0.6917 |
+| 0.5 | 786 / 1 352 | +0.4187 | +0.4216 | +0.6263 | +0.6482 |
+| 0.6 | 2 984 / 5 719 | +0.0484 | −0.0258 | +0.2646 | +0.2240 |
+| 0.7 | 11 324 / 24 187 | **−0.1796** | **−0.2441** | **−0.1653** | **−0.2577** |
+
+`γ̂` recorre **0.69 a 0.95** según la banda, sobre una disputa cuyo rango entero es 0.17. Y `γ < 0`
+significa `d > 0.5`, o sea **fuera del rango de estacionariedad** que los propios estimadores
+suponen.
+
+**El control que decide cómo se lee esto**, y sin él el resultado sería ambiguo: el **mismo
+barrido sobre fGn de `γ` conocida (0.50) y la misma longitud**:
+
+| | salto máximo entre bandas |
+|---|---|
+| fGn, verdad conocida (v33 / estacional) | **0.1274 / 0.0578** |
+| **dato real** | **0.4474 / 0.4817** |
+| razón | **3.5× / 8.3×** |
+
+Sobre verdad conocida el barrido es **plano** (0.44–0.56 en las cuatro bandas); sobre el dato se
+derrumba. **El fallo es de la serie, no del estimador: el flujo de órdenes de este mercado no
+tiene un régimen de escala único.** La discrepancia del §3.1 nunca fue un problema de estimador.
+
+### §3.2 — `N_eff` coherente, y las tres consecuencias
+
+`inflación = √(N/N_eff)` debe satisfacerse; `N^γ_eff` descarta la constante del escalado y no la
+satisface en ninguna fila. Corregido en `ic_memoria_larga`, que ahora devuelve las dos.
+
+| serie | `N` | inflación | **`N_eff` = `N`/infl²** | `N^γ` (v3.3) |
+|---|---|---|---|---|
+| `ΔLL` de prueba (v3.3, aritmética) | 199 532 | 3.15 | **20 109** | 8 574 |
+| **signos `ε`** v33 | 618 692 | 115.40 | **46.5** | 112 |
+| **signos `ε`** estacional | 1 829 242 | 115.99 | **136.0** | 427 |
+| incrementos de precio v33 | 618 691 | **0.71** | **1 238 283** | 99 510 |
+| incrementos de precio estacional | 1 829 241 | 1.14 | 1 415 781 | 167 153 |
+
+1. **Signos: `N_eff = 46.5`, no 112.** El diagnóstico de la v3.3 sobre por qué murieron cuatro
+   estadísticos es **más fuerte** de lo que se reportó, no más débil. Y la **inflación es
+   notablemente estable entre capturas** (115.40 contra 115.99) pese a triplicarse `N`.
+2. ⚠ **La antipersistencia NO replica.** En v33 `infl = 0.71 < 1` y `N_eff > N`, que es la firma
+   del rebote bid-ask (`ρ₁(retornos) = −0.216`, v3.0) y que la tabla de la v3.3 escondía tras una
+   columna de «pérdida». En el tramo estacional `infl = 1.14 > 1`: pérdida de 1.3×, **no**
+   antipersistencia. Es otra cantidad que cambia entre tramos.
+3. **La fila de `ΔLL` no se recalculó**: sale por aritmética sobre la inflación 3.15 ya publicada.
+   El §7 prohíbe reabrir el conjunto de prueba y aquí no hace falta. El paso 2 sigue pasando.
+
+⚠ **Regla del proyecto, escrita:** `Var(media) ∝ N^(−γ)` es el resultado de Beran **para la media
+muestral**. No se transporta a estimadores de exponentes, a pendientes de regresión ni a razones
+de verosimilitud. **`N_eff` se mide por estadístico, midiendo el escalado de ese estadístico. No
+se importa de la serie de signos.**
+
+### ⚠ §3.3 — `β` implícita se mueve más que la distancia entre las hipótesis. En las dos series
+
+La identidad que el §3.1 obliga a escribir, y que cambia cómo se lee todo el §1 de la v3.3:
+
+```
+beta_implicita = (2 - gamma)/2 - H = 0   <=>   gamma = 2 - 2H
+```
+
+que es exactamente la relación entre exponente de ACF y exponente de Hurst del **ruido gaussiano
+fraccionario**. **`β` implícita no mide el núcleo**: mide cuánto se desvía el par (signos, precio)
+de la relación fGn. Si los dos comparten proceso de memoria larga, sale 0 **mecánicamente**. El
+control 7 de `tick_grande.py` lo demuestra sobre fGn puro —donde no hay propagador ninguno— y da
+`β = −0.039`.
+
+`γ` y `H` **ajustadas en la misma ventana de escala** (la v3.3 las tomó de ventanas con menos de
+una década de solapamiento):
+
+| ventana [ticks] | `γ` v33 | `H` v33 | **`β` v33** | `γ` est. | `H` est. | **`β` est.** |
+|---|---|---|---|---|---|---|
+| [16, 128] | +0.263 | 0.498 | **+0.370** | +0.322 | 0.603 | **+0.236** |
+| [32, 256] | +0.433 | 0.584 | +0.200 | +0.512 | 0.679 | +0.065 |
+| [64, 512] | +0.644 | 0.656 | +0.022 | +0.789 | 0.714 | −0.108 |
+| [128, 1024] | +0.789 | 0.639 | −0.033 | +1.067 | 0.665 | **−0.198** |
+| **[256, 2000]** común | +0.726 | 0.606 | **+0.031** | +0.839 | 0.588 | **−0.007** |
+| [512, 4096] | +0.653 | 0.591 | +0.083 | +0.776 | 0.558 | +0.054 |
+| [1024, 8192] | +0.536 | 0.576 | +0.156 | +0.485 | 0.528 | +0.229 |
+| [2048, 16384] | +0.570 | 0.623 | +0.092 | +0.487 | 0.467 | **+0.290** |
+| *mezcla de la v3.3* | +0.522 | 0.598 | *+0.142* | +0.634 | 0.537 | *+0.146* |
+
+```
+                       captura_v33        estacional
+recorrido de beta        0.4030             0.4881
+distancia entre hipotesis 0.2050            0.1583      (0 contra beta_dif medio)
+```
+
+**En las dos series el recorrido dobla o triplica la distancia entre las hipótesis.** La regla de
+lectura del §3.3, escrita antes: *«si `β` implícita se mueve más que la distancia entre las dos
+hipótesis al variar la ventana, el §1 de la v3.3 no está midiendo nada y así se reporta.»*
+
+**Se reporta: el §1 de la v3.3 no está midiendo nada.** La `β` implícita de +0.148 que aquella
+sesión publicó es un punto arbitrario de una curva que cruza el cero y llega a ±0.29 sin salir
+del rango de escalas del propio experimento.
+
+Nótese además que en la ventana común `β` sale ≈ 0 en las dos series (+0.031 y −0.007) — que es
+justo lo que la identidad fGn predice **sin que haya propagador**, así que ni siquiera eso apoya
+la permanencia.
+
+### §3.4 — `D = 11.53` reclasificado en los tres documentos donde se citaba
+
+`β = −0.160` con `τ₀` pegada a su cota es firma de **mala especificación del estimador**: `β` se
+reporta en la literatura en `(0, 1)`, y un núcleo que crece sin cota sobre `[0, K]` implica
+impacto de mercado creciente indefinidamente, económicamente imposible (arbitraje ilimitado). El
+propio §5.2 de la v3.2 ya decía que `β` y `τ₀` no están identificados por separado.
+
+`D = 11.53` deja de citarse como «núcleo creciente medido» y pasa a **«ajuste no identificado en
+el régimen `τ₀` en cota»**. Aplicado en `CLAUDE.md` (retractaciones, tabla de la v3.2, apartado
+`D > 1`, y la frase de la firma de volatilidad que lo usaba como corroboración) y en
+`TRASPASO_SESION_2026-08-10.md`. **No se abre un quinto estadístico.**
+
+### Controles nuevos (`python tick_grande.py --autotest` → 28/28)
+
+| # | control | resultado |
+|---|---|---|
+| 6 | GPH y LW recuperan `d` conocida sobre fGn (`H` = 0.85…0.55) | peor error **0.0117** |
+| 6b | sin memoria, `d = 0` dentro de 2 errores estándar | GPH −0.0003, LW −0.0064 |
+| 7 | `β = 0 ⟺ γ = 2−2H`, y sobre fGn puro `β ≈ 0` sin propagador | **−0.0392** |
+| 8 | `N_eff` coherente satisface `infl = √(N/N_eff)`; serie antipersistente marcada | exacto a 1e−9 |
+
+⚠ **Un control mío falló y el fallo era del umbral.** Puse `|d| < 0.06` sobre ruido blanco sin
+calcular el error estándar; con `N = 2^16` y `m = 256` el error estándar de GPH es **0.0401**, así
+que un sorteo suelto en 0.0684 está a 1.7 σ de cero. **Un umbral por debajo del propio error del
+estimador rechaza estimadores correctos.** Sustituido por media de 8 sorteos contra `2·se/√k`,
+que es **más exigente** que el original: si el estimador estuviera sesgado, promediar lo dejaría
+lejos de cero mientras el umbral se estrecha. Es el tercer umbral de este proyecto puesto «a ojo»
+que hubo que medir (los anteriores: `UMBRAL_TAYLOR_JACOBIANO` en la v2.1 y la compuerta de `R²`
+en la v3.3).
+
+### Qué queda de la v4.1 tras el §3
+
+**Hecho:** §11, §2, §1 (sesión anterior) y **§3 completo**, con los cinco criterios de aceptación
+del §9 cubiertos y replicado en una segunda captura.
+
+**Lo que el §3 retira del vocabulario:**
+- **`γ` no es un número de este mercado.** Depende de la banda por 0.7–0.95. Cualquier fórmula que
+  la use —incluida `H = (2−γ)/2 − β`— hereda esa indeterminación.
+- **`β` implícita no es una medición del núcleo.** Es un contraste de coherencia con fGn, y en el
+  rango de escalas del experimento no discrimina.
+- **`D = 11.53` no describe la forma del núcleo.**
+
+**Pendiente, en el orden del §10:** §6 (micro-precio, sólo la fracción de ceros es barato), §5
+(`C_respaldo`, después de que el §1 diga a qué horizonte), §4 (`η̂` con barrido de umbral de
+colapso — deuda de reporte, no decisión).
+
+⚠ **Y lo que de verdad desatasca el proyecto:** el tramo de **23.33 h continuas** da **93
+ventanas a 15 min, 46 a 30 min y 23 a 1 h**, contra las 8/4/2 con las que el §1 se declaró NO
+DECIDIBLE. La banda donde el `R²` requerido baja a 1.9–5.5 % ya tiene potencia. **Rehacer el §1
+sobre ese tramo es lo siguiente.**
+
+---
 
 ## AUDITORÍA DE `Micelio.py` (2026-08-09) — qué pasaría si se arrancara hoy
 
