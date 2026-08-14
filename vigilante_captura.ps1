@@ -38,6 +38,43 @@ function Registro($msg) {
         Out-File -FilePath $reg -Append -Encoding utf8
 }
 
+# --- 0. Respaldo incremental, MEJOR ESFUERZO --------------------------------
+# Va primero y entero dentro de try/catch: si el respaldo falla, el vigilante
+# tiene que seguir haciendo su trabajo. Un respaldo caido es una molestia; una
+# captura caida son horas de mercado.
+#
+# `/XO` copia solo lo que no esta ya, y los parquet no se reescriben nunca, asi
+# que en regimen son ~2 archivos por pasada. Se estrangula a una vez por hora
+# para no releer 1900 nombres de archivo cada 5 min.
+#
+# [!] EL RESPALDO ESTA EN EL MISMO DISCO FISICO. Protege contra borrado
+#     accidental, contra un script mio que la lie y contra una escritura a
+#     medias; NO protege contra fallo del SSD. Eso exige un medio aparte y no
+#     hay ninguno en esta maquina.
+try {
+    $marcaResp = Join-Path $dir "telemetria\ultimo_respaldo.txt"
+    $toca = $true
+    if (Test-Path $marcaResp) {
+        $tr = [datetime]::MinValue
+        if ([datetime]::TryParse((Get-Content $marcaResp -Raw).Trim(), [ref]$tr)) {
+            $toca = ((Get-Date) - $tr).TotalMinutes -ge 60
+        }
+    }
+    if ($toca) {
+        $null = robocopy (Join-Path $dir "telemetria") `
+                    "C:\Users\Usuario\respaldo_micelio\telemetria" `
+                    /E /XO /R:1 /W:2 /NFL /NDL /NP /NJH /NJS /MT:4
+        # robocopy devuelve 0-7 en exito (1 = se copio algo). >= 8 es error.
+        if ($LASTEXITCODE -ge 8) {
+            Registro ("RESPALDO: robocopy devolvio {0}" -f $LASTEXITCODE)
+        } else {
+            (Get-Date).ToString("o") | Out-File -FilePath $marcaResp -Encoding ascii
+        }
+    }
+} catch {
+    Registro ("RESPALDO fallido (no bloquea): {0}" -f $_.Exception.Message)
+}
+
 # --- 1. El dato manda -------------------------------------------------------
 $ult = Get-ChildItem $destino -Recurse -Filter *.parquet -ErrorAction SilentlyContinue |
        Sort-Object LastWriteTime -Descending | Select-Object -First 1
