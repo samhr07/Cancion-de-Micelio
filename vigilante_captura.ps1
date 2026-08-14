@@ -38,41 +38,66 @@ function Registro($msg) {
         Out-File -FilePath $reg -Append -Encoding utf8
 }
 
-# --- 0. Respaldo incremental, MEJOR ESFUERZO --------------------------------
-# Va primero y entero dentro de try/catch: si el respaldo falla, el vigilante
+# --- 0. Respaldo incremental a DOS destinos, MEJOR ESFUERZO -----------------
+# Va primero y entero dentro de try/catch: si un respaldo falla, el vigilante
 # tiene que seguir haciendo su trabajo. Un respaldo caido es una molestia; una
 # captura caida son horas de mercado.
 #
-# `/XO` copia solo lo que no esta ya, y los parquet no se reescriben nunca, asi
-# que en regimen son ~2 archivos por pasada. Se estrangula a una vez por hora
-# para no releer 1900 nombres de archivo cada 5 min.
+#   D:\Micelio                              proyecto ENTERO, incluido .git.
+#                                           Otro medio fisico: es el unico que
+#                                           sobrevive a que muera el SSD.
+#   C:\Users\Usuario\respaldo_micelio       solo telemetria, mismo disco. Cubre
+#                                           el hueco del anterior: que la USB
+#                                           este desconectada o se pierda.
 #
-# [!] EL RESPALDO ESTA EN EL MISMO DISCO FISICO. Protege contra borrado
-#     accidental, contra un script mio que la lie y contra una escritura a
-#     medias; NO protege contra fallo del SSD. Eso exige un medio aparte y no
-#     hay ninguno en esta maquina.
-try {
-    $marcaResp = Join-Path $dir "telemetria\ultimo_respaldo.txt"
-    $toca = $true
-    if (Test-Path $marcaResp) {
-        $tr = [datetime]::MinValue
-        if ([datetime]::TryParse((Get-Content $marcaResp -Raw).Trim(), [ref]$tr)) {
-            $toca = ((Get-Date) - $tr).TotalMinutes -ge 60
+# `/XO` copia solo lo que no esta ya, y los parquet no se reescriben nunca, asi
+# que en regimen son un pu?ado de archivos por pasada. Estrangulado a una vez
+# por hora y por destino, para no releer 2500 nombres cada 5 min.
+#
+# [!] `/FFT` ES OBLIGATORIO HACIA LA USB. Esta formateada en FAT32, que marca
+#     tiempos con resolucion de 2 s, contra los 100 ns de NTFS. Sin `/FFT` cada
+#     archivo parece distinto por esa diferencia espuria y robocopy vuelve a
+#     copiar 1 GB ENTERO cada hora, sobre una USB que da 226 MB/min.
+$destinos = @(
+    @{ nombre = "USB";  origen = $dir;                          destino = "D:\Micelio";
+       marca = "ultimo_respaldo_usb.txt";  fat = $true;  raiz = "D:\" },
+    @{ nombre = "disco"; origen = (Join-Path $dir "telemetria"); destino = "C:\Users\Usuario\respaldo_micelio\telemetria";
+       marca = "ultimo_respaldo_disco.txt"; fat = $false; raiz = "C:\" }
+)
+
+foreach ($dd in $destinos) {
+    try {
+        $marcaResp = Join-Path $dir ("telemetria\" + $dd.marca)
+        $toca = $true
+        if (Test-Path $marcaResp) {
+            $tr = [datetime]::MinValue
+            if ([datetime]::TryParse((Get-Content $marcaResp -Raw).Trim(), [ref]$tr)) {
+                $toca = ((Get-Date) - $tr).TotalMinutes -ge 60
+            }
         }
-    }
-    if ($toca) {
-        $null = robocopy (Join-Path $dir "telemetria") `
-                    "C:\Users\Usuario\respaldo_micelio\telemetria" `
-                    /E /XO /R:1 /W:2 /NFL /NDL /NP /NJH /NJS /MT:4
+        if (-not $toca) { continue }
+
+        # La USB puede no estar puesta. Se comprueba ANTES de invocar robocopy:
+        # si no esta, se anota y se sigue -- no es un fallo del vigilante.
+        if (-not (Test-Path $dd.raiz)) {
+            Registro ("RESPALDO {0}: {1} no esta disponible. Se omite." -f $dd.nombre, $dd.raiz)
+            (Get-Date).ToString("o") | Out-File -FilePath $marcaResp -Encoding ascii
+            continue
+        }
+
+        $extra = @("/E", "/XO", "/R:1", "/W:2", "/XD", "__pycache__",
+                   "/NFL", "/NDL", "/NP", "/NJH", "/NJS", "/MT:4")
+        if ($dd.fat) { $extra += "/FFT" }
+        $null = robocopy $dd.origen $dd.destino @extra
         # robocopy devuelve 0-7 en exito (1 = se copio algo). >= 8 es error.
         if ($LASTEXITCODE -ge 8) {
-            Registro ("RESPALDO: robocopy devolvio {0}" -f $LASTEXITCODE)
+            Registro ("RESPALDO {0}: robocopy devolvio {1}" -f $dd.nombre, $LASTEXITCODE)
         } else {
             (Get-Date).ToString("o") | Out-File -FilePath $marcaResp -Encoding ascii
         }
+    } catch {
+        Registro ("RESPALDO {0} fallido (no bloquea): {1}" -f $dd.nombre, $_.Exception.Message)
     }
-} catch {
-    Registro ("RESPALDO fallido (no bloquea): {0}" -f $_.Exception.Message)
 }
 
 # --- 1. El dato manda -------------------------------------------------------
