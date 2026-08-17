@@ -79,8 +79,21 @@ foreach ($dd in $destinos) {
 
         # La USB puede no estar puesta. Se comprueba ANTES de invocar robocopy:
         # si no esta, se anota y se sigue -- no es un fallo del vigilante.
-        if (-not (Test-Path $dd.raiz)) {
-            Registro ("RESPALDO {0}: {1} no esta disponible. Se omite." -f $dd.nombre, $dd.raiz)
+        #
+        # [!] SE ANOTA EL CAMBIO DE ESTADO, NO CADA PASADA. La primera version
+        #     escribia una linea por hora, y la USB estuvo 2.7 dias fuera: 63
+        #     lineas identicas que nadie leyo. Un log que repite lo mismo deja
+        #     de ser un log. Ahora solo entra la TRANSICION (se fue / volvio),
+        #     con lo que el archivo pasa a ser un registro de sucesos.
+        $estadoPrev = Join-Path $dir ("telemetria\_disp_" + $dd.nombre + ".txt")
+        $hay = Test-Path $dd.raiz
+        $antes = if (Test-Path $estadoPrev) { (Get-Content $estadoPrev -Raw).Trim() } else { "" }
+        if ("$hay" -ne $antes) {
+            Registro ("RESPALDO {0}: {1} {2}" -f $dd.nombre, $dd.raiz,
+                      $(if ($hay) { "REAPARECIO. Se sincroniza." } else { "DESAPARECIO. Respaldo detenido hasta que vuelva." }))
+            "$hay" | Out-File -FilePath $estadoPrev -Encoding ascii
+        }
+        if (-not $hay) {
             (Get-Date).ToString("o") | Out-File -FilePath $marcaResp -Encoding ascii
             continue
         }
@@ -103,12 +116,33 @@ foreach ($dd in $destinos) {
 # --- 1. El dato manda -------------------------------------------------------
 $ult = Get-ChildItem $destino -Recurse -Filter *.parquet -ErrorAction SilentlyContinue |
        Sort-Object LastWriteTime -Descending | Select-Object -First 1
-if ($ult) {
-    $edad = ((Get-Date) - $ult.LastWriteTime).TotalMinutes
-    if ($edad -lt $MIN_SIN_VOLCAR) { exit 0 }   # sano: ni se registra, para no llenar el log
-} else {
-    $edad = 9999
-}
+$edad = if ($ult) { ((Get-Date) - $ult.LastWriteTime).TotalMinutes } else { 9999 }
+
+# --- 1.bis. Parte de estado, de un vistazo ---------------------------------
+# El fallo de este proyecto nunca ha sido no detectar; ha sido detectar y que
+# el aviso se quede en un archivo que nadie abre. Este parte se reescribe en
+# CADA pasada, asi que su propia fecha ya dice si el vigilante vive.
+try {
+    $lin = @("PARTE DEL VIGILANTE -- " + (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), "")
+    $lin += "  captura : ultimo volcado hace {0,6:N1} min   {1}" -f $edad,
+            $(if ($edad -lt $MIN_SIN_VOLCAR) { "OK" } else { "*** SIN VOLCAR: se repone ***" })
+    foreach ($dd in $destinos) {
+        $m = Join-Path $dir ("telemetria\" + $dd.marca)
+        $txt = "nunca"
+        if (Test-Path $m) {
+            $tt = [datetime]::MinValue
+            if ([datetime]::TryParse((Get-Content $m -Raw).Trim(), [ref]$tt)) {
+                $h = ((Get-Date) - $tt).TotalHours
+                $txt = "hace {0,5:N1} h" -f $h
+            }
+        }
+        $pres = if (Test-Path $dd.raiz) { "presente" } else { "*** AUSENTE ***" }
+        $lin += "  resp. {0,-6}: {1,-14} {2,-9} -> {3}" -f $dd.nombre, $txt, $pres, $dd.destino
+    }
+    $lin | Out-File -FilePath (Join-Path $dir "telemetria\ESTADO.txt") -Encoding utf8
+} catch { }
+
+if ($edad -lt $MIN_SIN_VOLCAR) { exit 0 }   # sano: ni se registra, para no llenar el log
 
 # --- 2. No arrancar dos veces seguidas -------------------------------------
 if (Test-Path $marca) {
