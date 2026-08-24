@@ -4051,6 +4051,63 @@ construccion y no sabe nada del descuento BNB (−10 %), del nivel VIP real ni d
 `COMISIONES_LEIDAS` sigue en `False` y hay test que lo comprueba. **Basta una clave de
 Mainnet de SOLO LECTURA** -- este endpoint no necesita permiso de trading ni de retiro.
 
+#### Lectura de MAINNET (2026-08-23): el criterio del §8 pasa a PARCIAL
+
+El operador paso tambien las credenciales de Mainnet. **Las claves no se escriben en ningun
+archivo del repo ni se imprimen**, y se verifico con `git grep` que no quedan en el arbol ni
+en el indice -- el `origin` es publico.
+
+⚠ **`/fapi/*` devolvio `-2015` desde la IP 191.104.7.185.** El diagnostico por
+`/sapi/v1/account/apiRestrictions` lo separa sin ambiguedad:
+
+```
+enableReading    True      <- la clave es valida y llega
+enableFutures    False     <- ESTE es el bloqueo
+ipRestrict       False
+enableWithdrawals / trading / margin ...  todos False
+```
+
+La clave es exactamente la de solo lectura que se pidio, pero **los endpoints de futuros
+exigen `enableFutures` aparte**, y Binance solo deja activarlo sobre una clave con
+**lista blanca de IP**.
+
+**Lo que si se leyo, y cambia el estado del criterio:** `/api/v3/account` devolvio
+`commissionRates` de spot = **0.00100000** maker y taker, que es exactamente el escalon
+**VIP 0** de spot. El nivel VIP de Binance es **unificado** entre spot y futuros -- lo fija
+el volumen a 30 dias y la tenencia de BNB, no el producto -- asi que **la cuenta esta en
+VIP 0 tambien en futuros**, y de ahi salen `maker 0.0200 %` y `taker 0.0400 %`.
+
+| pieza | procedencia |
+|---|---|
+| nivel VIP = 0 | ✅ **LEIDO de la cuenta de Mainnet** |
+| tarifas de futuros para VIP 0 | tabla publica |
+| descuento BNB en futuros | ⛔ **sin leer** (`/fapi/v1/feeBurn` necesita `enableFutures`) |
+
+**El §8 pasa de INCUMPLIDO a PARCIAL.** Y lo que falta solo puede mover la comision hacia
+ABAJO (−10 % si el BNB burn esta activo: `c(u)` maker de 4.8926 a 4.4926 pb, `R²_req` ×0.84).
+
+⚠ **Eso importa para leer el §1, y en la direccion buena:** la cifra actual es una **cota
+superior** del coste. Para una conclusion **negativa** como la del §1 es justo lo que se
+quiere -- si no cruza con el coste maximo, tampoco cruzaria con el real. Solo morderia si la
+conclusion fuera positiva.
+
+⚠ **Y la taker se CORRIGE de 0.000500 a 0.000400**, por dos vias independientes que coinciden:
+la lectura de Testnet y la derivacion del VIP 0 leido de Mainnet. El `0.0005` que arrastraban
+`propagador.py`, `cola.py` y `tick_grande.py` es una tarifa **vieja**. Consecuencia:
+`c(u)` taker+taker baja de 10.02 a **8.02 pb** y `R²_req` ×0.64. **Atencion al sentido: es un
+cambio que AFLOJA un criterio**, y esos hay que mirarlos dos veces; aqui no toca ningun
+veredicto porque todo el §1 se midio con maker+maker, que no cambia.
+
+⚠ **Un control propio fallo al hacer el cambio, y estuvo bien que fallara.** El test tenia
+clavado `taker+taker = 10.00 pb` y detecto que la constante se habia movido. Es exactamente
+lo que impide que una tarifa cambie en silencio -- que es como el `0.0005` viejo sobrevivio
+en cuatro modulos sin que nadie lo notara.
+
+**Para cerrar el §8 del todo** hace falta, sobre la clave de Mainnet: activar
+*«Restringir el acceso solo a IP de confianza»*, anadir la IP de la maquina de captura, y
+entonces marcar **«Habilitar Futuros»** (Binance no lo ofrece sin lista blanca). Sin permisos
+de trading ni de retiro. Con eso, `coste.py --leer` lee `commissionRate` y `feeBurn` reales.
+
 ---
 
 ## HOJA DE RUTA tras la sesión 2026-08-23 — qué falta, y el dimensionamiento de posición

@@ -74,9 +74,30 @@ BASE = "https://fapi.binance.com"
 
 # --- componentes ASUMIDAS -------------------------------------------------
 # Binance USD-M futures, VIP 0. NO leidas de la cuenta.
-COMISION_MAKER_ASUMIDA = 0.000200      # 0.0200 %
-COMISION_TAKER_ASUMIDA = 0.000500      # 0.0500 %  <- CONSERVADORA, ver abajo
-COMISIONES_LEIDAS = False              # <- la unica bandera que importa
+# --- NIVEL VIP LEIDO DE LA CUENTA DE MAINNET (2026-08-23) ------------------
+# `/api/v3/account` con la clave de Mainnet devolvio `commissionRates` de spot
+# = 0.00100000 maker y taker, que es EXACTAMENTE el escalon VIP 0 de spot
+# (0.1000 %). El nivel VIP de Binance es UNIFICADO entre spot y futuros -- lo
+# fija el volumen a 30 dias y la tenencia de BNB, no el producto -- asi que la
+# cuenta esta en VIP 0 tambien en futuros.
+#
+# De ahi, por la tabla publica de futuros USD-M para VIP 0:
+VIP_LEIDO_DE_CUENTA = 0                # LEIDO: spot commissionRates = 0.001
+COMISION_MAKER_ASUMIDA = 0.000200      # 0.0200 %  VIP 0
+COMISION_TAKER_ASUMIDA = 0.000400      # 0.0400 %  VIP 0  <- CORREGIDA, ver abajo
+COMISIONES_LEIDAS = False              # sigue False: ver `criterio_sec8`
+
+# ⚠ LA TAKER SE CORRIGE DE 0.000500 A 0.000400, y no es un capricho:
+#   - leida de Testnet:                       0.000400
+#   - derivada del VIP 0 leido de Mainnet:    0.000400
+#   Dos vias independientes coinciden. El 0.000500 que arrastraban
+#   `propagador.py`, `cola.py` y `tick_grande.py` es una tarifa VIEJA: Binance
+#   bajo la taker de futuros de 0.0500 % a 0.0400 %.
+#   ⚠ ATENCION AL SENTIDO DEL CAMBIO: baja el coste, o sea AFLOJA el requisito
+#   (`c(u)` taker+taker pasa de 10.02 a 8.02 pb, `R2_req` x0.64). Un cambio que
+#   afloja un criterio hay que mirarlo dos veces; aqui no toca ningun veredicto
+#   porque TODO el Sec.1 se midio con maker+maker, que no cambia.
+COMISION_TAKER_CONSERVADORA = 0.000500
 
 # --- LEIDO DE TESTNET el 2026-08-23, con credenciales de la cuenta demo -----
 # [!] NO CIERRA EL CRITERIO DEL Sec.8 y no se usa por omision. El escalon es
@@ -220,8 +241,12 @@ def criterio_sec8() -> dict:
     """?Se cumple "escalon de comisiones LEIDO de la cuenta, no asumido"?"""
     c = c_u("maker_maker")
     return {"cumplido": bool(COMISIONES_LEIDAS),
+            "parcial": True,
+            "leido_de_la_cuenta": "nivel VIP = %d (via commissionRates de spot)" % VIP_LEIDO_DE_CUENTA,
+            "de_tabla_publica": "tarifas de futuros USD-M para ese VIP",
+            "sin_leer": "descuento BNB en futuros (`/fapi/v1/feeBurn`), -10 % si esta activo",
             "fraccion_de_c_que_es_asumida": c["comision_pb"] / c["total_pb"],
-            "bloqueante": "credenciales de MAINNET con permiso de LECTURA"}
+            "bloqueante": "la clave de Mainnet no tiene `enableFutures`"}
 
 
 # ===========================================================================
@@ -298,10 +323,21 @@ def etapa_informe(args) -> int:
     log("")
     cr = criterio_sec8()
     log("  --- CRITERIO DEL Sec.8: comisiones leidas de la cuenta ---")
-    log("    cumplido: %s" % ("SI" if cr["cumplido"] else "*** NO ***"))
-    log("    fraccion de c(u) que descansa en un numero ASUMIDO: %.1f %%"
-        % (100 * cr["fraccion_de_c_que_es_asumida"]))
-    log("    bloqueante: %s" % cr["bloqueante"])
+    log("    cumplido del todo: %s   -> PARCIAL" % ("SI" if cr["cumplido"] else "NO"))
+    log("    LEIDO de la cuenta      : %s" % cr["leido_de_la_cuenta"])
+    log("    de tabla publica        : %s" % cr["de_tabla_publica"])
+    log("    SIN leer                : %s" % cr["sin_leer"])
+    log("    bloqueante              : %s" % cr["bloqueante"])
+    bnb = c_u("maker_maker", 300.0, maker=0.9 * COMISION_MAKER_ASUMIDA,
+              taker=0.9 * COMISION_TAKER_ASUMIDA)["total_pb"]
+    base = c_u("maker_maker", 300.0)["total_pb"]
+    log("")
+    log("    si el descuento BNB estuviera activo: c(u) maker %.4f -> %.4f pb,"
+        " R2_req x %.2f" % (base, bnb, (bnb / base) ** 2))
+    log("    [!] El BNB solo puede BAJAR la comision, asi que la cifra actual es una")
+    log("        COTA SUPERIOR del coste. Para una conclusion NEGATIVA como la del")
+    log("        Sec.1 eso es lo que se quiere: si no cruza con el coste maximo,")
+    log("        tampoco cruzaria con el real. Solo mordería en una conclusion positiva.")
     log("")
     base = c_u("maker_maker", 300.0)["total_pb"]
     log("  --- lo que esto le hace al R2 requerido del Sec.1 ---")
@@ -335,8 +371,21 @@ def _autotest() -> int:
     chk(abs(c["comision_pb"] - 4.0) < 1e-9, "maker+maker da 4.00 pb de comision",
         "%.4f" % c["comision_pb"])
     ct = c_u("taker_taker", 0.0)
-    chk(abs(ct["comision_pb"] - 10.0) < 1e-9, "taker+taker da 10.00 pb (0.05 % por lado)",
+    # [!] ESTE CONTROL FALLO AL CORREGIR LA TAKER, Y ESTUVO BIEN QUE FALLARA.
+    # Tenia clavado 10.00 pb (taker 0.0500 %) y detecto que la constante habia
+    # cambiado a 0.0400 %. Un test que fija una tarifa es justamente lo que
+    # impide que una tarifa se mueva en silencio -- que es como el 0.0005 viejo
+    # sobrevivio en cuatro modulos sin que nadie lo notara.
+    chk(abs(ct["comision_pb"] - 8.0) < 1e-9, "taker+taker da 8.00 pb (0.0400 % por lado)",
         "%.4f" % ct["comision_pb"])
+    chk(abs(COMISION_TAKER_CONSERVADORA - 0.0005) < 1e-12,
+        "la taker vieja se conserva expuesta, no borrada")
+    chk(VIP_LEIDO_DE_CUENTA == 0, "el nivel VIP leido de la cuenta de Mainnet es 0")
+    cbnb = c_u("maker_maker", 0.0, maker=0.9 * COMISION_MAKER_ASUMIDA,
+               taker=0.9 * COMISION_TAKER_ASUMIDA)["total_pb"]
+    chk(cbnb < c_u("maker_maker", 0.0)["total_pb"],
+        "el descuento BNB solo puede BAJAR c(u): la cifra actual es cota superior",
+        "%.4f < %.4f pb" % (cbnb, c_u("maker_maker", 0.0)["total_pb"]))
     chk(ct["comision_pb"] > 2 * c["comision_pb"] - 1e-9,
         "taker cuesta mas del doble que maker")
     chk(abs(c["cruce_pb"]) < 1e-12, "maker+maker NO cruza el spread")
