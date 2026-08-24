@@ -75,8 +75,36 @@ BASE = "https://fapi.binance.com"
 # --- componentes ASUMIDAS -------------------------------------------------
 # Binance USD-M futures, VIP 0. NO leidas de la cuenta.
 COMISION_MAKER_ASUMIDA = 0.000200      # 0.0200 %
-COMISION_TAKER_ASUMIDA = 0.000500      # 0.0500 %
+COMISION_TAKER_ASUMIDA = 0.000500      # 0.0500 %  <- CONSERVADORA, ver abajo
 COMISIONES_LEIDAS = False              # <- la unica bandera que importa
+
+# --- LEIDO DE TESTNET el 2026-08-23, con credenciales de la cuenta demo -----
+# [!] NO CIERRA EL CRITERIO DEL Sec.8 y no se usa por omision. El escalon es
+#     propiedad de la CUENTA de Mainnet; una cuenta de Testnet nace siempre en
+#     `feeTier = 0` (verificado: `/fapi/v2/account` devolvio 0) y no sabe nada
+#     del descuento BNB, del nivel VIP real ni de un referido.
+#
+# ⚠ PERO CONTRADICE AL REPO EN LA TAKER, y hay que decidirlo:
+#     leido en Testnet : maker 0.000200   taker 0.000400
+#     asumido en 4 modulos: maker 0.000200   taker 0.000500
+#   La maker coincide exacta. La taker asumida es un 25 % MAS ALTA que la leida
+#   -- probablemente una tarifa vieja: Binance bajo la taker de futuros de
+#   0.0500 % a 0.0400 % en algun momento. Se conserva 0.0005 por omision porque
+#   es la CONSERVADORA (mas coste = requisito mas duro = conclusion negativa mas
+#   robusta), y se expone la leida para que la proxima sesion decida con el dato
+#   de Mainnet delante, no con este.
+COMISION_MAKER_TESTNET = 0.000200
+COMISION_TAKER_TESTNET = 0.000400
+TESTNET_FEE_TIER = 0
+
+# --- LEIDO DE TESTNET: `leverageBracket`, que la v1.3 no pudo leer ----------
+# La v1.3 dejo escrito que `mmr` no se puede leer sin credenciales y que
+# `mercado.leer_mmr` devuelve el valor por defecto INFLADO por un factor de
+# seguridad de 2x. El valor que asumia era `MMR_PRIMER_TRAMO_BTCUSDT = 0.004`
+# para nocional <= 50 000, y la lectura lo confirma EXACTO. El factor 2x era
+# conservadurismo puro, no ignorancia.
+MMR_TRAMOS_TESTNET = [(50000, 0.0040), (250000, 0.0050), (3000000, 0.0100),
+                      (20000000, 0.0250), (40000000, 0.0500)]
 
 # --- componentes MEDIDAS --------------------------------------------------
 # `curvas_estacional`, 34 812 523 ticks alineados de los cuatro tramos largos.
@@ -244,6 +272,29 @@ def etapa_informe(args) -> int:
             log("    %-12s %6.0f s | %9.4f %8.4f %9.4f %8.4f   TOTAL %8.4f"
                 % (esq, Hs, c["comision_pb"], c["cruce_pb"],
                    c["seleccion_adversa_pb"], c["financiacion_pb"], c["total_pb"]))
+    log("")
+    log("  --- lectura de TESTNET (2026-08-23), que NO cierra el criterio ---")
+    log("    maker: leida %.6f  contra asumida %.6f   -> %s"
+        % (COMISION_MAKER_TESTNET, COMISION_MAKER_ASUMIDA,
+           "COINCIDE" if abs(COMISION_MAKER_TESTNET - COMISION_MAKER_ASUMIDA) < 1e-9
+           else "DIFIERE"))
+    log("    taker: leida %.6f  contra asumida %.6f   -> %s"
+        % (COMISION_TAKER_TESTNET, COMISION_TAKER_ASUMIDA,
+           "COINCIDE" if abs(COMISION_TAKER_TESTNET - COMISION_TAKER_ASUMIDA) < 1e-9
+           else "*** DIFIERE en %.0f %% ***"
+                % (100 * (COMISION_TAKER_ASUMIDA / COMISION_TAKER_TESTNET - 1))))
+    ct_a = c_u("taker_taker", 300.0)["total_pb"]
+    ct_l = c_u("taker_taker", 300.0, maker=COMISION_MAKER_TESTNET,
+               taker=COMISION_TAKER_TESTNET)["total_pb"]
+    log("    c(u) taker+taker a 300 s: asumida %.4f pb  contra leida %.4f pb"
+        " -> R2_req x %.2f" % (ct_a, ct_l, (ct_l / ct_a) ** 2))
+    log("    `feeTier` de la cuenta de Testnet: %d (nace siempre en VIP 0)" % TESTNET_FEE_TIER)
+    log("")
+    log("  --- mmr, hueco abierto desde la v1.3 y ahora LEIDO (Testnet) ---")
+    log("    tramo 1 (nocional <= 50 000): mmr = %.4f" % MMR_TRAMOS_TESTNET[0][1])
+    log("    `mercado.MMR_PRIMER_TRAMO_BTCUSDT` asumia 0.0040  ->  COINCIDE EXACTO")
+    log("    el factor de seguridad 2x de `mercado.leer_mmr` era conservadurismo,")
+    log("    no ignorancia: el numero asumido estaba bien.")
     log("")
     cr = criterio_sec8()
     log("  --- CRITERIO DEL Sec.8: comisiones leidas de la cuenta ---")

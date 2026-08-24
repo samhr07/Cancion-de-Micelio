@@ -4016,6 +4016,41 @@ posible.** Con ejecucion taker el requisito se multiplica por 4.2.
   `C_respaldo` son el §5 de la v4.1, pendiente y a su vez a la espera de que el §1 diga a
   que horizonte.
 
+#### Lectura firmada de TESTNET (2026-08-23) -- verifica el codigo, NO cierra el criterio
+
+El operador paso las credenciales de la cuenta **demo**. Se advirtio antes de usarlas que
+Testnet no cierra el §8 y se uso igual, con la procedencia marcada. **Las claves no se
+escriben en ningun archivo del repo ni se imprimen**; el lector las toma en memoria.
+
+| endpoint firmado | resultado [TESTNET] | contra lo asumido |
+|---|---|---|
+| `/fapi/v1/commissionRate` maker | **0.000200** | **COINCIDE exacto** |
+| `/fapi/v1/commissionRate` taker | **0.000400** | ⚠ **el repo asume 0.000500: 25 % mas alta** |
+| `/fapi/v2/account` | `feeTier = 0` | confirma VIP 0 |
+| `/fapi/v1/leverageBracket` tramo 1 | **mmr = 0.0040** (nocional ≤ 50 000) | **COINCIDE exacto** |
+
+**Tres cosas que esto si establece:**
+
+1. **El codigo de firma funciona de punta a punta.** `leer_comision_firmado` esta verificado
+   contra un servidor real; cuando haya credenciales de Mainnet es correr y ya.
+2. ⚠ **La comision taker del repo esta desactualizada en 4 modulos.** `propagador.py`,
+   `cola.py`, `tick_grande.py` y `coste.py` asumen `0.0005`; la lectura da `0.0004`
+   -- Binance bajo la taker de futuros de 0.0500 % a 0.0400 % en algun momento y el proyecto
+   no se entero. **Se conserva 0.0005 por omision porque es la CONSERVADORA** (mas coste =
+   requisito mas duro = conclusion negativa mas robusta) y se expone la leida al lado. Con la
+   leida, `c(u)` taker+taker baja de 10.02 a **8.02 pb** y `R²_req` se multiplica por **0.64**.
+3. ✅ **El hueco de `mmr` de la v1.3 queda cerrado.** Aquella sesion dejo escrito que
+   `leverageBracket` es firmado, que `mercado.leer_mmr` devuelve el valor asumido **inflado
+   por un factor de seguridad de 2x** y que la guarda queda conservadora ante la duda. La
+   lectura confirma `mmr = 0.0040` para el primer tramo, **exactamente el valor asumido**: el
+   factor 2x era conservadurismo, no ignorancia.
+
+⚠ **Lo que NO establece, y por que se mantiene el criterio como incumplido:** el escalon es
+propiedad de la **cuenta de Mainnet**. Una cuenta de Testnet nace en `feeTier = 0` por
+construccion y no sabe nada del descuento BNB (−10 %), del nivel VIP real ni de un referido.
+`COMISIONES_LEIDAS` sigue en `False` y hay test que lo comprueba. **Basta una clave de
+Mainnet de SOLO LECTURA** -- este endpoint no necesita permiso de trading ni de retiro.
+
 ---
 
 ## HOJA DE RUTA tras la sesión 2026-08-23 — qué falta, y el dimensionamiento de posición
