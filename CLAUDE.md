@@ -20,17 +20,41 @@ No se abre una tercera.
 |---|---|---|
 | **v3.2** `ORDEN_TRABAJO_MIGRACION_3_2` | impacto permanente contra transitorio (M0/M1/M1′/M2) | **EJECUTADA** el 2026-08-10 sobre 1 031 155 ticks continuos. Paso 2 pasa, **paso 3 falla**: `q90(\|μ̂\|) = 11.30` contra `1.5·c(u) = 39.05`. Falta el §7 (exige captura completa) |
 | **v4.0** `ORDEN_TRABAJO_EJECUCION_4_0` | cuánto cuesta operar | `captura_estacional` corriendo, 21 días. §4.2 y §5 ya resueltos |
-| **v4.1** `ORDEN_TRABAJO_HORIZONTE_4_1` | a qué horizonte (si a alguno) la señal paga el peaje | §11, §2, §1 y **§3 ejecutados**. El §1 quedó **NO DECIDIBLE** por falta de ventanas — y el tramo de 23.33 h del 2026-08-12 lo desatasca (93/46/23 ventanas a 15/30/60 min). Quedan §6, §5, §4 |
+| **v4.1** `ORDEN_TRABAJO_HORIZONTE_4_1` | a qué horizonte (si a alguno) la señal paga el peaje | §11, §2, §3 hechos. El §1 se rehizo el 2026-08-23 y su veredicto quedó **RETRACTADO el mismo día**: `σ₁` y `ν` se agruparon sobre las 24 h y el requisito varía **8.4×** según la hora. **Pendiente: §1 estratificado por casilla horaria.** Quedan §6, §5, §4 |
 
-⚠ **Estado de la captura estacional (2026-08-12):** 3 537 604 transacciones y 26 860 269 snapshots
-de libro, **0 partes ilegibles**, span 57.25 h en cuatro tramos. El más largo es de **23.33 h
-continuas** (1 829 242 ticks, ν = 21.78 tx/s). Cobertura 2 665 min = 1.85 días equivalentes, 120
-de 168 casillas vacías: **su compuerta sigue sin pasar**. Tres causas de corte identificadas y
-todas distintas de la batería del 2026-08-10: (1) `captura_v33` **terminó sola** sus 60 h y dejó
-de refrescar su marca de vitalidad, (2) la **guarda `--sin-guarda-v33` del estacional no distingue
-«v33 terminó» de «v33 murió»** y se paró 35 min después, (3) **reinicio forzado por Windows
-Update** (`TrustedInstaller`, 02:55). Relanzada con `--sin-guarda-v33` y con
-`NoAutoRebootWithLoggedOnUsers = 1`.
+✅ **Estado de la captura estacional (2026-08-22): SU COMPUERTA PASA.** Es la primera vez.
+**32 429 468 transacciones y 223 546 502 snapshots de libro, 0 partes ilegibles** de 3 207, 2.0 GB.
+Cobertura **15 522 min = 10.78 días equivalentes**, **mínimo por casilla 60** contra los ≥ 30 que
+pide la compuerta, **0 casillas vacías de 168**. Calidad: 0 precios ≤ 0, 0 ids duplicados, 0
+tiempos no monótonos, `maker` = 49.29 % (no degenerado). El proceso lleva **240 h sin reiniciarse**
+(PID 17332, desde el 2026-08-12) y el vigilante no ha tenido que reponerlo ni una vez.
+
+**Dos tramos continuos largos, y son de REGÍMENES OPUESTOS** — que es lo que este proyecto
+llevaba pidiendo desde que la v3.2 encontró que nada replica entre capturas con `ν` distinta:
+
+| tramo | horas | ticks | `ν` | recorrido de precio | ventanas limpias 15/30/60/120/240 min |
+|---|---|---|---|---|---|
+| 2026-08-12 11:46 → 08-17 23:36 UTC | **131.83** | 8 898 312 | 18.75 tx/s | 62 484 – 64 601 (**3.4 %**, lateral) | 513 / 251 / 120 / 55 / 23 |
+| 2026-08-18 01:26 → 08-21 11:54 UTC | **82.47** | 19 985 140 | **67.31 tx/s** | 63 979 – **79 555** (**24.3 %**, tendencia) | 325 / 160 / 78 / 37 / 18 |
+
+`ν` difiere **3.6×** entre los dos y el recorrido de precio **7×**. Ventana limpia = sin ningún
+hueco > 10 s. Ids ausentes 1.04 % y 1.56 % respectivamente.
+
+⚠ **Hueco de 24.26 h el 2026-08-21 (06:54 → 07:09 local del día siguiente), y la causa es NUEVA.**
+Reconstruido del registro de eventos: 06:54:02 `Kernel-Power 105` **cambio de fuente de energía**
+(se desenchufó) + `506` entrada en espera moderna → 06:54:55 `172` **«Conectividad: Disconnected.
+Motivo: Policy Setting»** → 07:27:40 `42` suspensión → hueco en el propio registro → 08-22
+07:09:26 eventos `Kernel-Boot` y salto del reloj de `08-21T12:27:44` a `08-22T12:09:26`. Eso es
+**hibernación (S4)**, no apagado: el PID sobrevivió intacto y volvió a volcar solo.
+**Corrige la regla que teníamos escrita:** la espera moderna es inofensiva **enchufado** — probado
+en 8 ciclos — pero **en batería Windows desconecta la red por directiva**. Segunda vez que la
+batería cuesta datos (la primera, el 2026-08-10, por umbral crítico). **Mantener el portátil
+enchufado es la única medida que ha hecho falta y la única que faltaba.**
+
+⚠ **La cobertura ya no bloquea nada. Rehacer el §1 de la v4.1 sobre estos dos tramos es lo
+siguiente**, y por primera vez con potencia: contra las 8/4/2 ventanas con las que el §1 se declaró
+NO DECIDIBLE, ahora hay **838 a 15 min, 411 a 30 min y 198 a 1 h** sumando los dos tramos. Y el
+tramo en tendencia es justo el régimen donde un `R²` no nulo es plausible.
 
 ⚠ **Lo que la v3.2 dejó sin decidir NO es por falta de datos**: el estimador de `D` **no tiene
 potencia** a la autocorrelación de signos real (`γ̂ = 0.798`) — bajo `D = 1` verdadero devuelve
@@ -3483,6 +3507,346 @@ colapso — deuda de reporte, no decisión).
 ventanas a 15 min, 46 a 30 min y 23 a 1 h**, contra las 8/4/2 con las que el §1 se declaró NO
 DECIDIBLE. La banda donde el `R²` requerido baja a 1.9–5.5 % ya tiene potencia. **Rehacer el §1
 sobre ese tramo es lo siguiente.**
+
+## Sesion 2026-08-23 -- v4.1 §1 rehecho, y RETRACTADO el mismo dia por estacionalidad
+
+⚠⚠ **EL VEREDICTO DE ESTA SESION NO SE SOSTIENE. NO CITARLO.** Lo que sigue se conserva entero
+porque los datos y los controles valen; **la lectura no**. Objecion del operador, verificada con
+medicion el mismo dia:
+
+1. **Los tramos estan definidos por cuando se cayo la conexion, no por calendario**, y el
+   confundido es severo: el tramo 1 es **100 % dias habiles**, el tramo 2 es **100 % fin de
+   semana**, el 0 mezcla ambos. Etiquetarlos por `ν` y llamar a eso «regimen medido» es
+   incorrecto: buena parte de esa `ν` es dia de la semana.
+2. **`σ₁` se estimo agrupando las 24 horas**, y `R²_req ∝ (lastre/σ)²`. Medido sobre las cuatro
+   muestras (16 340 ventanas de 60 s):
+
+   | | `σ₆₀` [pb] | **`R²_req(300 s)`** |
+   |---|---|---|
+   | agrupando todas las horas (lo publicado) | 5.301 | **5.52 %** |
+   | **mejor hora, UTC 15 (mediodia EE.UU.)** | **9.536** | **1.71 %** |
+   | peor hora, UTC 23 | 3.289 | 14.34 % |
+   | habil (lun-vie) | 5.937 | 4.40 % |
+   | fin de semana | 3.418 | 13.28 % |
+
+   **El requisito varia 8.4× segun la hora.** El maximo de `σ` cae en UTC 15, que es el mediodia
+   de EE.UU.: es estructura diurna, no ruido.
+3. **`ν` entra en el predictor como ESCALAR.** `rasgos_flujo` construye las ventanas
+   retrospectivas como `f·H·ν` **ticks** con la `ν` media del tramo. Medida por hora, `ν` recorre
+   **0.55× a 2.17×** de su media (factor **3.96**, max UTC 15, min UTC 4): en la hora punta la
+   ventana cubre el **46 %** de los `H` segundos que dice cubrir. No es solo una descripcion
+   pobre de `ν` -- esta dentro del estimador.
+
+**Por que esto no es un matiz.** Los dos lados de la desigualdad se mueven al condicionar por
+hora, y solo se ha medido que se mueve uno. Si la relacion predictiva es ella misma estacional,
+agrupar la **atenua hacia cero**: una senal viva en una fracción de las horas aparece diluida por
+su cuota de varianza. El `+0.0076` medido a 60 s con 1 341 ventanas y controles limpios es
+compatible con un `R²` de un dígito alto concentrado en las horas activas -- y el requisito en
+esas horas baja a **1.71 %**. **La medicion agrupada no puede descartar el cruce**, que es
+justo lo que el veredicto afirmaba.
+
+**Lo que SI sobrevive de la sesion:** el alineado libro-transaccion (100 % en los cuatro tramos,
+spread de 1 tick, `E[y_mid·ε] > 0` en los cuatro), el control positivo de potencia y su
+maquinaria, y la banda de `H_p` **ajustada en ventanas cortas** (`[10,100]`, `[30,300]`,
+`[60,600]` s), donde el ciclo diurno de 24 h no alcanza a inclinar la pendiente. Los ajustes en
+`[60, 3600]` y `[300, 14400]` **si** estan contaminados por el ciclo y no se leen.
+
+**Lo que hay que rehacer, y en este orden:** (a) ventanas retrospectivas definidas en
+**segundos**, no en ticks via `ν` escalar; (b) `σ₁` y por tanto `R²_req` **por casilla horaria**;
+(c) el `R²` medido **estratificado** por la misma casilla, con su control barajado y su control
+de potencia dentro de cada estrato; (d) recomponer el veredicto por estrato, no agrupando.
+
+
+### Medicion de la estacionalidad (mismo dia) -- modulo `estacionalidad.py`, 8/8 controles
+
+Modelo pedido por el operador: armonicos de 24 h + aperturas de sesion como **pulsos** con
+respuesta exponencial + fin de semana con **amplitud y fase propias**. Ajuste lineal (un par
+cos/sin con coeficientes libres YA es amplitud y fase libres, asi que no hay minimos locales --
+que es lo que hundio el estadistico de `omega_G` en la v3.2). Unico parametro no lineal: `tau`,
+barrido en rejilla y reportado como curva.
+
+⚠ **Esto NO resucita `omega_m`.** Aquella era una frecuencia **endogena** sin ancla y sin nulo
+(la EMD devolvia 118 s sobre un paseo aleatorio y el periodo escalaba con la ventana). Aqui el
+periodo **no se estima**: es 24 h y 168 h, conocido a priori, con causa exogena verificable. Se
+estiman amplitud y fase, con nulo propio (barajar hora y finde) y validacion **por dias enteros**.
+
+**Perfil descriptivo** (3 199 casillas de 5 min, 13 dias UTC):
+
+| | pico | valle | razon |
+|---|---|---|---|
+| habil | **UTC 13-15** (apertura NY): `ν` 61.8 tx/s, `σ` 3.92 pb/30 s | UTC 4: 15.9, 1.43 | `ν` 3.9× · `σ` 2.7× |
+| finde | **UTC 21-22**: `ν` 20.4, `σ` 1.95 | UTC 3: 8.2, 0.45 | — |
+
+habil/finde: `ν` **2.13×**, `σ` **1.98×**. El pico de fin de semana llega **~7 h mas tarde**.
+
+⚠ **Fuera de muestra por dias enteros, el modelo sobre el NIVEL es peor que una constante**
+(`log σ`: M1 −0.013, M3 −0.179; `log ν`: M1 +0.008 contra nulo −0.008). Con 13 dias, el **nivel
+del dia** domina y no se predice desde la hora. Hay que separar nivel y forma:
+
+| | var entre dias | var dentro del dia | recorrido del nivel diario |
+|---|---|---|---|
+| `log σ` | 46 % | 54 % | **13.75×** |
+| `log ν` | 51 % | 49 % | **20.78×** |
+
+**Forma diurna con el nivel del dia retirado a ambos lados, `R²` fuera de muestra:**
+
+| modelo | `log σ` | `log ν` |
+|---|---|---|
+| M1 armonicos 24 h | +0.0294 | +0.1205 |
+| M3 + amplitud y **fase** de finde | +0.0073 | **+0.1359** |
+| M4 + **pulsos**, `tau` = 2 h | −0.0033 | **+0.1394** |
+| NULO (hora y finde barajados) | −0.0110 | −0.0103 |
+
+**Conclusiones, y una corrige una cifra mia de esta misma sesion:**
+
+1. **`ν` escalar queda refutado con dato.** Su forma diurna replica fuera de muestra a **13× el
+   nulo**, y el modelo completo del operador —pulsos con decaimiento + desfase de finde— es el
+   mejor de la escalera. `rasgos_flujo` debe definir sus ventanas en **segundos**, no en
+   `f·H·ν` ticks.
+2. ⚠ **El «el requisito varia 8.4× segun la hora» que se midio antes esta INFLADO.** Salia de
+   medias horarias agrupadas, con ~13 observaciones por hora y dias desbalanceados entre horas.
+   La amplitud diurna de `σ` que replica fuera de muestra corresponde a **~1.13×**, no a 2.7×.
+   Anadir finde y pulsos a `σ` **empeora** el ajuste: con ~4 dias de fin de semana, sobreajusta.
+3. **La palanca grande no es la hora, es el DIA.** El nivel diario de `σ` recorre **13.75×** y
+   `R²_req ∝ σ⁻²`, o sea **~190×** de recorrido en el requisito entre dias. Y a diferencia de
+   `omega_m`, la volatilidad diaria es persistente y pronosticable por vias establecidas
+   (HAR, GARCH), asi que **esa** es la estratificacion con contenido.
+4. **13 dias son pocos** para el perfil semanal, y la propia captura lo avisa en su informe de
+   cobertura: «con 14 dias hay 2 observaciones por casilla hora x dia; el perfil semanal es
+   EXPLORATORIO hasta >= 4 semanas». Sigue corriendo hasta el 2026-09-02.
+
+⚠ **Un control mio fallo, y era un SIGNO — la cuarta vez en este proyecto** (tras el 2π de la
+v1.3, el factor 125 y la convencion de `ε` del propagador). Con `cos(2π(h−φ)/24)` la fase es
+`atan2(c_sin, c_cos)` y estaba escrito `atan2(−c_sin, c_cos)`, que devuelve `24 − φ`. Ademas lo
+contrastaba contra una verdad que mezclaba habil, finde y pulso. Corregido: recupera **15.00 h y
+20.00 h exactas** sobre verdad conocida.
+
+---
+
+### H1 y H2 (2026-08-23) -- `hipotesis_liquidez.py`, 7/7 controles
+
+Predicciones **congeladas en el docstring del modulo antes de calcular nada** (P1-P6).
+
+#### ⚠ H2 CONFIRMADA, y con una desviacion cuantitativa que importa
+
+`ν` = numero de perturbaciones, `σ` = respuesta. Sobre 3 199 casillas de 5 min, 13 dias:
+
+| relacion `log σ` contra `log ν` | pendiente | corr |
+|---|---|---|
+| todo | +0.8557 | +0.8775 |
+| **entre dias** | **+0.8830** | **+0.9741** |
+| dentro del dia | +0.8045 | +0.7866 |
+
+**P4 REFUTADA en su forma literal: la pendiente NO es 0.5, es ~0.8.** Y no es artefacto de
+discretizacion — barriendo el paso de submuestreo, con el tamano tipico del movimiento pasando de
+0.68 a 2.55 ticks, la pendiente va de 0.881 a **0.786** y ahi converge:
+
+| paso [s] | 10 | 30 | 60 | 120 | 300 |
+|---|---|---|---|---|---|
+| ticks por paso | 0.68 | 1.21 | 1.67 | 2.13 | 2.55 |
+| pendiente | 0.881 | 0.856 | 0.839 | 0.801 | **0.786** |
+
+Pendiente > 0.5 significa que **las perturbaciones NO son independientes**: se agrupan y se
+refuerzan. Coherente con la memoria larga del flujo de ordenes que este proyecto ya midio.
+
+⚠ **NO CONFUNDIR ESE 0.8 CON `H_p`.** Es un exponente **transversal** entre ventanas
+(`σ` de una ventana contra `ν` de esa ventana), no el exponente de escala temporal de la firma de
+volatilidad, que sigue en la banda `[0.372, 0.554]`. Es exactamente la confusion que costo el §1
+de la v3.3, donde `γ` significaba dos cosas.
+
+**P5 CONFIRMADA:** normalizar por `ν` reduce la varianza de `log(varianza)` un **63.7 %**, y
+**entre dias un 77 %** (1.8895 -> 0.4340). `ν` contiene la mayor parte de `σ`, sobre todo su nivel
+diario. No la contiene entera: queda un 36 % sin explicar, casi todo dentro del dia.
+
+**P6 CONFIRMADA:** tras quitar `log ν`, al residuo no le queda estructura diurna (`R²` fuera de
+muestra del modelo diurno: −0.039, contra −0.179 sobre `log σ` crudo).
+
+**Y lo que decide en la practica** -- `R²` fuera de muestra por dias enteros, prediciendo la `σ`
+de la casilla **siguiente**:
+
+| predictor | `R²` fuera de muestra |
+|---|---|
+| constante | +0.0000 |
+| **`log ν(t)`** | **+0.5433** |
+| `log σ(t)` | +0.5101 |
+| `log ν(t)` + `log σ(t)` | +0.5575 |
+| `log ν(t)` barajado dentro del dia (NULO) | +0.1611 |
+
+**`ν` predice la volatilidad futura MEJOR que la propia volatilidad presente.** Ese es el
+contenido operativo de H2: da un estado observable, adelantado y pronosticable.
+
+⚠ **Esto tiene nombre y se declaro antes de medirlo:** subordinacion del precio al reloj de
+transacciones, Clark (1973); Hipotesis de Mezcla de Distribuciones, Tauchen & Pitts (1983). El
+proyecto ya tropezo con la version de 1994 al medir `q̄`. **Confirmarla valida la tuberia y da
+un modelo con el que trabajar; no es un descubrimiento.**
+
+#### H1 -- la profundidad de nivel 1 NO aporta sobre el flujo
+
+| | `b` (`log ν`) | `c` (`log D`) | parcial(`σ`, `D` \| `ν`) | nulo IC95 |
+|---|---|---|---|---|
+| **dentro del dia** (n = 1 622) | +0.8209 | **+0.0649** | **+0.0425** | [−0.0438, +0.0418] |
+| entre dias (n = 13) | +0.8337 | −0.1358 | −0.3000 | \|r\| critico 0.632 |
+
+**Dentro del dia gana P2 (la intuicion del operador, `c > 0`) y no P1 (Kyle, `c < 0`)** — pero por
+un pelo: +0.0425 contra un techo de nulo de +0.0418, o sea **0.18 % de la varianza residual**.
+Entre dias el signo se invierte y con 13 dias no hay potencia para nada.
+
+**P3 CONFIRMADA y es la lectura principal: `|c|` es despreciable frente a `b`.** Sabiendo el flujo,
+la cola del mejor precio no anade practicamente nada.
+
+Dato colateral que si es solido: **`corr(log D, log ν) = −0.485`** (−0.255 dentro del dia, −0.658
+entre dias). **El libro esta MAS FINO cuando hay mas actividad**, no mas saturado.
+
+Perfil de profundidad: en dias habiles es plano (22–31 BTC); en fin de semana **se desploma a
+12–15 BTC entre las 12 y las 20 UTC** contra 22–27 el resto. Con 4 dias de fin de semana, es
+exploratorio.
+
+⚠ **Limitacion que no se arregla con estos datos:** `@bookTicker` da solo el **nivel 1**. La
+«saturacion del libro» con ordenes en reposo a varios niveles **no es observable aqui**. Para
+contrastar H1 de verdad haria falta capturar `@depth`.
+
+⚠ **Un nulo mio estaba mal especificado y lo delato el signo.** La primera version barajaba la
+profundidad dentro del dia sobre las series SIN desmediar, y su IC95 salia
+`[−0.1065, −0.0554]`: descentrado, y con el valor real (−0.0456) **fuera del nulo por el lado
+contrario**. La causa: barajar dentro del dia **conserva intacto el termino entre dias**, asi que
+el nulo no destruia lo que yo creia. Desmediando por dia, el nulo queda centrado en **+0.0004**.
+Es la misma leccion que el control de potencia del §1 de esta misma sesion, y la tercera vez en
+el dia: **hay que separar nivel diario y forma intradia antes de construir cualquier nulo.**
+
+---
+
+### Registro de lo ejecutado (lectura retractada, cifras validas)
+
+
+Rehace el §1 de `ORDEN_TRABAJO_HORIZONTE_4_1.md` sobre `captura_estacional`, que el 2026-08-22
+pasó su compuerta. `Micelio.py` sin cambios. Módulo nuevo: `curvas_estacional.py`.
+Acta completa en `telemetria/acta_v41_sec1_estacional.txt`.
+
+### ⚠ VEREDICTO: segundo desenlace del §1.4 — NO HAY BANDA VIABLE
+
+```
+filas con n_val >= 30 (decidibles)              : 15 de 26
+filas decidibles que CRUZAN con control limpio  :  0
+mejor razon R2_medido / R2_req                  : 0.0758   (tramo 2, H = 300 s)
+```
+
+El §1.1 declaró este desenlace admisible **antes de medir**: «este documento no busca rescatar el
+proyecto; busca decidirlo».
+
+### Cuatro tramos, y el régimen pasa a ser una variable medida
+
+| tramo | horas | ticks | `ν` | precio | recorrido | `σ₁` difusivo [pb·s^−½] |
+|---|---|---|---|---|---|---|
+| 0 | 131.83 | 8 898 311 | 18.75 | 62 484 – 64 601 | 3.4 % | 0.3827 |
+| **1** | **82.47** | **19 985 140** | **67.31** | **63 979 – 79 555** | **24.3 %** | **1.0622** |
+| 2 | 34.72 | 4 099 830 | 32.80 | 75 588 – 78 058 | 3.3 % | 0.6333 |
+| 3 | 23.33 | 1 829 242 | 21.78 | 63 212 – 64 470 | 2.0 % | 0.3862 |
+
+Alineado libro-transacción **100 % en los cuatro**, spread mediano **1 tick exacto** en los cuatro,
+y `E[y_mid·ε] > 0` en los cuatro — la convención `m = True → ε = −1` se sostiene en cada réplica.
+
+### §2 — La banda de `H_p` REPLICA, y la superdifusión no
+
+24 ajustes (4 tramos × 6 ventanas de escala), reloj de pared, control barajado en todos:
+
+```
+banda medida ahora : [0.3719, 0.5535]   mediana 0.4932   |sesgo| del control <= 0.0438
+banda publicada    : [0.371 , 0.552 ]
+```
+
+Reproduce la banda del 2026-08-10 con tres decimales, y la **mediana es 0.493: difusivo**. El
+control barajado vuelve a 0.50 en las 24 filas, así que el estimador está limpio a estas
+longitudes. **`H_p = 0.591` de la v3.3 queda fuera de la banda entera** — la retractación se
+confirma con 24 ajustes en vez de 4, y **la superdifusión no replica en ningún tramo**.
+
+### §1 — Las dos curvas. Tabla por tramo
+
+Predictor tonto del §1.3 (flujo firmado acumulado en `{H/4, H/2, H, 2H}`, sin `G(τ)`), ventanas
+no solapadas, partición 60/20/20 **en tiempo** con embargo de 4 h, y el último 20 % de cada tramo
+**sin abrir**. El conjunto de prueba de la v3.2 tampoco se abrió.
+
+| tramo | `H` | n_ent | n_val | **R²_medido** | bar_global | bar_ventana | **R²_req mín** | potencia |
+|---|---|---|---|---|---|---|---|---|
+| 0 | 60 s | 4 745 | 1 341 | **+0.0076** | −0.0052 | −0.0100 | 77.38 % | 0.99 |
+| 0 | 120 s | 2 372 | 670 | +0.0041 | −0.0484 | −0.0179 | 43.31 % | 0.99 |
+| 0 | 300 s | 949 | 267 | −0.0227 | +0.0132 | −0.0470 | 15.75 % | 0.98 |
+| 0 | 600 s | 474 | 133 | −0.0777 | −0.0226 | −0.0914 | 7.33 % | 0.58 |
+| **1** | **60 s** | 2 969 | **748** | **−0.0032** | −0.0021 | −0.0009 | **10.05 %** | 0.92 |
+| **1** | **120 s** | 1 484 | **374** | **−0.0058** | −0.0028 | +0.0038 | **5.62 %** | 0.81 |
+| **1** | **300 s** | 593 | **149** | **−0.0001** | +0.0014 | +0.0073 | **2.04 %** | **1.18** |
+| 2 | 60 s | 1 249 | 176 | −0.0046 | −0.0029 | −0.0099 | 28.26 % | 0.63 |
+| 2 | 120 s | 624 | 88 | −0.0079 | −0.0160 | −0.0085 | 15.82 % | 0.73 |
+| 2 | 300 s | 249 | 35 | +0.0044 | −0.0203 | −0.0195 | **5.75 %** | 0.91 |
+| 3 | 60 s | 840 | 39 | −0.0187 | −0.0098 | +0.0091 | 76.00 % | 0.86 |
+
+**La fila que decide es `tramo 1, H = 300 s`**, y hay que leerla entera: es el régimen **más
+favorable** de los cuatro —24 % de recorrido de precio, `σ₁` 2.8× la del tramo 3, así que el
+requisito se desploma al **2.04 %**—, tiene **149 ventanas** no solapadas, el control positivo
+demuestra que una señal del 2 % **se recupera** ahí (devuelve 2.4 %), y el `R²` medido fuera de
+muestra es **−0.0001**. Cero exacto donde el peaje era más barato que nunca.
+
+### ⚠ El control positivo de potencia — sin él «R² = 0» no habría sido un resultado
+
+La cuarta fila del §1.4 manda no leer una `H` donde el barajado es comparable al real. Aquí **los
+dos salen ≈ 0**, así que la regla no discrimina entre «no hay señal» y «no hay potencia» — y sólo
+una de las dos decide el proyecto. Se inyecta en el objetivo una señal del tamaño **exactamente
+igual al `R²` requerido** y se mide con el mismo procedimiento:
+
+| n_val | ≥ 267 | 133–176 | 88 | ≤ 49 |
+|---|---|---|---|---|
+| razón recuperado/inyectado | **0.98–1.18** | 0.58–0.63 | 0.73 | negativa |
+
+**11 de las 15 filas decidibles tienen potencia demostrada**, y son las que sostienen el veredicto.
+Las 4 que no (H ≥ 600 s en los tramos 0 y 1) se marcan y **no se leen**, aunque su `R²` medido sea
+negativo y «favorezca» la conclusión.
+
+⚠ **Tres versiones del control fueron mías y estaban mal**, y el patrón es el mismo de siempre:
+
+1. Normalizando con estadísticos de **entrenamiento**, la señal inyectada llegaba encogida a
+   validación —los rasgos de flujo no son estacionarios en escala— y el control declaraba «sin
+   potencia» con 1 249 puntos de ajuste.
+2. Normalizando **globalmente**, seguía contaminado: la varianza del retorno real cambia hasta
+   **4.6×** entre bloques (columna `sd(y)val/ent`: 0.38 en el tramo 0, 1.85 en el 2), así que el
+   control medía agrupamiento de volatilidad y no tamaño muestral.
+3. Con **una sola dirección** de señal el resultado saltaba de 0.32 a 1.6 entre celdas vecinas: los
+   cuatro rasgos son sumas acumuladas anidadas y hay direcciones casi degeneradas. Se promedia
+   sobre **25 sorteos** y la razón pasa a ser monótona en `n`, que es lo que debe ser.
+
+La versión correcta normaliza **dentro de cada bloque** —la pregunta es si una fracción `R²_req`
+de la varianza *de validación* sería visible— y promedia sobre direcciones.
+
+### Lo que esto cierra, y lo que deja abierto
+
+**Cierra.** La hipótesis del horizonte era, según el §1.1, **la única palanca con el orden de
+magnitud correcto** para el factor 3.46 que dejó parada la v3.2. Medida en cuatro regímenes de `ν`
+que van de 18.8 a 67.3 tx/s, con hasta 1 341 ventanas y con potencia acreditada, **no cruza en
+ninguno**. El mejor margen es **0.076**, o sea un factor **13** de defecto, y el §1.2 dice que
+refinar el predictor sólo tiene sentido «si la curva cruza con el predictor tonto o queda cerca».
+No queda cerca.
+
+**No cierra:**
+- El `+0.0076` del tramo 0 a 60 s (1 341 ventanas, controles en −0.005 y −0.010) es **señal real y
+  fuera de muestra**. Es el mismo cuadro que el paso 2 de la v3.2: **hay estructura medible y es
+  ~100× menor que el peaje**. Lo que se refuta no es que exista señal, es que pague.
+- El §1 se midió con el predictor que el propio documento impone. Un predictor mejor no está
+  descartado *en principio*; está descartado *por el criterio del documento*, que es distinto y hay
+  que decirlo así.
+- Nada de esto toca `H > 4 h`: a 4 h el tramo más largo da 5 ventanas de validación. La banda de
+  decenas de minutos sí queda cubierta, y es la que importaba.
+
+### Reservas declaradas
+
+1. **`c(u)` sigue usando tarifas asumidas VIP 0.** Mismo criterio no cumplido que en la v3.1 y la
+   v3.2: `/fapi/v1/commissionRate` es firmado y el Modo LECTURA no tiene credenciales.
+2. **La partición es 60/20/20 en tiempo**, así que entrenamiento y validación son tramos
+   *distintos* de mercado. Con la volatilidad cambiando hasta 4.6× entre bloques, eso penaliza al
+   `R²` fuera de muestra — y es deliberado: es la situación real de operar.
+3. **Cuatro tramos no son cuatro muestras independientes** del mercado: son cuatro trozos de doce
+   días consecutivos de BTCUSDT.
+4. `curvas_estacional.py` **no tiene suite propia**; importa las funciones de `horizonte.py`, que
+   sigue en **14/14**, así que la aritmética de las dos curvas es la ya verificada. Lo nuevo y no
+   cubierto por controles es la carga por tramos, que sí se verificó por sus invariantes
+   (cobertura 100 %, spread de 1 tick, `G(0) > 0` en los cuatro).
 
 ---
 
