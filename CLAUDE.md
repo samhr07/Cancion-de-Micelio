@@ -3950,6 +3950,187 @@ No queda cerca.
 
 ---
 
+## HOJA DE RUTA tras la sesión 2026-08-23 — qué falta, y el dimensionamiento de posición
+
+Escrita a partir de lo medido el 2026-08-23, no de lo planeado antes. Todo lo que se
+afirma aquí tiene su número en las secciones de esa sesión.
+
+### 0. El estado en una frase
+
+**Hay un modelo del RÉGIMEN y no hay una señal.** `ν` y `σ` están medidas, tienen ciclo con
+período conocido, se pronostican a un paso (`R²` = 0.615) y traen barra de error viva. Lo
+que no existe es `α`: el §1 midió `R² ≈ 0` con el predictor que su propio documento impone,
+y su veredicto está **retractado** por estacionalidad, no confirmado. Sin `α` no hay nada
+que dimensionar. **El dimensionamiento es aguas abajo de una señal que todavía no existe**,
+y por eso lo de abajo se escribe como maquinaria condicional, no como plan de ejecución.
+
+---
+
+### 1. El dimensionamiento de posición
+
+#### 1.1 La fórmula, y de dónde sale cada término
+
+Con el coste **lineal** de la decisión de diseño 2 (2026-08-09) y penalización cuadrática
+de riesgo, el objetivo por ciclo es
+
+```
+J(u) = -alpha*u + c*|u| + (1/2)*R*u^2
+```
+
+cuyo óptimo es una **banda muerta** seguida de una rampa:
+
+```
+|alpha| <= c        ->  u* = 0                       <- el bot se abstiene
+|alpha| >  c        ->  u* = sign(alpha) * (|alpha| - c) / R
+```
+
+y con `R = gamma * sigma_H^2` (varianza al horizonte de tenencia `H`):
+
+```
+u* = sign(alpha) * (|alpha| - c) / (gamma * sigma_H^2)
+u_final = sign(u*) * min( |u*|, techo_de_riesgo )        <- decisión de diseño 3: `min`, NO derivación
+```
+
+| término | qué es | estado hoy |
+|---|---|---|
+| `alpha` | ventaja esperada por unidad, en pb | ⛔ **NO EXISTE.** §1 retractado; el mejor `R²` con potencia fue ≈ 0 |
+| `c` | coste ida y vuelta, en pb | ⚠ **4.00 pb con tarifas ASUMIDAS VIP 0**. Criterio incumplido desde la v3.1 |
+| `sigma_H` | volatilidad al horizonte de tenencia | ✅ **pronosticable**, `R²` = 0.615 a un paso de 5 min |
+| `gamma` | aversión al riesgo | decisión de política. **No se deriva del techo** (cancela `alpha`) |
+| techo | `I_max`, `nocional_max_posicion` | ✅ vivo en la capa de riesgo de la v1.3 |
+
+#### 1.2 Lo que la sesión de hoy cambia, y es lo más importante del apartado
+
+**Un tamaño fijo está mal por dos órdenes de magnitud.** El nivel diario de `sigma` recorre
+**13.75×**, así que `sigma^2` recorre **~190×**. Como `u* ∝ 1/sigma^2`, un tamaño constante
+estaría mal dimensionado por ese factor entre el día más tranquilo y el más agitado. **El
+dimensionamiento TIENE que ser condicional al pronóstico de `sigma`**, y hoy por primera
+vez ese pronóstico existe.
+
+#### 1.3 ⚠ Y el pronóstico puntual NO se puede enchufar tal cual: sobredimensiona 1.9×
+
+El error de pronóstico de `log sigma` tiene `sd = 0.5676` y es aproximadamente normal en
+logaritmos. Entonces, con `sigma_real = sigma_hat * exp(e)` y `e ~ N(0, 0.5676^2)`:
+
+```
+E[ 1/sigma_real^2 ]  =  (1/sigma_hat^2) * exp(2 * 0.5676^2)  =  1.905 / sigma_hat^2
+```
+
+**Enchufar `sigma_hat` en `1/sigma^2` sobredimensiona por un factor 1.9.** Es la misma
+desigualdad de Jensen que ya mordió hoy en el NIS de la barra de error, y por tercera vez
+en el proyecto (tras `q̄`/`G_0` y el propio NIS). No es un matiz: es casi el doble de
+posición.
+
+**Y la dispersión del pronóstico es mayor que su sesgo.** El error relativo mediano en
+`sigma` es del **30 %**, que en `sigma^2` son **~69 %**; y el cuantil 90 del pronóstico está
+en `2.07 * sigma_hat`, o sea **4.29× en `u`** entre dimensionar con la mediana y dimensionar
+con el decil superior.
+
+**Regla que sale de esto, y se escribe como decisión:** dimensionar con un **cuantil
+superior** de la distribución predictiva de `sigma`, no con su mediana. Cuál cuantil es una
+elección de política —el decil superior cuesta 4.3× de tamaño frente a la mediana— pero
+usar la mediana **no** es una opción neutral: es una elección que sobredimensiona.
+
+#### 1.4 La barra de error es viva, así que el cuantil también debe serlo
+
+El error de pronóstico reciente predice el siguiente (corr **+0.594** a 2 h, `R²` fuera de
+muestra **+0.292**). O sea que la anchura de la distribución predictiva **no es constante** y
+se puede estimar en línea. Consecuencia operativa: en tramos donde el error reciente es
+grande, el cuantil superior se aleja más y el tamaño baja **solo**, sin umbral fijo.
+
+⚠ Con la reserva medida: la barra viva lleva `var(z) = 1.31` contra el 1.0 honesto, y
+**empeora la cola lejana** (`|z| > 3` pasa del 1.27 % al 1.92 %). Es sobreconfiada justo en
+los tramos tranquilos, que son donde un salto sorprende más. Cualquier dimensionamiento que
+cuelgue de ella necesita **suelo** además de cuantil.
+
+#### 1.5 El horizonte de tenencia entra al cuadrado, y su exponente es una banda
+
+`sigma_H = sigma_1 * H^H_p` con `H_p` en **[0.372, 0.554]** (24 ajustes, 4 tramos). Anclando
+en `H_ref = 100 s`, la banda contribuye a `sigma_H^2`:
+
+| `H` | factor de incertidumbre en `sigma_H^2` por la banda de `H_p` |
+|---|---|
+| 300 s | **1.49×** |
+| 1 h | 3.69× |
+| 4 h | **6.10×** |
+
+**Por debajo de ~10 min la banda de `H_p` no es la restricción vinculante** (manda el error
+de pronóstico de `sigma`, 69 % en `sigma^2`); **por encima de una hora sí lo es**. Eso
+importa porque el §1, si alguna vez cruza, cruzará en la banda de decenas de minutos.
+
+#### 1.6 La granularidad convierte la rampa en escalera
+
+`minQty = 0.001 BTC ≈ 96 USD` (decisión de diseño 4) es el paso mínimo expresable. Cerca de
+la banda muerta, `u*` redondea a cero — lo cual es **correcto** (es abstenerse), pero
+significa que **la banda muerta efectiva es más ancha que `c`** y hay que medirla, no
+suponerla. Con `I_max = 0.5 BTC` quedan 500 pasos de resolución sobre el rango completo.
+
+---
+
+### 2. Lo que falta por hacer, en orden
+
+#### 2.1 BLOQUEANTE — rehacer el §1 con lo aprendido
+
+Sin esto no hay `alpha` y todo lo demás es maquinaria sin motor. Cuatro cambios, los cuatro
+justificados por medición de hoy:
+
+1. **Ventanas retrospectivas en SEGUNDOS**, no en `f*H*nu` ticks con `nu` escalar. `nu`
+   recorre 0.55×–2.17× de su media, así que en la hora punta la ventana cubre el **46 %** de
+   los segundos que dice cubrir.
+2. **`sigma_1` y por tanto `R2_req` condicionales al PRONÓSTICO de `sigma`**, no a la hora de
+   reloj. Es donde está el recorrido de 190×, contra el ~8× de la hora — y ese 8× además
+   salió inflado por medias horarias confundidas con el nivel del día.
+3. **Estratos declarados antes de mirar el `R²`.** Recomendación: terciles del `sigma`
+   pronosticado, que es conocido *ex ante* y captura la palanca grande.
+4. **Control positivo de potencia dentro de cada estrato.** Ya existe y está probado; hoy
+   acreditó 11 de 15 filas y descartó las otras 4.
+
+**Criterio de lectura, sin cambios:** el §1.4 se aplica literalmente y «no hay banda viable»
+sigue siendo un desenlace admisible.
+
+#### 2.2 `c(u)` REAL — criterio incumplido desde la v3.1
+
+`/fapi/v1/commissionRate` es firmado. Con tarifas asumidas, todo el criterio económico
+descansa en un número que nadie ha leído de la cuenta. Es barato de arreglar y lleva tres
+versiones pendiente.
+
+#### 2.3 Extender el pronóstico de `sigma` al horizonte de tenencia
+
+Hoy `sigma` se pronostica a **un paso de 5 min**. El dimensionamiento necesita `sigma_H`
+con `H` = el horizonte que el §1 señale. Hay que medir directamente a esa escala en vez de
+extrapolar con `H_p`, precisamente porque `H_p` es una banda y su contribución crece con `H`
+(§1.5).
+
+#### 2.4 Cerrar la v4.1
+
+- **§6** (micro-precio de Stoikov): sólo la fracción de ceros es barata. Hoy se midió que
+  `y_mid` es nulo el **95–97 %** de las veces en los cuatro tramos, así que el margen que
+  §6 persigue sigue ahí.
+- **§5** (`C_respaldo`) — después de que el §1 diga a qué horizonte.
+- **§4** (`η̂` con barrido de colapso) — deuda de reporte, no decisión.
+
+#### 2.5 Datos
+
+- La captura corre hasta el **2026-09-02**. Con **≥ 4 semanas** el perfil semanal deja de ser
+  exploratorio por su propio criterio; hoy son 13 días y ~4 de fin de semana, y eso ya
+  bastó para que los bloques de finde sobreajustaran en `sigma`.
+- **`@depth` no se está capturando.** H1 (presión del libro) sólo se pudo contrastar con
+  nivel 1 y salió que no aporta; para contrastarla de verdad haría falta profundidad a
+  varios niveles. Es una decisión de captura, no de análisis.
+
+#### 2.6 Lo que NO hay que hacer
+
+- **No tocar `Micelio.py`** hasta que el §1 decida. Su auditoría de 2026-08-09 sigue vigente:
+  el código está sano y su modelo no.
+- **No refinar el predictor del §1** antes de rehacerlo bien. El §1.2 lo condiciona a que la
+  curva «cruce o quede cerca», y con el predictor tonto el mejor margen fue **0.076**.
+- **No derivar `gamma` del techo de riesgo** (decisión 3): cancela `alpha` y el tamaño deja
+  de responder a la señal.
+- **No construir ningún nulo sin separar antes nivel diario y forma intradía.** Tres nulos
+  propios fallaron hoy por exactamente eso.
+
+---
+
 ## AUDITORÍA DE `Micelio.py` (2026-08-09) — qué pasaría si se arrancara hoy
 
 `Micelio.py` no se toca desde la v2.2. Desde entonces se han refutado varias de las cantidades
