@@ -3950,6 +3950,74 @@ No queda cerca.
 
 ---
 
+### `c(u)` real (2026-08-23) -- `coste.py`, 13/13 controles
+
+**`c(u)` es el COSTE DE TRANSACCION de ida y vuelta por unidad, en pb**, y la `u` esta ahi
+porque depende de la accion (maker o taker). **No** es el coeficiente difusivo de Loeper
+-- ese es `sigma^2`, la misma `sigma` que ahora se pronostica -- ni `c2_vol = k*omega_m*nu`.
+Tres `c` distintas, y `coste.py` pasa a ser la fuente unica.
+
+**Descomposicion, con procedencia por componente:**
+
+| componente | procedencia | valor |
+|---|---|---|
+| comision | endpoint **FIRMADO** | ⛔ **ASUMIDA** VIP 0. **81.8 %** de `c(u)` |
+| cruce de spread | la captura, 34.8 M ticks | ✅ **MEDIDO: 0.0146 pb** |
+| seleccion adversa | v4.0 §5 | ✅ medida: 0.888 pb |
+| financiacion | endpoint **PUBLICO** | ✅ **LEIDA: 0.4261 pb / 8 h** |
+
+**Lo que se cerro hoy:**
+
+1. **La financiacion se LEE**, ya no se asume. 500 periodos, 2026-03-10 → 08-24:
+   `|tasa|` mediana **0.4261 pb/8 h** (p90 0.8928, ultimos 30 dias 0.6147), media con signo
+   **+0.2333** — y con signo importa, porque **es una transferencia, no un coste: un corto
+   la COBRA**. La constante asumida era 0.9681 pb/8 h, o sea **2.27x demasiado alta**. El
+   efecto sobre el §1 es nulo por debajo de 1 h y < 2.5 % a 2 h, asi que no cambia ningun
+   veredicto — pero deja de ser un numero inventado.
+2. ⚠ **Defecto corregido en `horizonte.py`**: alli la financiacion es
+   `max(H_s − 3600, 0)/(8·3600)`, o sea **cero por debajo de una hora**, sin justificacion.
+   Una tenencia de `H` cruza una marca de financiacion con probabilidad `H/(8 h)`, asi que
+   su coste esperado es **lineal en `H` desde 0**. Numericamente irrelevante (0.0044 pb a
+   300 s contra 4 pb de comision) pero corregido en `coste.py`.
+3. **El spread es despreciable, y por mucho mas de lo que se creia.** Mediana **0.0146 pb**
+   sobre 34.8 M de ticks alineados, contra 4.00 pb de comision maker ida y vuelta: **274x**.
+   Y la diferencia taker−maker (6 pb) es **411x** el spread. **Cruzar el spread no es lo que
+   cuesta; cuesta el escalon de comision.**
+4. ⚠ **Inconsistencia del repo, encontrada al unificar.** `propagador.py` y `cola.py` usan
+   taker = `0.0005` (correcto para futuros USD-M VIP 0); `horizonte.py` **ignora la taker por
+   completo** y su `LASTRE_IDA_VUELTA_PB` sólo lleva maker.
+
+**Y eso ultimo importa mas que todo lo demas de este apartado:**
+
+| esquema | `c(u)` a H = 300 s | `R²_req` × | tramo 1 a 300 s |
+|---|---|---|---|
+| **maker + maker** (lo que el §1 uso) | 4.8926 pb | ×1.00 | 2.04 % |
+| maker + taker | 7.4558 pb | ×2.32 | 4.74 % |
+| **taker + taker** | **10.0190 pb** | **×4.19** | **8.55 %** |
+
+**Todo el §1 se midio suponiendo llenado maker perfecto en las dos patas — el mejor caso
+posible.** Con ejecucion taker el requisito se multiplica por 4.2.
+
+**Lo que NO se puede cerrar, y por que:**
+
+- ⛔ **El criterio del §8 sigue incumplido.** `/fapi/v1/commissionRate` es firmado y el
+  **81.8 %** de `c(u)` descansa en ese numero. `coste.py` trae el lector firmado listo
+  (`leer_comision_firmado`) y una bandera `COMISIONES_LEIDAS` que **no se puede poner a
+  cierto sin pasar tarifas explicitas**, con test que lo comprueba.
+- ⚠ **NO valen las credenciales de Testnet.** El escalon es propiedad de la CUENTA (nivel
+  VIP, descuento BNB, referido) y la de Testnet no es la de Mainnet. La v1.3 ya midio que el
+  `stepSize` de Testnet es 10x mas fino y dejo escrito que calibrar contra el entorno
+  equivocado produce un sistema que funciona en pruebas y se degrada en produccion.
+- **Basta una clave de MAINNET de SOLO LECTURA.** Este endpoint no necesita permiso de
+  trading ni de retiro, y pedir mas permisos de los necesarios es el riesgo que no hay que
+  correr.
+- ⚠ **La tercera pata: `c(u)` no es constante.** Con llenado maker incierto,
+  `c_efectivo = p·c_maker + (1−p)·C_respaldo`. `cola.py` ya tiene la estructura; `p` y
+  `C_respaldo` son el §5 de la v4.1, pendiente y a su vez a la espera de que el §1 diga a
+  que horizonte.
+
+---
+
 ## HOJA DE RUTA tras la sesión 2026-08-23 — qué falta, y el dimensionamiento de posición
 
 Escrita a partir de lo medido el 2026-08-23, no de lo planeado antes. Todo lo que se
