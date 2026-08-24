@@ -3715,6 +3715,106 @@ el dia: **hay que separar nivel diario y forma intradia antes de construir cualq
 
 ---
 
+### Retroalimentacion `σ`-`ν` y prediccion por etapas (2026-08-23) -- `retroalimentacion.py`, 8/8
+
+#### A -- El VAR: la retroalimentacion es ASIMETRICA
+
+`x_t = [log ν_t, log σ_t]`, 3 rezagos de 5 min, 3 081 observaciones contiguas, 13 dias.
+
+```
+log ν(t)      <-  +0.6053 * log ν(t-1)   -0.0543 * log σ(t-1)
+log σ(t)      <-  +0.2428 * log ν(t-1)   +0.2025 * log σ(t-1)
+
+autovalores 0.5693 y 0.2384   ->  vida media 1.23 casillas = 6.2 min
+```
+
+**`ν` empuja a `σ` (+0.243); `σ` casi no empuja a `ν` (−0.054), y encima con signo
+negativo** — mas volatilidad ahora va con algo MENOS actividad despues. `ν` es ademas
+mucho mas persistente (0.605 contra 0.203): la actividad tiene memoria, la volatilidad
+casi no.
+
+**Direccion, fuera de muestra por dias enteros** (que es lo que decide, no un test F
+dentro de muestra):
+
+| objetivo | solo rezagos de `ν` | solo rezagos de `σ` | ambos |
+|---|---|---|---|
+| `log ν(t)` | **+0.7719** | +0.6488 | +0.7721 |
+| `log σ(t)` | +0.5864 | +0.6039 | **+0.6153** |
+
+**Anadir `σ` a la prediccion de `ν` aporta +0.0002: nada.** Anadir `ν` a la de `σ` aporta
++0.011, y `σ` aporta +0.029 sobre `ν` sola. O sea: **no es un lazo simetrico, es un motor
+(`ν`) y una respuesta (`σ`)** — pero para PREDECIR `σ` conviene llevar las dos, porque son
+~95 % redundantes y el 5 % restante es real.
+
+⚠ Matiz frente al hallazgo de H2: con UN rezago `ν(t)` batia a `σ(t)` (0.543 contra 0.510);
+con TRES, la historia propia de `σ` adelanta a la de `ν` (0.604 contra 0.586). No es
+contradiccion: los rezagos de `σ` acaban conteniendo la informacion de `ν` de forma
+indirecta.
+
+**Respuesta al impulso** (choque unitario propagado con `A_1`; es una aproximacion, el
+modelo tiene 3 rezagos):
+
+| pasos (5 min c/u) | 1 | 2 | 3 | 4 | 6 | 8 | 12 |
+|---|---|---|---|---|---|---|---|
+| choque en `ν` → `σ` | **+0.243** | +0.196 | +0.125 | +0.075 | +0.025 | +0.008 | +0.001 |
+| choque en `σ` → `ν` | −0.054 | −0.044 | −0.028 | −0.017 | −0.006 | −0.002 | −0.000 |
+
+Un choque de actividad se agota en `σ` en **~1 hora**.
+
+#### B -- Prediccion por etapas: la barra de error VIVA
+
+⚠ **Precision sobre la propuesta, porque sin ella el test es vacuo.** "Predecir `σ_t` desde
+`t−1`" y "predecir `σ_{t+1}` desde `t`" son **la misma operacion desplazada un paso**: bajo
+estacionariedad sus errores coinciden por construccion. Medido: RMSE 0.5446 contra 0.5631,
+**razon 1.034**, y errores consecutivos con correlacion **+0.0018** (o sea, el error de un
+paso es blanco: no queda estructura que exprimir en el nivel). Eso **no es un hallazgo**.
+
+Lo que si tiene contenido es la version util de la misma idea, y ahi funciona:
+
+**(1) El error reciente PREDICE el error siguiente, y mejor cuanto mas larga la ventana:**
+
+| ventana | 15 min | 30 min | 60 min | 120 min |
+|---|---|---|---|---|
+| n | 1 005 | 492 | 234 | 106 |
+| corr(log RMS pasado, log RMS futuro) | +0.2029 | +0.3219 | +0.3961 | **+0.5940** |
+| `R²` fuera de muestra | +0.033 | +0.088 | +0.117 | **+0.292** |
+
+**Hay barra de error viva y autocalibrada a escala de 1-2 h.** Es exactamente lo que el
+operador buscaba con las dos etapas, formulado de modo que no sea tautologico.
+
+**(2) NIS -- ?es honesta la incertidumbre declarada?**
+
+```
+var(z) con sd CONSTANTE  = 1.0000   (por construccion; no informa)
+var(z) con sd PREDICHA   = 1.3089   (1.0 = honesta)
+curtosis: 12.71 con sd constante  ->  8.77 con sd predicha
+fraccion |z| > 3 : 1.266 %  ->  1.915 %   (normal: 0.270 %)
+```
+
+La barra viva **acerca la varianza a 1 y reduce la curtosis**, pero **empeora la cola
+lejana**: en los tramos tranquilos la `sd` predicha es demasiado pequena y una sorpresa da
+un `z` enorme. Sigue siendo sobreconfiada, igual que el NIS del EAKF en la Fase 1.
+
+**(3) `ν` predice el TAMANO del error, debilmente:** `R²` fuera de muestra sobre
+`log|error|` = +0.0140 con `log ν(t−1)` y +0.0272 con los rezagos completos.
+
+⚠ **Defecto propio corregido, y sin corregirlo el veredicto del (2) era otro.** La `sd`
+predicha se estima modelando `log|e|`, y hay que deshacer el sesgo de Jensen: para
+`e ~ N(0,s)`, `E[log|e|] = log s − 0.63518`, asi que `s = exp(E[log|e|] + 0.63518)`. Yo usaba
+`exp(E[log|e|])·√(π/2)` — que es la conversion valida para `E|e|`, **no** para
+`exp(E[log|e|])`. El error era de **1.506× en `s`, o sea 2.27× en `var(z)`**: daba 2.97 y
+habria declarado deshonesta una barra que esta en 1.31.
+
+#### Lo que esto entrega para el §1
+
+`σ` a un paso se predice con `R²` fuera de muestra **+0.6153** y **error relativo mediano
+del 30 %**. Como `R²_req ∝ σ⁻²`, un 30 % en `σ` son **~60 % en el requisito**: suficiente
+para una **compuerta gruesa** de operar / no operar, insuficiente para dimensionar posicion
+con ella. Y con la barra viva del punto (1), esa compuerta puede llevar su propia confianza
+adjunta en vez de un umbral fijo.
+
+---
+
 ### Registro de lo ejecutado (lectura retractada, cifras validas)
 
 
