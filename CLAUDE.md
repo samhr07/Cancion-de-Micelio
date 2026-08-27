@@ -3508,6 +3508,79 @@ ventanas a 15 min, 46 a 30 min y 23 a 1 h**, contra las 8/4/2 con las que el §1
 DECIDIBLE. La banda donde el `R²` requerido baja a 1.9–5.5 % ya tiene potencia. **Rehacer el §1
 sobre ese tramo es lo siguiente.**
 
+## Sesión 2026-08-27 — Adenda C: el §1 medido por covarianza. Módulo `identidad.py`
+
+Ejecuta `ADENDA_C_REFORMULACION_S1_4_1.md`. **No es una enmienda al criterio**: el §1.4 se
+mantiene palabra por palabra y lo que se sustituye es el **instrumento**. `Micelio.py` sin
+cambios. El conjunto de prueba de la v3.2 no se abre.
+
+### ⚠ LO PRIMERO, porque es lo que el operador preguntó: `σ` con `ν` SIGUE EN PIE
+
+La adenda argumenta que un `R²` fuera de muestra tiene suelo de ruido `≈ k/n` y que ninguna
+fila se lee si la cantidad a medir no supera **3× `q95(|R²_nulo|)`**. Aplicada la misma regla,
+con **200 sorteos**, al hallazgo de predecir volatilidad con actividad:
+
+| | `R²` medido | `q95(\|R²_nulo\|)` | razón | ¿se lee? |
+|---|---|---|---|---|
+| `σ(t)` desde 3 rezagos de (`ν`, `σ`) | **+0.6153** | 0.0798 | **7.7×** | **sí** |
+| **`ν(t)` → `σ(t+1)`** | **+0.5464** | 0.0508 | **11×** | **sí** |
+
+El nulo es **rotación circular** (conserva la memoria de la serie), que da un suelo **14× más
+ancho** que el barajado (0.0798 contra 0.0058). Aun contra ese, pasa con holgura. La crítica de
+la adenda apunta al régimen de `n` pequeño del método de trocear en ventanas; el trabajo de
+`σ`/`ν` tiene `n = 3 081` con `k = 7` y está dos órdenes por encima del suelo. **No hay nada
+que retractar ahí.**
+
+### La identidad, y sus controles con verdad conocida (6/6)
+
+```
+R2(H) = Corr(eps_t, p_{t+H} - p_t)^2 = R_cum(H)^2 / (Var(eps) * sigma_r(H)^2)
+```
+
+Reproduce el §C.3.3 sobre serie sintética con señal inyectada de magnitud conocida
+(`N = 400 000`):
+
+| señal inyectada | **identidad** | ventanas no solapadas, con ajuste fuera de muestra |
+|---|---|---|
+| 0.00 (nulo) | 2.6e-07 | **−0.1941** |
+| 0.20 | 3.0e-06 | −0.1661 |
+| 0.50 | 2.4e-05 | −0.1319 |
+| 1.00 | **6.9e-05** | −0.1018 |
+
+La identidad es **monótona por encima de su propio suelo** y separa señal de nulo por **263×**.
+Las ventanas quedan **dominadas por el sesgo `−k/n`**: las cuatro salen negativas y su recorrido
+(0.092) es menor que el desplazamiento (0.194). Es la tesis de la adenda, medida.
+
+### ⚠ Desviación declarada sobre el nulo del §C.4.1
+
+El §C.4.1 pide «barajados de `ε` preservando el precio». Un barajado destruye también la
+**memoria larga de `ε`**, que es real (`N_eff` de los signos = 46.5) y que infla la varianza del
+estimador por el solapamiento de las parejas — **el modo de fallo 8 de la propia adenda**. Se usa
+**rotación circular**, que conserva toda la autocorrelación de `ε` y rompe sólo el
+emparejamiento, y se reportan los dos. Sobre el control sintético con `ε` de memoria, la rotación
+da un suelo **48× más ancho** (0.000432 contra 0.000009): la diferencia no es cosmética.
+
+### ⚠ Tres defectos propios, los tres de familias que este proyecto ya conoce
+
+1. **Alineación de rezagos, en mi propio control.** Inyecté la señal como `a·cumsum(ε)`, pero
+   `cumsum[j] − cumsum[i] = Σ_{s=i+1..j} ε_s`, que **excluye `ε_i`**: la «señal» era predecible
+   desde el futuro, no desde el presente, y la identidad devolvía 0 **correctamente**. Misma
+   familia que el `mode="same"` de la v3.1 §3 y el `h(1) = 0` del núcleo.
+2. **Dos aserciones mal formuladas.** Exigía monotonía incluso donde la señal inyectada cae por
+   debajo del suelo de muestreo, y afirmaba que las ventanas «no son monótonas» — medido, **sí**
+   lo son, pero eso no las salva: lo cierto es peor, el sesgo las domina.
+3. **Memoria.** Cargar los cinco fragmentos a la vez son ~1.1 GB con ~1 GB libre, y el proceso
+   murió. Convertido en generador. **Tercera vez que la RAM de este portátil decide la
+   arquitectura del análisis.**
+
+### Orden codificado, no confiado a la memoria
+
+`--etapa=medir` **se niega a correr** si no existe el archivo de suelo congelado. El §C.4.1 exige
+producir la tabla de resolución antes de calcular un solo `R²` real, y un orden que depende de
+que alguien se acuerde no es un orden.
+
+---
+
 ## Sesion 2026-08-23 -- v4.1 §1 rehecho, y RETRACTADO el mismo dia por estacionalidad
 
 ⚠⚠ **EL VEREDICTO DE ESTA SESION NO SE SOSTIENE. NO CITARLO.** Lo que sigue se conserva entero
