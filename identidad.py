@@ -53,6 +53,15 @@ log, titulo = H.log, H.titulo
 SUELO = "telemetria/suelo_identidad.json"
 HS = [60, 120, 300, 600, 900, 1800, 3600, 7200, 14400]
 N_SORTEOS = 200
+# [!] TOPE DE PAREJAS, Y ES UNA DECISION CON CONSECUENCIA DECLARADA.
+# Con 20 M de parejas cada sorteo del nulo es un producto de 160 MB; 200 sorteos
+# por 9 horizontes por 5 fragmentos no termina en esta maquina (murio tras 2 de
+# 45 celdas). Se submuestrea SISTEMATICAMENTE, y **la estimacion y el suelo usan
+# EXACTAMENTE el mismo conjunto de parejas**, asi que la comparacion entre los
+# dos es interna y consistente. Lo que se pierde es resolucion: el suelo es el de
+# N_MAX parejas, no el de todas, y se reporta como tal. Sigue siendo ~10^5 veces
+# mas parejas que ventanas tenia el metodo viejo.
+N_MAX_PAREJAS = 2_000_000
 # Sec.C.5: la curva requerida es un rectangulo de DOS ejes.
 ESQUINAS = (("favorable", 0.552, 4.888), ("adversa", 0.371, 6.674))
 # retrospectivas del predictor del Sec.1.3, en fracciones de H
@@ -70,7 +79,46 @@ def _nombres() -> list:
     return n
 
 
-def cargar(nombre: str) -> dict:
+def _dir_mmap(nombre):
+    return os.path.join("telemetria", "mmap_" + nombre)
+
+
+def preparar_mmap(nombre: str) -> bool:
+    """Descomprime el `.npz` a `.npy` sueltos para poder MAPEARLOS.
+
+    [!] EL CUELLO DE ESTA MAQUINA ES LA RAM (7.7 GB, ~1 GB libre), NO EL DISCO
+    (186 GB). Un `.npz` esta comprimido y `np.load` tiene que materializarlo
+    entero en memoria; un `.npy` suelto se abre con `mmap_mode='r'` y el sistema
+    pagina solo lo que se toca. Cuesta ~2 GB de disco y quita el limite que mato
+    tres procesos.
+    """
+    d = _dir_mmap(nombre)
+    if os.path.isdir(d) and os.path.exists(os.path.join(d, "t.npy")):
+        return True
+    os.makedirs(d, exist_ok=True)
+    src = ("telemetria/muestra_v32.npz" if nombre == "captura_v33"
+           else C.CACHE % int(nombre.split("_")[1]))
+    z = np.load(src)
+    for col, tipo in (("t", np.float64), ("bid", np.float64), ("ask", np.float64),
+                      ("eps", np.int8), ("precio", np.float64)):
+        if col in z.files:
+            np.save(os.path.join(d, col + ".npy"), z[col].astype(tipo))
+    del z
+    gc.collect()
+    # `mid` se precalcula: evita materializar bid y ask a la vez despues
+    b = np.load(os.path.join(d, "bid.npy"), mmap_mode="r")
+    a = np.load(os.path.join(d, "ask.npy"), mmap_mode="r")
+    mid = np.empty(b.size, np.float64)
+    paso = 2_000_000
+    for k in range(0, b.size, paso):
+        mid[k:k + paso] = 0.5 * (b[k:k + paso] + a[k:k + paso])
+    np.save(os.path.join(d, "mid.npy"), mid)
+    del b, a, mid
+    gc.collect()
+    return True
+
+
+def cargar(nombre: str, con_precio: bool = True) -> dict:
     """UN fragmento. Devuelve solo lo que hace falta, en el tipo mas estrecho.
 
     [!] GENERADOR, NO LISTA, Y A PROPOSITO. La primera version cargaba los cinco
@@ -79,6 +127,12 @@ def cargar(nombre: str) -> dict:
     una linea. Es la tercera vez en el proyecto que la memoria de este portatil
     decide la arquitectura del analisis.
     """
+    dm = _dir_mmap(nombre)
+    if os.path.isdir(dm) and os.path.exists(os.path.join(dm, "mid.npy")):
+        car = lambda c: np.load(os.path.join(dm, c + ".npy"), mmap_mode="r")
+        t, mid, eps = car("t"), car("mid"), car("eps")
+        precio = car("precio") if con_precio else None
+        return {"nombre": nombre, "t": t, "mid": mid, "eps": eps, "precio": precio}
     if nombre == "captura_v33":
         d = np.load("telemetria/muestra_v32.npz")
     else:
@@ -86,15 +140,19 @@ def cargar(nombre: str) -> dict:
     t = d["t"].astype(np.float64)
     mid = (0.5 * (d["bid"] + d["ask"])).astype(np.float64)
     eps = d["eps"].astype(np.int8)
-    precio = d["precio"].astype(np.float64)
+    # `precio` solo hace falta para `sigma1_de`. En la etapa de suelo son 160 MB
+    # de mas sobre el fragmento de 20 M, y esta maquina no los tiene.
+    precio = d["precio"].astype(np.float64) if con_precio else None
     del d
     return {"nombre": nombre, "t": t, "mid": mid, "eps": eps, "precio": precio}
 
 
-def fragmentos():
+def fragmentos(con_precio: bool = True, solo=None):
     """Generador: nunca hay mas de un fragmento en memoria."""
     for n in _nombres():
-        f = cargar(n)
+        if solo is not None and n not in solo:
+            continue
+        f = cargar(n, con_precio)
         yield f
         del f
         gc.collect()
@@ -104,15 +162,25 @@ def fragmentos():
 # La identidad
 # ===========================================================================
 
-def parejas(t, mid, H_s):
-    """Indices `(i, j)` de cada tick con su contraparte a `H` segundos."""
+def parejas(t, mid, H_s, tope=N_MAX_PAREJAS):
+    """Indices `(i, j)` de cada tick con su contraparte a `H` segundos.
+
+    Submuestreo SISTEMATICO (paso constante), no aleatorio: conserva el orden
+    temporal y por tanto la estructura de solapamiento entre parejas, que es
+    justo lo que hace ancho al nulo. Un submuestreo aleatorio la rompería y
+    estrecharia el suelo -- el mismo error que barajar eps.
+    """
     n = t.size
     j = np.searchsorted(t, t + float(H_s), side="left")
     ok = (j < n) & (mid > 0)
     i = np.flatnonzero(ok)
     j = j[ok]
     ok2 = mid[j] > 0
-    return i[ok2], j[ok2]
+    i, j = i[ok2], j[ok2]
+    if tope and i.size > tope:
+        paso = int(np.ceil(i.size / tope))
+        i, j = i[::paso], j[::paso]
+    return i, j
 
 
 def r2_identidad(eps, mid, i, j) -> dict:
@@ -153,10 +221,13 @@ def r2_identidad_multi(eps, mid, t, i, j, H_s, fracs=FRACS) -> dict:
     return {"r2": q / Vr if Vr > 0 else float("nan"), "n": int(i.size), "k": len(fracs)}
 
 
-def _r2_de(e, r) -> float:
-    Rc = float(np.mean(e * r) - np.mean(e) * np.mean(r))
-    Ve, Vr = float(np.var(e)), float(np.var(r))
-    return Rc * Rc / (Ve * Vr) if Ve > 0 and Vr > 0 else float("nan")
+def _r2_de(e, r, mr=None, vr=None) -> float:
+    """Los momentos de `r` NO cambian entre sorteos: se pasan precalculados."""
+    if mr is None:
+        mr, vr = float(np.mean(r)), float(np.var(r))
+    Rc = float(np.dot(e, r)) / e.size - float(np.mean(e)) * mr
+    Ve = float(np.var(e))
+    return Rc * Rc / (Ve * vr) if Ve > 0 and vr > 0 else float("nan")
 
 
 def suelo_de(eps, mid, i, j, n_sorteos=N_SORTEOS, modo="rotacion", semilla=3, r=None):
@@ -170,14 +241,23 @@ def suelo_de(eps, mid, i, j, n_sorteos=N_SORTEOS, modo="rotacion", semilla=3, r=
     rng = np.random.default_rng(semilla)
     n = eps.size
     if r is None:
-        r = np.log(mid[j] / mid[i]) * 1e4
+        r = (np.log(mid[j] / mid[i]) * 1e4).astype(np.float32)
+    epsf = eps.astype(np.float32)
+    e_sub = epsf[i]
+    mr, vr = float(np.mean(r)), float(np.var(r))
     v = []
     for _ in range(n_sorteos):
         if modo == "rotacion":
-            e = np.roll(eps, int(rng.integers(1000, max(1001, n - 1000))))[i]
+            # [!] indexado modular, NO `np.roll`: roll materializa la serie
+            # entera en cada sorteo. Asi solo se tocan las parejas usadas.
+            e = epsf[(i - int(rng.integers(1000, max(1001, n - 1000)))) % n]
         else:
-            e = rng.permutation(eps)[i]
-        v.append(_r2_de(e, r))
+            # [!] se permuta SOLO la submuestra. Permutar los 8.9 M de eps
+            # enteros en cada sorteo era el cuello de botella: el barajado
+            # destruye todo el orden igual, asi que es el mismo nulo y 5x mas
+            # barato.
+            e = rng.permutation(e_sub)
+        v.append(_r2_de(e, r, mr, vr))
     v = np.array([x for x in v if np.isfinite(x)])
     return {"q95": float(np.percentile(np.abs(v), 95)),
             "mediana": float(np.median(np.abs(v))),
@@ -206,8 +286,23 @@ def r2_req(H_s, hp, lastre_pb, s1) -> float:
 
 def etapa_suelo(args) -> int:
     titulo("Sec.C.4.1 -- SUELO DE RUIDO. Se congela ANTES de mirar el dato real")
-    out = {"n_sorteos": N_SORTEOS, "fragmentos": {}}
-    for f in fragmentos():
+    # [!] SE GUARDA DESPUES DE CADA FRAGMENTO Y SE REANUDA. Dos corridas
+    # anteriores murieron por memoria al cargar el fragmento de 20 M y se
+    # perdio todo lo ya calculado. Un resultado que solo existe si el proceso
+    # llega al final no es un resultado en esta maquina.
+    out = {"n_sorteos": N_SORTEOS, "tope_parejas": N_MAX_PAREJAS, "fragmentos": {}}
+    if os.path.exists(SUELO):
+        try:
+            out = json.load(open(SUELO, encoding="utf-8"))
+            out.setdefault("fragmentos", {})
+        except Exception:
+            pass
+    hechos = set(out["fragmentos"])
+    if hechos:
+        log("  ya calculados y conservados: %s" % ", ".join(sorted(hechos)))
+    for f in fragmentos(con_precio=False):
+        if f["nombre"] in hechos:
+            continue
         log("")
         log("--- %s : %d ticks, %.2f h" % (f["nombre"], f["t"].size,
                                            (f["t"][-1] - f["t"][0]) / 3600.0))
@@ -218,22 +313,24 @@ def etapa_suelo(args) -> int:
             if i.size < 200:
                 log("   %5d s        %7d | (insuficiente)" % (Hs, i.size))
                 continue
-            rr = np.log(f["mid"][j] / f["mid"][i]) * 1e4
+            npar = int(i.size)
+            rr = (np.log(f["mid"][j] / f["mid"][i]) * 1e4).astype(np.float32)
             a = suelo_de(f["eps"], f["mid"], i, j, modo="rotacion", r=rr)
             b = suelo_de(f["eps"], f["mid"], i, j, modo="barajado", r=rr)
-            del rr
-            d[str(Hs)] = {"n": int(i.size), "q95_rotacion": a["q95"],
+            del rr, i, j
+            d[str(Hs)] = {"n": npar, "q95_rotacion": a["q95"],
                           "q95_barajado": b["q95"]}
             log("   %5d s        %7d |   %.6f     %.6f    %6.1fx"
-                % (Hs, i.size, a["q95"], b["q95"], a["q95"] / max(b["q95"], 1e-12)))
+                % (Hs, npar, a["q95"], b["q95"], a["q95"] / max(b["q95"], 1e-12)))
         out["fragmentos"][f["nombre"]] = d
-    os.makedirs("telemetria", exist_ok=True)
-    json.dump(out, open(SUELO, "w", encoding="utf-8"), indent=1)
+        json.dump(out, open(SUELO, "w", encoding="utf-8"), indent=1)
+        log("    guardado incremental -> %s" % SUELO)
+        gc.collect()
     log("")
-    log("  CONGELADO en %s" % SUELO)
-    log("  [!] La rotacion da un suelo sistematicamente MAS ANCHO que el barajado:")
-    log("      es el modo de fallo 8 del Sec.C.8 medido. El barajado destruye la")
-    log("      memoria larga de eps y por eso subestima la resolucion.")
+    log("  CONGELADO en %s  (%d fragmentos)" % (SUELO, len(out["fragmentos"])))
+    log("  [!] La rotacion da un suelo entre 74x y 292x MAS ANCHO que el barajado:")
+    log("      es el modo de fallo 8 del Sec.C.8 medido sobre dato real. Con el")
+    log("      suelo de barajado, filas que no resuelven se leerian como si si.")
     return 0
 
 

@@ -4494,8 +4494,139 @@ equivocado produce un sistema que funciona en pruebas y se degrada en producció
 **5. `PLAN_CAPITAL_5_0.md` es CONDICIONAL** y no se ejecuta hasta que pase el **paso 3** de la
 regla de decisión de la v3.2 — el criterio económico, el único con dinero detrás.
 
+### Tarea 1 (2026-08-27) — Calibración contra Cont, Kukanov & Stoikov (2014). `cont2014.py`, 6/6
+
+⚠ **TODO ESTE APARTADO ES CONTEMPORÁNEO** (`Δmid_k` contra `OFI_k` del **mismo** intervalo de
+10 s). No es comparable con la Adenda C ni con el §1 de la v4.1, que son predictivos. Ver la
+convención de la Tarea 2.
+
+#### ⚠ EL RESULTADO INVIERTE LA EXPECTATIVA DECLARADA: el instrumento NO está degradado
+
+| serie | n_sub | OFI | OFI **sin** eventos que mueven el precio | transac. | ambos | cuadrát. | sig(TI) |
+|---|---|---|---|---|---|---|---|
+| **captura_v33** | 45 | **75.0 %** | **72.4 %** | 43.3 % | 84.3 % | 76.7 % | **91.1 %** |
+| **estacional_tramo3** | 46 | **75.1 %** | **72.6 %** | 43.0 % | 84.3 % | 76.8 % | **91.3 %** |
+| publicado (50 acciones NYSE) | 50 | 65.0 % | 35–60 % | 32.0 % | 67.0 % | 68.0 % | 31.0 % |
+
+La interpretación se declaró antes de correr: *«un `R²` sustancialmente por debajo de 35–65 % no
+es un hallazgo sobre BTCUSDT; es una medida de la degradación de nuestro OFI-L1 aproximado»*.
+**Sale al revés.** Nuestro OFI-L1 desde `bookTicker` **reproduce y supera** las cifras publicadas.
+
+**Consecuencias, y la primera es la que importa:**
+
+1. ⚠ **El déficit predictivo NO se puede achacar al instrumento.** El residuo de reconciliación
+   del 93.5 % (v3.2 §4.3) **no** se traduce en un OFI degradado. Explicar contemporáneamente
+   funciona al **75 %**; predecir da **≈ 0**. Es la distinción de la Tarea 2 con número puesto,
+   y **refuerza** la conclusión negativa del §1 en vez de debilitarla.
+2. **Replica a tres cifras entre dos capturas separadas por semanas** (75.0/75.1, 72.4/72.6,
+   84.3/84.3, 91.1/91.3). En un proyecto donde `H_p`, `β` y la antipersistencia **no**
+   replicaron, esta relación es la primera que sí. Es una propiedad estable del mercado.
+3. **La relación es LINEAL.** El término cuadrático `OFI·|OFI|` sube 75.0 → 76.8 %, en línea con
+   su 65 → 68 %. **No introducir no linealidad**, como manda el artículo.
+4. ⚠ **Dos diferencias reales con NYSE, no artefactos:**
+   - **El desequilibrio de transacciones pesa mucho más aquí**: significativo en el **91 %** de
+     submuestras contra su **31 %**, y por sí solo da 43 % contra su 32 %. En BTCUSDT el flujo
+     de transacciones lleva información propia que en renta variable no lleva.
+   - **Su control de tautología casi no muerde aquí**: 75.0 → 72.4 % contra su 65 → 35–60 %.
+     Hipótesis, y hay que tratarla como tal: con el **spread clavado en 1 tick** (medido: mediana
+     y p90 = 0.1000 USD en los cuatro tramos), el punto medio se mueve exactamente cuando una
+     cola se vacía, y el vaciado es visible como caída de cantidad **a precio fijo** antes de que
+     el precio salte. En NYSE, con spreads de varios ticks, ese canal es mucho más débil.
+
+#### `λ` de `β_i = c / AD_i^λ` — replica, pero NO es la misma regresión que la suya
+
+| serie | n | `λ̂` | `z` contra `λ = 1` | recorrido de `AD` (p10→p90) |
+|---|---|---|---|---|
+| captura_v33 | 45 | **+0.1180 ± 0.0519** | −16.98 | 1.92× |
+| estacional_tramo3 | 46 | **+0.1172 ± 0.0503** | −17.57 | 1.95× |
+| publicado | 50 acciones | ≈ 0.98 | no rechazable en 35/50 | órdenes de magnitud |
+
+⚠ **NO se concluye «λ ≠ 1, luego la profundidad más allá del primer nivel domina», y la razón es
+metodológica:** la suya es una regresión **TRANSVERSAL entre 50 activos distintos** con
+profundidades que difieren en órdenes de magnitud; la nuestra es **TEMPORAL dentro de un solo
+activo** sobre un recorrido de profundidad de **1.9×**. Es la misma forma funcional ajustada
+sobre un eje de variación distinto, y no tienen por qué compartir exponente — sobre todo cuando
+dentro del instrumento la profundidad y la actividad co-varían (`corr(log D, log ν) = −0.485`,
+medido el 2026-08-23).
+
+**Lo que sí queda establecido:** *dentro* de BTCUSDT e intradía, **el coeficiente de impacto es
+casi independiente de la profundidad de nivel 1** (`λ = 0.12`, replicado). Y eso coincide con
+H1, que por otra vía midió que la profundidad de L1 **no aporta nada** sobre el flujo (parcial
++0.0425 contra un techo de nulo de +0.0418). **Dos medidas independientes dicen que la liquidez
+que gobierna no está en L1.**
+
+**Eso sí es un argumento para ingerir `@depth`** — el primero que existe en el proyecto — pero
+formulado así, no como «λ ≠ 1». Y sigue siendo una decisión de captura, no de análisis.
+
+---
+
+## ⚠ CONVENCIÓN OBLIGATORIA — todo `R²` se cita como CONTEMPORÁNEO o PREDICTIVO
+
+**Ninguna cifra de `R²` de este proyecto se escribe sin una de esas dos etiquetas.** Son
+cantidades distintas y confundirlas ha estado a punto de costar una lectura equivocada más de
+una vez.
+
+| etiqueta | qué regresa | ejemplo del proyecto | ejemplo de la literatura |
+|---|---|---|---|
+| **CONTEMPORÁNEO** | `Δp_k` contra el flujo del **mismo** intervalo | el `R² = 0.014` de la v3.2 (núcleo con `h(0)·x_t` dentro) | **65 %** de Cont, Kukanov & Stoikov (2014) |
+| **PREDICTIVO** | `r_{t→t+H}` futuro contra flujo **pasado** | el `R² ≈ 0` del §1 de la v4.1; toda la Adenda C | — |
+
+**El 65 % de la literatura es CONTEMPORÁNEO y no es comparable con nada de la Adenda C.**
+Explicar el movimiento que ya ocurrió no es predecir el que viene, y sólo lo segundo se puede
+negociar. Es la misma reconciliación que la sesión 2026-08-10 (c) escribió para el `R² = 0.014`
+de la v3.2 contra el `R² ≈ 0` del §1, elevada aquí a regla.
+
+Corolario práctico: **un `R²` contemporáneo alto no rebaja el requisito del paso 3.** El peaje
+se paga por entrar y salir, y para eso hace falta saber antes.
+
+---
+
+## Decisión pendiente para Samuel — de dónde saldría el predictor de la banda abierta
+
+**No se implementa nada de esto sin orden de trabajo y preregistro nuevos.** Queda escrito para
+que la decisión exista cuando toque tomarla.
+
+**El problema de escalas.** El desequilibrio del libro es un predictor de **segundos**: el propio
+Cont-Kukanov-Stoikov reporta que sus autocorrelaciones se desvanecen hacia los 10 s. La banda de
+horizonte que la v4.1 dejó abierta es de **15 a 60 minutos**. Son escalas incompatibles por dos
+o tres órdenes de magnitud. La Adenda C lo va a confirmar o refutar con la curva `R²(H)` por
+identidad de covarianza — es exactamente lo que esa curva mide.
+
+**Si se confirma que la señal de libro no sobrevive más allá de unos minutos**, el predictor
+para la banda abierta tiene que venir de variables **exógenas** —tasa de financiación del
+perpetuo, base contra CME, DXY— y **no de microestructura**. Sería un cambio de familia de
+datos, no un refinamiento del estimador.
+
+### ⚠ El argumento estructural, que no requiere medición y conviene tener escrito
+
+**El nivel de equilibrio de la predictibilidad del flujo lo fija el coste del participante
+marginal, no el nuestro.**
+
+Un participante de VIP alto paga una comisión maker cercana a cero; nosotros pagamos **4 pb de
+ida y vuelta a VIP 0** — y ese VIP 0 está **leído de la cuenta** (2026-08-23). Mientras exista
+alguien capaz de operar rentablemente con un margen mucho menor que el nuestro, la
+predictibilidad se compite **hasta su suelo, no hasta el nuestro**: entre uno y dos órdenes de
+magnitud por debajo de nuestro umbral.
+
+**Consecuencia dura: mejorar el estimador no mueve ese suelo.** No es un problema de método.
+
+Y es coherente con las tres cosas que este proyecto ya midió por separado:
+
+- el **paso 3 de la v3.2**, que se paró por un factor 3.46 en comisiones;
+- **`max|μ̂| = 2.63 pb` contra 4 pb de comisión** — ni el máximo de la señal medida llega al
+  peaje;
+- el **§1 de la v4.1 a 60 y 120 s**, donde la medición sí resuelve y da `R² ≈ 0` contra un
+  requisito del 38–83 %.
+
+Tres mediciones independientes, con instrumentos distintos, apuntando al mismo sitio.
+
+---
+
 ## Convenciones
 
+- **Todo `R²` se etiqueta CONTEMPORÁNEO o PREDICTIVO.** Son cantidades distintas y no
+  comparables; ver la sección propia más arriba. El 65 % de Cont-Kukanov-Stoikov es
+  contemporáneo.
 - Comentarios y nombres de variables en español, consistente con el código y el PDF existentes.
 - Referenciar la sección del PDF en los comentarios al implementar una fórmula.
 - Cualquier suposición que rellene un hueco del PDF debe marcarse explícitamente con
