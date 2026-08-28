@@ -4495,6 +4495,56 @@ equivocado produce un sistema que funciona en pruebas y se degrada en producció
 **5. `PLAN_CAPITAL_5_0.md` es CONDICIONAL** y no se ejecuta hasta que pase el **paso 3** de la
 regla de decisión de la v3.2 — el criterio económico, el único con dinero detrás.
 
+### ⚠ v4.1 §6.2 CERRADO — M0/M1/M2 reajustados sobre el micro-precio. **El observable no era el problema**
+
+`micro_v42.py`, 5/5. Habilitado por el §7.3 (×7.2 en observaciones informativas). Ajuste en
+**entrenamiento**, evaluación en **validación**. **El conjunto de prueba de la v3.2 NO se abre.**
+
+| observable | % ceros | `ΔLL/N` M2−M0 | **`q90(\|μ̂\|)`** [USD/BTC] | `q90 / 1.5·c(u)` |
+|---|---|---|---|---|
+| punto medio | 96.67 % | 7.763e-03 | **12.5397** | 0.321 |
+| **MICRO-PRECIO** | **76.16 %** | 6.175e-03 | **12.3815** | 0.317 |
+| precio de transacción | 72.61 % | 6.158e-03 | 0.2173 | 0.006 |
+
+**El micro-price NO mejora `μ̂`.** `q90` pasa de 12.54 a **12.38** — igual dentro del ruido, y
+si acaso **más bajo**. La hipótesis de que la discretización del punto medio estuviera
+**atenuando** `μ̂` queda **refutada**: multiplicar por 7.2 las observaciones informativas no se
+traduce en señal económica.
+
+**El paso 3 sigue fallando, y ahora contra números medidos en vez de asumidos:**
+
+```
+q90(|mu|) = 12.38   contra  1.5*c(u) = 39.05 USD/BTC  ->  falta 3.2x
+q90(|mu|) = 12.38   contra  1.5*L    = 60.91 USD/BTC  ->  falta 4.9x
+```
+
+⚠ **Con el lastre COMPLETO el déficit crece de 3.2× a 4.9×.** La v3.2 comparaba contra `c(u)`
+sola (comisión); el lastre real medido en el §2 de la v4.2 —que incluye selección adversa y el
+respaldo ponderado por la tasa de llenado— es 6.24 pb a 15 min, no 4.00.
+
+**Detalles que confirman que el ajuste es el mismo, no otro:**
+
+- El punto medio da `ΔLL/N = 7.763e-03` en **validación**, contra el `+7.553e-03` que la v3.2
+  publicó en **prueba**: consistente para bloques distintos, y sirve de comprobación de que el
+  reajuste no cambió nada más que el observable.
+- `β` del M2: **−0.1596** sobre el punto medio y **−0.1576** sobre el micro-precio. El régimen
+  de `τ₀` en cota **no depende del observable** — coherente con la reclasificación del §3.4 de
+  la v4.1, que ya lo había degradado a «ajuste no identificado».
+- Residuo de M2 **blanco** en los dos (`ρ₁` = −0.0068 y −0.0066), y **estructurado** en el precio
+  de transacción (`ρ₁` = **−0.281**), que es el rebote bid-ask de siempre.
+
+**Con esto el §6 de la v4.1 queda cerrado del todo**: el punto 1 dijo que el micro-precio sí
+mejora como observable (×7.2), y el punto 2 dice que esa mejora **no llega al criterio
+económico**. Las dos mitades, y no se contradicen: más resolución de medida no es más señal.
+
+⚠ **Un defecto propio, y del tipo silencioso.** `M.particionar` devuelve **índices**, no máscaras
+booleanas. Al cruzarlos con la máscara de calentamiento el proceso reventó — pero antes de
+reventar imprimió `ent.sum()` como si fuera un recuento: **«entrenamiento 191 389 586 086»**, la
+suma de los índices. Un número absurdo por seis órdenes de magnitud que el formato no delataba.
+Si el cruce no hubiera fallado, ese recuento habría entrado en el acta.
+
+---
+
 ### v4.2 §7.3 y §7.4 — las dos últimas deudas. `deudas_v42.py`, 9/9
 
 #### ✅ §7.3 — El micro-precio SÍ mejora, y por 7.2×
