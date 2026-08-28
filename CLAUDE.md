@@ -71,6 +71,12 @@ antes/después y constancia de si había resultado a la vista.
 `difusividad.py` 5/5 · `tick_grande.py` **28/28** · `horizonte.py` **14/14**.
 
 ⚠ **Retractaciones vigentes — no citar lo retirado:**
+- ⚠ **`η̂` NO ES MEDIBLE sobre este instrumento** (2026-08-28). Ni el 0.62 de la v3.3 §2
+  ni el ~0.006 colapsado son mediciones. El modelo de Robert-Rosenbaum supone un precio
+  eficiente **continuo** que cruza barreras de una en una, y aquí el **79-80 %** de los cambios
+  del punto medio son saltos **multi-tick** (media 8.8-9.1 ticks). El `η̂` de la v3.3 canceló su
+  §4 y su §5; el §4 sigue cancelado por otra razón, **el §5 se rehabilita**. Toda tabla de
+  `η̂` futura lleva al lado la comprobación de Dayri-Rosenbaum (`2ηα` contra la horquilla observada).
 - ⚠ **No existe «la» `γ` de este mercado** (v4.1 §3.1, 2026-08-12). Estimada por GPH y Whittle
   local, `γ̂` recorre de **+0.69 a −0.26** según el ancho de banda `m = N^α`, en las dos capturas.
   El mismo barrido sobre fGn de `γ` conocida es **plano** (salto máximo 0.06–0.13 contra 0.45–0.48
@@ -4542,6 +4548,92 @@ booleanas. Al cruzarlos con la máscara de calentamiento el proceso reventó —
 reventar imprimió `ent.sum()` como si fuera un recuento: **«entrenamiento 191 389 586 086»**, la
 suma de los índices. Un número absurdo por seis órdenes de magnitud que el formato no delataba.
 Si el cruce no hubiera fallado, ese recuento habría entrado en el acta.
+
+---
+
+### ⚠⚠ `η̂` RETIRADO — NO ES MEDIBLE SOBRE ESTE INSTRUMENTO (2026-08-28)
+
+**Se retira la compuerta.** Ni el `η̂ = 0.62` de la v3.3 §2 ni el `η̂ ≈ 0.006` colapsado son
+mediciones: **los dos son artefactos, por causas distintas**, y **ninguna conclusión del proyecto
+puede volver a apoyarse en `η̂`**.
+
+#### 1. El valor colapsado es un estimador sesgado a la baja, y el propio mecanismo lo prueba
+
+Colapsar «no reetiqueta continuaciones: **las saca del recuento**» — convierte el barrido en un
+salto de `k > 1` ticks que el filtro de 1 tick elimina. Lo que queda es el rebote bid-ask, que
+**alterna por construcción**. `N_c → 999` no mide pocas continuaciones: **elimina la población
+que las contenía**. La versión colapsada no estima `η`; estima el `η` del subproceso de rebote
+puro, cuyo valor poblacional es ≈ 0 por definición.
+
+#### 2. Comprobación de Dayri–Rosenbaum, que descarta el valor colapsado
+
+Horquilla implícita = `2·η·α`, contra la horquilla observada **clavada en 1 tick**:
+
+| | `η̂` | horquilla implícita |
+|---|---|---|
+| sin colapsar | 0.6200 | **1.24 ticks** — coherente |
+| marca de tiempo idéntica | 0.0239 | 0.048 ticks |
+| colapso 10 ms | 0.0061 | **0.012 ticks** — dos órdenes por debajo |
+
+⚠ **Esta comprobación pasa a ser obligatoria en toda tabla de `η̂` futura.** Un estimador que
+devuelve una horquilla implícita dos órdenes de magnitud por debajo de la observada está **mal
+especificado**, no está midiendo algo pequeño.
+
+#### 3. La premisa del modelo, verificada en fuente primaria
+
+Robert & Rosenbaum (2011), *JFEC* 9(2) 344–366. Abstract del editor, literal: «*we provide a
+model which accommodates the assumption of a **continuous efficient price** with the inherent
+properties of ultra-high-frequency transaction data*». La derivación de `η = N_c/(2N_a)` es
+parada óptima sobre un martingala **continuo** que cruza barreras **de una en una**.
+
+⚠ Lo que NO se pudo verificar: el texto completo (HAL devuelve «Access Denied» por protección
+anti-bot), así que si el estimador admite explícitamente saltos multi-tick queda **sin verificar
+en fuente primaria**. No hace falta: un precio eficiente continuo no puede producir lo de abajo.
+
+#### 4. ⚠ El diagnóstico decisivo, sin parámetro libre: `|Δp|` condicionada a `Δp ≠ 0`
+
+| observable | 1 tick | **más de 1 tick** | media | p99 | máx |
+|---|---|---|---|---|---|
+| **punto medio**, captura_v33 | 20.8 % | **79.2 %** | 8.8 ticks | 52 | 255 |
+| **punto medio**, estacional_0 | 19.9 % | **80.1 %** | 9.1 ticks | 52 | 1 219 |
+| precio de transacción, captura_v33 | 74.0 % | 26.0 % | 2.4 ticks | 11 | 638 |
+| precio de transacción, estacional_0 | 79.2 % | 20.8 % | 1.8 ticks | 7 | 1 134 |
+
+**Cuatro de cada cinco cambios del punto medio son saltos multi-tick.** El estimador sólo cuenta
+pares donde **ambos** cambios son de exactamente 1 tick, o sea que vive en el **~4 %** de los
+pares consecutivos del observable primario. El punto 3 queda **cerrado empíricamente**: el
+proceso está dominado por saltos y el modelo de barreras cruzadas de una en una no lo describe,
+**con colapso o sin él**.
+
+`σ` por transacción **medida** (no extrapolada): **2.66 ticks** en el punto medio (curtosis 878)
+y **8.64 ticks** en el precio de transacción (curtosis 2 639). *(La estimación de 6.3 ticks vía
+`σ₁·ν^(−1/2)` extrapola la firma de reloj de pared dos órdenes por debajo de su rango de ajuste
+[60, 600] s; las medidas directas la flanquean y la conclusión no cambia.)*
+
+#### 5. ⚠ Corrección factual a una pregunta mía: `aggTradeId` NO sirve para esto
+
+Propuse agrupar por `aggTradeId` como agregación canónica de un barrido. **Es falso.** Binance
+define la operación agregada como llenados de la misma orden agresiva **al mismo tiempo Y AL
+MISMO PRECIO**: un barrido de tres niveles produce **tres** `aggTrade`. Agruparía llenados
+repetidos en un mismo nivel, que tienen `Δp = 0` y **ya estaban excluidos** del estimador. **No
+reconstruir `aggTradeId` vía REST para este fin**; ese esfuerzo sigue justificado sólo como
+detector de huecos por continuidad de id (v2.0 §3.4).
+
+#### 6. Consecuencia sobre los apartados que la v3.3 canceló
+
+- **§4 de la v3.3 (propagador sobre el precio eficiente `X_t`) — SIGUE CANCELADO.** Reconstruye
+  `X_t` a partir de `η̂` explícitamente, y un parámetro que se mueve 80× no reconstruye nada. La
+  propia orden advertía además que esa reconstrucción **mete el modelo dentro del dato**.
+- ✅ **§5 de la v3.3 (predicción falsable: cola viva contra cola agotada) — SE REHABILITA.** Su
+  enunciado necesita `cola.py` y `G(τ)`, y **no usa `η̂` en ningún punto**: fue cancelado por una
+  compuerta de la que no depende. Es el único apartado del marco de tick grande que arriesga una
+  **predicción refutable**, y por eso se recupera.
+
+**Prioridad del §5 rehabilitado: BAJA, y explícitamente después** de la superficie `R(H, θ)` y de
+sus compuertas. El §3 de la v3.3 ya estableció que el marco de tick grande **arregla la ciencia y
+no la economía** —horquilla cruzada = 0.26 % del coste total—, así que **ningún desenlace del §5
+mueve la decisión del proyecto**. Es deuda científica de alto valor y prioridad baja. **No
+adelantarlo.**
 
 ---
 
