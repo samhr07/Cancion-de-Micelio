@@ -20,6 +20,7 @@ No se abre una tercera.
 |---|---|---|
 | **v3.2** `ORDEN_TRABAJO_MIGRACION_3_2` | impacto permanente contra transitorio (M0/M1/M1′/M2) | **EJECUTADA** el 2026-08-10 sobre 1 031 155 ticks continuos. Paso 2 pasa, **paso 3 falla**: `q90(\|μ̂\|) = 11.30` contra `1.5·c(u) = 39.05`. Falta el §7 (exige captura completa) |
 | **v4.0** `ORDEN_TRABAJO_EJECUCION_4_0` | cuánto cuesta operar | `captura_estacional` corriendo, 21 días. §4.2 y §5 ya resueltos |
+| **v4.2** `ORDEN_TRABAJO_FRECUENCIA_4_2` | ¿existe un par (tenencia `H`, umbral `θ`) rentable? | **EJECUTADA el 2026-08-28.** §1.1 tarifas **leídas** (criterio del §8 CUMPLIDO), §1.2 Adenda C, §2 y §3 `L(H)` medida, §4 superficie. **Veredicto: NO HAY ÓPTIMO**, `P(max R_nulo ≥ R*) = 0.985` |
 | **v4.1** `ORDEN_TRABAJO_HORIZONTE_4_1` | a qué horizonte (si a alguno) la señal paga el peaje | §11, §2, §3 hechos. El §1 se rehizo el 2026-08-23 y su veredicto quedó **RETRACTADO el mismo día**: `σ₁` y `ν` se agruparon sobre las 24 h y el requisito varía **8.4×** según la hora. **Pendiente: §1 estratificado por casilla horaria.** Quedan §6, §5, §4 |
 
 ✅ **Estado de la captura estacional (2026-08-22): SU COMPUERTA PASA.** Es la primera vez.
@@ -4493,6 +4494,88 @@ equivocado produce un sistema que funciona en pruebas y se degrada en producció
 
 **5. `PLAN_CAPITAL_5_0.md` es CONDICIONAL** y no se ejecuta hasta que pase el **paso 3** de la
 regla de decisión de la v3.2 — el criterio económico, el único con dinero detrás.
+
+### ⚠ v4.2 §4 — LA SUPERFICIE `R(H, θ)`. **NO HAY ÓPTIMO**. `superficie.py`, 7/7
+
+Rejilla congelada con hash **antes** de tocar dato (§4.3 guarda 1):
+`sha256[:16] = a3273c269e5cb299`, 8 `H` × 6 `θ` = 48 celdas, orígenes uniformes en tiempo,
+partición 60/20/20 con **el conjunto de prueba de la v3.2 sin abrir**.
+
+#### El veredicto del §5, primera fila
+
+```
+R(H*, th*) real            = +7.2426 % anual   (estacional_1, H = 4 h, q50)
+max R_nulo: p50 +8.4813   p95 +9.7015   max +10.2030   (200 sorteos)
+*** P(max R_nulo >= R real) = 0.9850 ***
+```
+
+**El máximo de la superficie está POR DEBAJO de la mediana del nulo.** Una rejilla de 48 celdas
+produce por azar un máximo mayor que el medido en el 98.5 % de los sorteos. **No hay óptimo.**
+
+#### La superficie entera (§4.3 guarda 4), no el máximo
+
+| fragmento | celdas evaluables | min | mediana | max | % positivas |
+|---|---|---|---|---|---|
+| estacional_0 (131.8 h) | 13 | −5.08 | −0.79 | −0.26 | **0 %** |
+| estacional_1 (82.5 h) | 28 | −26.11 | −0.80 | **+7.24** | 39 % |
+| estacional_2 (34.7 h) | 16 | −18.24 | −3.73 | −0.13 | **0 %** |
+| estacional_3 (23.3 h) | 10 | −21.29 | −14.34 | −3.35 | **0 %** |
+| captura_v33 (16.4 h) | 12 | −20.53 | +4.52 | +6.89 | 67 % |
+
+**Tres de los cinco fragmentos no tienen ni una celda positiva.** El signo de la superficie no es
+estable entre fragmentos — la misma inestabilidad que mató a `β`, a `H_p` y a la
+antipersistencia. Sólo 79 de 240 celdas son evaluables.
+
+#### Contraste de las tres predicciones del §4.4, se cumplan o no
+
+| | predicción | resultado |
+|---|---|---|
+| **P1** | el óptimo cae entre 2 y 8 h | **posición compatible** (máximo a 4 h) pero **no significativo** (`p` = 0.985) |
+| **P2** | todo por debajo de 30 min sale negativo | ⚠ **REFUTADA**: 3 de 46 celdas positivas (captura_v33 a 15 min q90 = +6.89, q95 = +5.33; estacional_1 q99 = +1.02) |
+| **P3** | un dígito porcentual en el óptimo | **se cumple** (+7.24 %) |
+
+El §4.4 avisa: «si el resultado no cumple P1 y P2, sospechar del cálculo antes que celebrar».
+P2 falla en **3 celdas de 46, todas en los dos fragmentos más cortos** y ninguna sobrevive al
+nulo — es ruido de rejilla, que es justo lo que la guarda 2 existe para detectar.
+
+#### ⚠ `κ` empírico contra el gaussiano — el modo de fallo 5 SÍ dispara
+
+`κ` medido va de **1.42 a 4.63** según fragmento y `H`, contra el gaussiano. **Difiere más del
+20 % en varias celdas**, así que la curva requerida publicada está mal por ese factor **al
+cuadrado** donde eso ocurre. Con curtosis 1179.7, suponer normalidad no era gratis.
+
+⚠ **Y el propio `κ` gaussiano del proyecto estaba mal identificado.** `FACTOR_DECIL = 1.755` es
+`E[z | z > q90(z)]`, el decil superior de `μ` **con signo**: corresponde a operar **una sola
+dirección**. La banda muerta `|α| > c` y el §4 operan en **las dos**, y ahí el valor es
+`E[|z| | |z| > q90(|z|)] = 2·φ(1.6449)/0.10 = **2.0627**`. Son **17.5 %**, o **1.38×** en toda
+curva requerida publicada hasta hoy.
+
+#### ⚠ TRES DEFECTOS PROPIOS EN ESTE §4, y los tres eran la misma trampa
+
+La deriva del bloque de validación se coló por tres puertas distintas. **`estacional_1` es el
+tramo del +24 %**, así que cualquier estrategia que se quede larga «gana» — y eso no es señal, es
+haber elegido el fragmento que subió.
+
+1. **El intercepto en la señal de decisión.** A `H` largo la señal ajustada no cambiaba de signo,
+   `d` salía **1.000**, y `cap` se volvía la media del retorno del bloque: **+141.60 pb**. El
+   máximo de la superficie era **+22.99** y era pura tendencia. Y **el nulo no podía verlo**:
+   barajar signos de flujo no toca ni el intercepto ni los retornos, así que los 200 sorteos
+   devolvían el mismo número y `p` salía 1.0000 por la razón equivocada. Corregido: la decisión
+   se toma con la parte que viene de los rasgos, centrada en entrenamiento.
+2. **Al quitar el intercepto volvió a colarse.** A 8 h la señal seguía sin cambiar de signo,
+   `d = 1` otra vez, `cap = +255 pb`, y el nulo daba **5 valores distintos en 70 sorteos**. Una
+   celda donde el signo de la señal es constante **no es una estrategia condicionada a señal**:
+   es comprar y mantener. Se marcan **NO EVALUABLES** y no puntúan. Con eso el nulo pasa a **70
+   valores distintos de 70**.
+3. **El generador se resembraba al reanudar.** Al partir el nulo en tandas, se recreaba con la
+   misma semilla y se saltaban los sorteos ya hechos: los posteriores **repetían** los números de
+   los primeros. Distribución degenerada. Corregido sembrando por índice de sorteo.
+
+**La lección, y es la quinta vez en esta tanda:** un nulo sólo vale si puede destruir aquello que
+se está midiendo. Barajar el flujo no destruye la deriva, así que contra un estimador que captura
+deriva ese nulo es ciego — y devuelve un `p` que parece un resultado.
+
+---
 
 ### ✅ v4.2 §1.1 — COMPUERTA ABIERTA (2026-08-28). El criterio del §8 queda CUMPLIDO
 
