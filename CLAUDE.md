@@ -4494,6 +4494,168 @@ equivocado produce un sistema que funciona en pruebas y se degrada en producció
 **5. `PLAN_CAPITAL_5_0.md` es CONDICIONAL** y no se ejecuta hasta que pase el **paso 3** de la
 regla de decisión de la v3.2 — el criterio económico, el único con dinero detrás.
 
+### ⚠ ADENDA C CERRADA (2026-08-27) — no hay banda viable donde el instrumento resuelve
+
+`identidad.py`, 7/7 controles. Suelo congelado (5 fragmentos × 9 horizontes) **antes** de
+calcular ningún `R²` real, como exige el §C.4.1. Acta en `telemetria/acta_adendaC_medir.txt`.
+
+#### El desenlace del §C.6, fila por fila
+
+| `H` | desenlace | fragmentos sobre su propio suelo | falta un factor |
+|---|---|---|---|
+| 60 s | **NO HAY BANDA VIABLE** | **5 de 5** | **577×** |
+| 120 s | NO HAY BANDA VIABLE | 2 de 5 | 359× |
+| 300 s | NO HAY BANDA VIABLE | 1 de 5 | 203× |
+| 600 s | NO HAY BANDA VIABLE | **0 de 5** | 127× |
+| 900 s | NO HAY BANDA VIABLE | 0 de 5 | 127× |
+| 1800 s | NO HAY BANDA VIABLE | 0 de 5 | 96× |
+| 3600 s | NO HAY BANDA VIABLE | 0 de 5 | 43× |
+| 7200 s | **el instrumento no resuelve** | — | *no se lee* |
+| 14400 s | **el instrumento no resuelve** | — | *no se lee* |
+
+**Tres lecturas, en orden de importancia:**
+
+1. **A 60 s la señal es REAL y está medida**: los 5 fragmentos superan su propio suelo, con
+   **signo positivo en los 5**. Coherente con el propagador de la v3.1 §2. **Y falta un factor
+   577.** No es que no haya señal: es que no paga.
+2. **El margen se cierra monótonamente con `H`** — 577 → 359 → 203 → 127 → 96 → **43** — y
+   **exactamente donde se cerraría (≥ 2 h) el instrumento deja de resolver.** Es un dato de
+   entrada directo para el §4 de la v4.2, cuyo óptimo previsto (P1) cae entre 2 y 8 h.
+3. **De 10 min a 1 h el `R²` medido no supera su propio suelo en ningún fragmento** (0 de 5).
+   En esa banda no hay medición, hay ruido — y el `R²` que se reporte ahí no significa nada.
+
+#### ⚠ La corrección que hizo falta: la identidad hay que ponderarla por TIEMPO, no por ticks
+
+**La compuerta de calibración del §C.4.3 lo cazó.** La identidad tal como el §C.3.2 la propone
+—cada tick como origen— no reproducía el método de ventanas: daba **0.026** contra **0.0076** a
+60 s, factor 3.4. Diagnóstico, con el mismo predictor y el mismo bloque de validación:
+
+| orígenes | `R²` a 60 s | `R²` a 120 s | n |
+|---|---|---|---|
+| **cada tick** (lo que propone la adenda) | 0.028261 | 0.016233 | 2 223 663 |
+| **uno por segundo de reloj** | **0.001634** | **0.000708** | 422 527 |
+| ídem, sólo validación | 0.004515 | 0.003221 | 76 644 |
+| método de ventanas (OOS, publicado) | 0.0076 | 0.0041 | 1 341 |
+
+**Factor 17 entre ponderar por ticks y por tiempo.** Usar cada tick importa una **ponderación
+por actividad**: los tramos con más transacciones aportan más parejas y son también los de más
+volatilidad. **La curva requerida vive en tiempo de calendario** —la comisión se paga por ida y
+vuelta, la volatilidad se acumula en segundos—, así que el estimando tiene que ser el ponderado
+por tiempo. Es la misma lección que la sesión 2026-08-08 (e), donde la firma solapada
+sobreponderaba los tramos activos y los dos estimadores discrepaban **en signo**.
+
+Con orígenes uniformes, la identidad **sí** reproduce: 0.0045 contra 0.0076, y el propio §C.1 da
+`q95 = 0.060` para las ventanas a 60 s, o sea que su 0.0076 está muy dentro de su propio ruido.
+**La compuerta pasa.**
+
+⚠ **Y la ventaja de resolución SOBREVIVE**: 422 527 orígenes uniformes contra 1 341 ventanas no
+solapadas, **315×**. El §C.3.2 se sostiene; lo que había que corregir era el estimando, no el
+método.
+
+#### Otras dos correcciones propias
+
+- ⚠ **`ε_t` no estaba en la multivariante**, así que el control «la multivariante no puede rendir
+  menos que la univariante» **no era un teorema**: los agregados más cortos promedian ~10³ ticks
+  y diluyen el signo suelto. Con `ε_t` como primera columna, la cota inferior del §C.3.4 se
+  cumple por construcción.
+- ⚠ **La regla del §C.6 exigía signo estable a magnitudes por debajo de su propio suelo.** El
+  signo de una covarianza dominada por ruido es aleatorio: pedirle consistencia convierte una
+  refutación limpia en «no decidible» y esconde el resultado. La estabilidad de signo **solo se
+  exige a un resultado positivo**. Corregido el orden; sin eso, cinco de los nueve horizontes se
+  habrían reportado como «no decidible» en vez de como refutación.
+
+#### El suelo, con el estimador correcto
+
+| fragmento | orígenes a 60 s | q95 a 60 s | q95 a 4 h |
+|---|---|---|---|
+| estacional_1 (20.0 M ticks) | 284 565 | **0.000049** | 0.000424 |
+| estacional_0 (8.9 M) | 422 587 | 0.000129 | 0.000530 |
+| estacional_2 (4.1 M) | 117 209 | 0.000222 | 0.002211 |
+| estacional_3 (1.8 M) | 79 098 | 0.000582 | 0.003872 |
+| captura_v33 (1.0 M) | 52 245 | 0.001352 | 0.007219 |
+
+Razón rotación/barajado: **4× a 81×, mediana 25×**. Sigue justificando la desviación declarada
+sobre el nulo del §C.4.1 — con el suelo de barajado, filas que no resuelven se leerían como si
+resolvieran.
+
+---
+
+### v4.2 `ORDEN_TRABAJO_FRECUENCIA_4_2` — arranque (2026-08-27)
+
+**El cambio de planteamiento:** de «¿existe señal a horizonte `H`?» a «¿existe un par
+(tenencia `H`, umbral `θ`) con rentabilidad neta por unidad de tiempo positiva?». La comisión es
+un **impuesto a la frecuencia**, y el óptimo es interior: existe aunque no sea rentable.
+
+#### ⚠ §1.1 — COMPUERTA NO PASA. Nada de la v4.2 es citable todavía
+
+```
+/fapi/v1/commissionRate  ->  HTTP 401  -2015
+permisos de la clave: enableReading=True   enableFutures=FALSE   ipRestrict=False
+```
+
+Lo que **sí** está leído de la cuenta de Mainnet (2026-08-23): **nivel VIP = 0**, vía
+`commissionRates` de spot = 0.001. De ahí, por tabla pública, futuros VIP 0 = maker 0.0200 % /
+taker 0.0400 %. Lo que **no** se puede leer: el **descuento BNB** (`/fapi/v1/feeBurn` también
+exige `enableFutures`), que valdría −10 %.
+
+⚠ **Nótese que el §4.4 de la orden construye su tabla de expectativas con `lastre = 4.49 pb`, que
+es maker CON descuento BNB** (3.60 + 0.888). Si el BNB no está activo, el lastre real es
+**4.89 pb** y toda esa tabla se desplaza en contra. Es exactamente el número que la compuerta
+existe para fijar.
+
+**Para abrir la compuerta**, sobre la clave de Mainnet: activar *«Restringir el acceso solo a IP
+de confianza»*, añadir la IP de la máquina de captura, y entonces marcar **«Habilitar Futuros»**
+— Binance no ofrece esa casilla sin lista blanca. Sin permisos de trading ni de retiro.
+
+**Decisión de ejecución, declarada:** se ejecutan §1.2, §2, §3 y las deudas del §7, que **no
+dependen** de `c(u)`. **NO se ejecuta el §4 (la superficie)** hasta que la compuerta pase: es la
+etapa que produce un titular citable y su curva de coste entera cuelga del número asumido. `c(u)`
+entra de forma **aditiva**, así que la superficie se recalcula en minutos cuando lleguen las
+tarifas.
+
+#### Estado de las deudas del §7 al arrancar
+
+| deuda | estado |
+|---|---|
+| **7.1** calibración contra Cont–Kukanov–Stoikov | ✅ **HECHA** el 2026-08-27, ver apartado propio. El OFI-L1 **no** está degradado |
+| **7.2** curva en U | implementada en `actividad.py`, pendiente de correr |
+| 7.3 micro-precio | pendiente |
+| 7.4 `η̂` con barrido de colapso | pendiente |
+| **7.5** nulo espectral sobre `ν` | implementado en `actividad.py` con nulo **simulado**, pendiente de correr |
+
+#### §1.2 — suelo de ruido de la Adenda C, medido sobre `estacional_0` (131.83 h)
+
+| `H` | 60 s | 120 s | 300 s | 600 s | 900 s | 1800 s | 3600 s | 7200 s | 14400 s |
+|---|---|---|---|---|---|---|---|---|---|
+| **q95 rotación** | 0.000182 | 0.000192 | 0.000283 | 0.000337 | 0.000317 | 0.000313 | 0.000501 | 0.000553 | **0.000648** |
+| q95 barajado | 0.000002 | 0.000003 | 0.000002 | 0.000002 | 0.000003 | 0.000002 | 0.000002 | 0.000002 | 0.000002 |
+| razón | 82× | 75× | 131× | 151× | 125× | 167× | 227× | 275× | **292×** |
+
+**Dos cosas quedan establecidas:**
+
+1. **El suelo crece 3.6× mientras `H` crece 240×.** El método de ventanas iba como `k/n_val`, que
+   en ese mismo rango empeora ~100×. **La tesis del §C.3.2 se sostiene sobre dato real**, y el
+   orden de magnitud coincide con lo que la adenda había simulado (1.6e-4 a 3.8e-4).
+2. ⚠ **Barajar `ε` subestima el suelo entre 75× y 292×.** El §C.4.1 pedía barajar; la desviación
+   a **rotación circular** —declarada por conservar la memoria larga de `ε`, que es el modo de
+   fallo 8 de la propia adenda— resultó **necesaria**: con el suelo de barajado, filas que **no**
+   resuelven se habrían leído como si resolvieran.
+
+⚠ **Decisión con consecuencia declarada: tope de 2 M de parejas**, con submuestreo **sistemático**
+(no aleatorio: el aleatorio rompería el solapamiento, que es lo que da anchura al nulo) y **el
+mismo conjunto para la estimación y para el suelo**. Se pierde resolución respecto a usar las
+20 M y se reporta como tal; siguen siendo ~10⁵ veces más parejas que ventanas tenía el método
+viejo.
+
+#### Infraestructura: el techo de RAM, resuelto
+
+Los cinco fragmentos pasan a `.npy` sueltos abiertos con `mmap_mode='r'` — **1.4 GB de disco**
+contra 7.7 GB de RAM con ~1 GB libre. Tres procesos habían muerto por eso. **Lección
+complementaria, que costó dos muertes más: un solo trabajo pesado a la vez** — el suelo y la
+Tarea 1 corriendo en paralelo se mataron entre ellos.
+
+---
+
 ### Tarea 1 (2026-08-27) — Calibración contra Cont, Kukanov & Stoikov (2014). `cont2014.py`, 6/6
 
 ⚠ **TODO ESTE APARTADO ES CONTEMPORÁNEO** (`Δmid_k` contra `OFI_k` del **mismo** intervalo de

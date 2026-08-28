@@ -50,7 +50,9 @@ import horizonte as H
 
 log, titulo = H.log, H.titulo
 
-SUELO = "telemetria/suelo_identidad.json"
+SUELO = "telemetria/suelo_identidad.json"          # ponderado por TIEMPO
+SUELO_TICKS = "telemetria/suelo_identidad_ticks.json"  # el viejo, se conserva
+PASO_UNIFORME_S = 1.0     # un origen por segundo de reloj
 HS = [60, 120, 300, 600, 900, 1800, 3600, 7200, 14400]
 N_SORTEOS = 200
 # [!] TOPE DE PAREJAS, Y ES UNA DECISION CON CONSECUENCIA DECLARADA.
@@ -162,19 +164,37 @@ def fragmentos(con_precio: bool = True, solo=None):
 # La identidad
 # ===========================================================================
 
-def parejas(t, mid, H_s, tope=N_MAX_PAREJAS):
+def parejas(t, mid, H_s, tope=N_MAX_PAREJAS, uniforme=True):
     """Indices `(i, j)` de cada tick con su contraparte a `H` segundos.
 
-    Submuestreo SISTEMATICO (paso constante), no aleatorio: conserva el orden
-    temporal y por tanto la estructura de solapamiento entre parejas, que es
-    justo lo que hace ancho al nulo. Un submuestreo aleatorio la rompería y
-    estrecharia el suelo -- el mismo error que barajar eps.
+    [!] `uniforme=True` ES EL MODO CORRECTO, Y LA COMPUERTA DEL Sec.C.4.3 LO
+    OBLIGO. El Sec.C.3.2 propone usar CADA TICK como origen, y de ahi sale su
+    resolucion. Pero eso importa una **ponderacion por ACTIVIDAD**: los tramos
+    con mas transacciones aportan mas parejas, y son tambien los de mas
+    volatilidad. Medido sobre `estacional_0` a H = 60 s, con el MISMO predictor
+    y el MISMO bloque:
+
+        origenes = cada tick        R2 = 0.028261
+        origenes = uno por segundo  R2 = 0.001634      <- factor 17
+
+    La curva requerida vive en TIEMPO DE CALENDARIO -- la comision se paga por
+    ida y vuelta y la volatilidad se acumula en segundos --, asi que el estimando
+    tiene que ser el ponderado por tiempo. Es la misma leccion que la sesion
+    2026-08-08 (e), donde la firma solapada sobreponderaba los tramos activos y
+    los dos estimadores discrepaban en SIGNO.
+
+    Y la ventaja de resolucion SOBREVIVE: 422 527 origenes uniformes contra las
+    1 341 ventanas no solapadas del metodo viejo, o sea 315x mas.
     """
     n = t.size
-    j = np.searchsorted(t, t + float(H_s), side="left")
-    ok = (j < n) & (mid > 0)
-    i = np.flatnonzero(ok)
-    j = j[ok]
+    if uniforme:
+        g = np.arange(t[0], t[-1] - float(H_s), PASO_UNIFORME_S)
+        base = np.unique(np.clip(np.searchsorted(t, g, side="left"), 0, n - 1))
+    else:
+        base = np.arange(n)
+    j = np.searchsorted(t, t[base] + float(H_s), side="left")
+    ok = (j < n) & (mid[base] > 0)
+    i, j = base[ok], j[ok]
     ok2 = mid[j] > 0
     i, j = i[ok2], j[ok2]
     if tope and i.size > tope:
@@ -183,10 +203,24 @@ def parejas(t, mid, H_s, tope=N_MAX_PAREJAS):
     return i, j
 
 
-def r2_identidad(eps, mid, i, j) -> dict:
-    """`Corr(eps_t, r_{t->t+H})^2`, y sus dos piezas por separado."""
+def r2_identidad(eps, mid, i, j, predictivo=False) -> dict:
+    """`Corr(eps_t, r_{t->t+H})^2`, y sus dos piezas por separado.
+
+    [!] `predictivo` NO ES UN ADORNO, Y LA COMPUERTA DEL Sec.C.4.3 LO DELATO.
+    Con `predictivo=False` el retorno arranca en `mid[i]`, que es el punto medio
+    ANTERIOR a la transaccion `i`: incluye el impacto inmediato de esa misma
+    transaccion. Eso es CONTEMPORANEO -- cuando observas `eps_t` ese movimiento
+    ya ocurrio y no se puede negociar --, y por eso la identidad daba +0.026 a
+    60 s contra el +0.0076 que el metodo de ventanas midio con flujo
+    estrictamente pasado: un factor 3.4 que NO era discrepancia del
+    instrumento sino dos cantidades distintas.
+    Con `predictivo=True` el retorno arranca en `mid[i+1]`, el primer punto
+    medio observable DESPUES de la transaccion. Es lo unico comparable con el
+    Sec.1 de la v4.1 y con lo que se puede operar.
+    """
     e = eps[i]
-    r = np.log(mid[j] / mid[i]) * 1e4                 # pb
+    ini = mid[np.minimum(i + 1, mid.size - 1)] if predictivo else mid[i]
+    r = np.log(mid[j] / ini) * 1e4                    # pb
     if e.size < 50:
         return {"r2": float("nan"), "n": int(e.size)}
     Rc = float(np.mean(e * r) - np.mean(e) * np.mean(r))
@@ -197,18 +231,27 @@ def r2_identidad(eps, mid, i, j) -> dict:
             "n": int(e.size), "signo": int(np.sign(Rc))}
 
 
-def r2_identidad_multi(eps, mid, t, i, j, H_s, fracs=FRACS) -> dict:
+def r2_identidad_multi(eps, mid, t, i, j, H_s, fracs=FRACS, predictivo=False) -> dict:
     """Sec.C.3.5: `R2 = c' S^-1 c / sigma_r^2` sobre agregados de flujo pasado.
 
     Es la version comparable al predictor de 4 rasgos que uso la ejecucion, y por
     eso es la que sirve para CALIBRAR contra ella (Sec.C.4.3).
     """
+    # [!] `eps_t` ENTRA COMO PRIMERA COLUMNA, y sin eso el control "la
+    # multivariante no puede rendir menos que la univariante" NO ES UN TEOREMA:
+    # los agregados mas cortos promedian ~10^3 ticks y diluyen el signo suelto,
+    # asi que la multivariante puede rendir MENOS. Con `eps_t` dentro, la
+    # multivariante NESTA a la univariante y la cota inferior del Sec.C.3.4 se
+    # cumple por construccion. El control lo daba por bueno porque en el
+    # sintetico salia asi por casualidad.
     flujo = np.concatenate(([0.0], np.cumsum(eps)))
-    X = np.empty((i.size, len(fracs)))
+    X = np.empty((i.size, len(fracs) + 1))
+    X[:, 0] = eps[i]
     for c_, f in enumerate(fracs):
         ini = np.clip(np.searchsorted(t, t[i] - f * H_s, side="left"), 0, t.size - 1)
-        X[:, c_] = flujo[i] - flujo[ini]
-    r = np.log(mid[j] / mid[i]) * 1e4
+        X[:, c_ + 1] = flujo[i] - flujo[ini]
+    ini_m = mid[np.minimum(i + 1, mid.size - 1)] if predictivo else mid[i]
+    r = np.log(mid[j] / ini_m) * 1e4
     Xc = X - X.mean(0)
     rc = r - r.mean()
     S = (Xc.T @ Xc) / Xc.shape[0]
@@ -218,7 +261,8 @@ def r2_identidad_multi(eps, mid, t, i, j, H_s, fracs=FRACS) -> dict:
     except np.linalg.LinAlgError:
         return {"r2": float("nan"), "n": int(i.size)}
     Vr = float(np.var(r))
-    return {"r2": q / Vr if Vr > 0 else float("nan"), "n": int(i.size), "k": len(fracs)}
+    return {"r2": q / Vr if Vr > 0 else float("nan"), "n": int(i.size),
+            "k": len(fracs) + 1}
 
 
 def _r2_de(e, r, mr=None, vr=None) -> float:
@@ -250,7 +294,8 @@ def suelo_de(eps, mid, i, j, n_sorteos=N_SORTEOS, modo="rotacion", semilla=3, r=
         if modo == "rotacion":
             # [!] indexado modular, NO `np.roll`: roll materializa la serie
             # entera en cada sorteo. Asi solo se tocan las parejas usadas.
-            e = epsf[(i - int(rng.integers(1000, max(1001, n - 1000)))) % n]
+            e = np.take(epsf, i - int(rng.integers(1000, max(1001, n - 1000))),
+                        mode="wrap")
         else:
             # [!] se permuta SOLO la submuestra. Permutar los 8.9 M de eps
             # enteros en cada sorteo era el cuello de botella: el barajado
@@ -297,18 +342,26 @@ def etapa_suelo(args) -> int:
             out.setdefault("fragmentos", {})
         except Exception:
             pass
-    hechos = set(out["fragmentos"])
-    if hechos:
-        log("  ya calculados y conservados: %s" % ", ".join(sorted(hechos)))
+    # [!] REANUDACION POR (FRAGMENTO, HORIZONTE), no por fragmento. Guardar solo
+    # al cerrar un fragmento entero perdia hasta 8 celdas ya calculadas cada vez
+    # que el proceso moria, y muere con regularidad. La unidad de trabajo que
+    # sobrevive tiene que ser la mas pequena que cueste algo.
+    completos = [n for n, d in out["fragmentos"].items() if len(d) >= len(HS)]
+    if out["fragmentos"]:
+        log("  conservado de corridas anteriores:")
+        for n, d in sorted(out["fragmentos"].items()):
+            log("    %-16s %d de %d horizontes" % (n, len(d), len(HS)))
     for f in fragmentos(con_precio=False):
-        if f["nombre"] in hechos:
+        if f["nombre"] in completos:
             continue
         log("")
         log("--- %s : %d ticks, %.2f h" % (f["nombre"], f["t"].size,
                                            (f["t"][-1] - f["t"][0]) / 3600.0))
         log("     H      n_parejas |  q95 rotacion   q95 barajado   razon")
-        d = {}
+        d = out["fragmentos"].get(f["nombre"], {})
         for Hs in HS:
+            if str(Hs) in d:
+                continue
             i, j = parejas(f["t"], f["mid"], Hs)
             if i.size < 200:
                 log("   %5d s        %7d | (insuficiente)" % (Hs, i.size))
@@ -322,15 +375,29 @@ def etapa_suelo(args) -> int:
                           "q95_barajado": b["q95"]}
             log("   %5d s        %7d |   %.6f     %.6f    %6.1fx"
                 % (Hs, npar, a["q95"], b["q95"], a["q95"] / max(b["q95"], 1e-12)))
-        out["fragmentos"][f["nombre"]] = d
-        json.dump(out, open(SUELO, "w", encoding="utf-8"), indent=1)
-        log("    guardado incremental -> %s" % SUELO)
+            out["fragmentos"][f["nombre"]] = d
+            json.dump(out, open(SUELO, "w", encoding="utf-8"), indent=1)
+            gc.collect()
+        log("    %s completo -> %s" % (f["nombre"], SUELO))
         gc.collect()
     log("")
     log("  CONGELADO en %s  (%d fragmentos)" % (SUELO, len(out["fragmentos"])))
-    log("  [!] La rotacion da un suelo entre 74x y 292x MAS ANCHO que el barajado:")
-    log("      es el modo de fallo 8 del Sec.C.8 medido sobre dato real. Con el")
-    log("      suelo de barajado, filas que no resuelven se leerian como si si.")
+    # [!] LA CIFRA SE DERIVA DEL DATO, NO SE CLAVA. La version anterior tenia
+    # escrito "entre 74x y 292x" y luego "entre 55x y 1538x", y las dos dejaron
+    # de ser ciertas en cuanto cambio el estimador. Una conclusion impresa que
+    # no depende de lo medido es exactamente lo que este proyecto persigue en
+    # los demas sitios.
+    raz = [d["q95_rotacion"] / max(d["q95_barajado"], 1e-12)
+           for fr in out["fragmentos"].values() for d in fr.values()]
+    if raz:
+        log("  [!] La rotacion da un suelo entre %.0fx y %.0fx MAS ANCHO que el"
+            " barajado (mediana %.0fx):" % (min(raz), max(raz), float(np.median(raz))))
+        log("      es el modo de fallo 8 del Sec.C.8 medido sobre dato real. Con el")
+        log("      suelo de barajado, filas que no resuelven se leerian como si si.")
+    log("  [!] Origenes UNIFORMES EN TIEMPO (uno por segundo), no cada tick: ver")
+    log("      la nota de `parejas`. El suelo tiene que corresponder al mismo")
+    log("      estimador que se va a medir, y el estimador es el ponderado por")
+    log("      tiempo porque la curva requerida vive en segundos de calendario.")
     return 0
 
 
@@ -346,18 +413,22 @@ def etapa_calibra(args) -> int:
         log("  no esta el fragmento de referencia")
         return 2
     f = cargar("estacional_0")
-    log("     H  |  identidad univar.   identidad multivar.(k=4)   ventanas (publicado)")
+    log("     H  |  univar CONTEMP  univar PREDIC  multivar PREDIC | ventanas (publicado)")
     for Hs, pub in ((60, 0.0076), (120, 0.0041)):
         i, j = parejas(f["t"], f["mid"], Hs)
-        u = r2_identidad(f["eps"], f["mid"], i, j)
-        m = r2_identidad_multi(f["eps"], f["mid"], f["t"], i, j, Hs)
-        log("   %4d s |     %+.6f            %+.6f              %+.4f"
-            % (Hs, u["r2"], m["r2"], pub))
+        uc = r2_identidad(f["eps"], f["mid"], i, j, predictivo=False)
+        up = r2_identidad(f["eps"], f["mid"], i, j, predictivo=True)
+        mp = r2_identidad_multi(f["eps"], f["mid"], f["t"], i, j, Hs, predictivo=True)
+        log("   %4d s |      %+.6f      %+.6f       %+.6f |      %+.4f"
+            % (Hs, uc["r2"], up["r2"], mp["r2"], pub))
     log("")
-    log("  LECTURA: la univariante usa UN solo signo y es por construccion una cota")
-    log("  inferior; la multivariante usa los mismos 4 agregados que la ejecucion y")
-    log("  es la comparable. Las dos dan ~0 donde la ejecucion dio ~0, que es lo que")
-    log("  la compuerta del Sec.C.4.3 exige. No hay discrepancia que abandone nada.")
+    log("")
+    log("  [!] LA LECTURA NO ESTA CLAVADA: se compara contra el ruido del propio")
+    log("      instrumento viejo. El Sec.C.1 da q95 = 0.060 para las ventanas a")
+    log("      60 s, asi que su +0.0076 esta MUY dentro de su propio suelo y")
+    log("      cualquier valor de ese orden lo reproduce. Lo que NO lo reproducia")
+    log("      era la version ponderada por ticks (0.028, factor 17), y por eso")
+    log("      `parejas` usa origenes uniformes en tiempo.")
     return 0
 
 
@@ -381,7 +452,10 @@ def etapa_medir(args) -> int:
             i, j = parejas(f["t"], f["mid"], Hs)
             if i.size < 200:
                 continue
-            r = r2_identidad(f["eps"].astype(float), f["mid"], i, j)
+            # PREDICTIVO: el retorno arranca DESPUES de la transaccion. Es lo
+            # unico operable y lo unico comparable con el Sec.1 de la v4.1.
+            r = r2_identidad(f["eps"].astype(float), f["mid"], i, j,
+                             predictivo=True)
             q = su["fragmentos"].get(f["nombre"], {}).get(str(Hs), {}).get("q95_rotacion")
             reqs = [r2_req(Hs, hp, la, s1[hp]) for _, hp, la in ESQUINAS]
             porH[Hs].append({"nombre": f["nombre"], "r2": r["r2"], "signo": r["signo"],
@@ -410,20 +484,36 @@ def etapa_medir(args) -> int:
         reqa = float(np.median([x["req"][1] for x in filas]))
         q95 = float(np.median(qs)) if qs else float("nan")
         log("  ---")
+        sob = sum(1 for x in filas if x["q95"] and x["r2"] > x["q95"])
         log("  media entre fragmentos %.6f   dispersion %.6f   signos: %d + / %d -"
-            % (r2s.mean(), r2s.std(), sum(1 for s in sg if s > 0), sum(1 for s in sg if s < 0)))
-        # --- Sec.C.6, aplicado literalmente
+            "   superan su propio suelo: %d de %d"
+            % (r2s.mean(), r2s.std(), sum(1 for s in sg if s > 0),
+               sum(1 for s in sg if s < 0), sob, len(filas)))
+        # --- Sec.C.6, con una precision de ORDEN que el documento no fija
+        #
+        # [!] LA ESTABILIDAD DE SIGNO SOLO SE EXIGE A UN RESULTADO POSITIVO.
+        # La fila 2 del Sec.C.6 pide signo estable para declarar banda viable;
+        # la fila 3 (por debajo de la esquina favorable = refutacion) no lo pide,
+        # y con razon: el signo de una covarianza que esta POR DEBAJO DE SU
+        # PROPIO SUELO es aleatorio por construccion. Exigirle consistencia
+        # convierte una refutacion limpia en "no decidible" y esconde el
+        # resultado. La primera version de este codigo hacia justo eso.
+        sobre_suelo = sum(1 for x in filas
+                          if x["q95"] and x["r2"] > x["q95"])
+        bajo_fav = all(x["r2"] < x["req"][0] for x in filas)
         if not np.isfinite(q95) or reqf < 3 * q95:
-            ver = "EL INSTRUMENTO NO RESUELVE (req_fav %.4f < 3*q95 %.4f)" % (reqf, 3 * q95)
+            ver = ("EL INSTRUMENTO NO RESUELVE (req_fav %.4f < 3*q95 %.4f)"
+                   % (reqf, 3 * q95))
+        elif bajo_fav:
+            ver = ("NO HAY BANDA VIABLE: los %d fragmentos por debajo de la esquina"
+                   " FAVORABLE (%d de %d superan siquiera su propio suelo)"
+                   % (len(filas), sobre_suelo, len(filas)))
+        elif r2s.mean() > reqa and not (any(s < 0 for s in sg) and any(s > 0 for s in sg)):
+            ver = "*** HAY BANDA VIABLE: supera la esquina ADVERSA con signo estable ***"
         elif any(s < 0 for s in sg) and any(s > 0 for s in sg):
             ver = "NO DECIDIBLE: el signo de R_cum CAMBIA entre fragmentos"
-        elif r2s.mean() > reqa:
-            ver = "*** HAY BANDA VIABLE: supera la esquina ADVERSA ***"
-        elif r2s.mean() < reqf:
-            ver = "NO HAY BANDA VIABLE a este H (por debajo de la esquina FAVORABLE)"
         else:
             ver = "NO DECIDIBLE: entre las dos esquinas. Falta C_respaldo / H_p"
-        log("  Sec.C.6 -> %s" % ver)
         resumen[Hs] = ver
     log("")
     titulo("DESENLACE POR HORIZONTE (Sec.C.6)")
@@ -528,17 +618,31 @@ def _autotest() -> int:
         "en las ventanas el sesgo -k/n DOMINA a la senal",
         "recorrido %.4f < |sesgo| %.4f, y los 4 negativos" % (rec, abs(vals_v[0])))
 
-    # --- el suelo de rotacion es mas ancho que el de barajado con eps con memoria
+    # --- el suelo de rotacion es mas ancho que el de barajado, Y CUANTO
+    #
+    # [!] EL UMBRAL DE ESTE CONTROL ESTABA CALIBRADO SOBRE LA VERSION VIEJA.
+    # Exigia rotacion > 2x barajado, y con origenes UNIFORMES EN TIEMPO la razon
+    # baja a ~1.5. No es un fallo: es el mecanismo. La rotacion es mas ancha
+    # porque conserva la autocorrelacion de eps entre origenes CONSECUTIVOS; si
+    # los origenes se separan 1 s (decenas de ticks), esa autocorrelacion ya casi
+    # no los liga y las dos vias convergen. El control correcto no es un umbral
+    # fijo: es que la BRECHA CREZCA al densificar los origenes.
     ac = np.cumsum(rng.normal(0, 1, N))
     eps_mem = np.sign(ac - np.convolve(ac, np.ones(2001) / 2001, "same"))
     eps_mem[eps_mem == 0] = 1.0
     p = precio_con_senal(0.0)
-    i, j = parejas(t, p, Hs)
-    a = suelo_de(eps_mem, p, i, j, n_sorteos=60, modo="rotacion")
-    b = suelo_de(eps_mem, p, i, j, n_sorteos=60, modo="barajado")
-    chk(a["q95"] > 2 * b["q95"],
-        "con eps de memoria larga, rotacion da suelo MAS ancho que barajado",
-        "%.6f contra %.6f" % (a["q95"], b["q95"]))
+    razones = []
+    for uni in (True, False):                     # separados 1 s  /  cada tick
+        i, j = parejas(t, p, Hs, uniforme=uni)
+        a = suelo_de(eps_mem, p, i, j, n_sorteos=60, modo="rotacion")
+        b = suelo_de(eps_mem, p, i, j, n_sorteos=60, modo="barajado")
+        razones.append(a["q95"] / max(b["q95"], 1e-30))
+    chk(all(z > 1.0 for z in razones),
+        "la rotacion da suelo mas ancho que el barajado en los dos modos",
+        "uniforme %.2fx, cada tick %.2fx" % (razones[0], razones[1]))
+    chk(razones[1] > razones[0],
+        "y la brecha CRECE al densificar los origenes (es la memoria de eps)",
+        "%.2fx contra %.2fx" % (razones[1], razones[0]))
 
     # --- bajo el nulo, la identidad no depende de H como k/n
     i2, j2 = parejas(t, p, 4000.0)

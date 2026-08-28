@@ -418,14 +418,61 @@ def _autotest() -> int:
     return 1 if fallos else 0
 
 
+def etapa_leer_mainnet(args) -> int:
+    """Lee las tarifas REALES. Las credenciales las pasa el operador y NO se
+    guardan en ningun sitio: solo se imprime el resultado.
+
+    [!] EXISTE PARA QUE LAS CLAVES NO TENGAN QUE PASAR POR LA CONVERSACION. El
+    operador ejecuta esto en su maquina y comparte unicamente las dos cifras.
+    Una clave con permiso de RETIRO que ha pasado por un canal de texto hay que
+    borrarla, y este proyecto ya tuvo dos.
+    """
+    titulo("Sec.1.1 -- TARIFAS REALES DE MAINNET")
+    if not args.clave or not args.secreto:
+        log("  faltan --clave y --secreto")
+        return 2
+    try:
+        d = leer_comision_firmado(args.clave, args.secreto)
+    except Exception as e:
+        log("  FALLO: %r" % (e,))
+        log("  si es -2015: falta `Enable Futures` (no `Enable Withdrawals`),")
+        log("  y Binance solo lo ofrece con lista blanca de IP activada.")
+        return 1
+    m, t = d["maker"], d["taker"]
+    log("")
+    log("  ===== COMPARTE SOLO ESTAS DOS LINEAS =====")
+    log("  maker = %.6f   (%.4f pb por lado)" % (m, 1e4 * m))
+    log("  taker = %.6f   (%.4f pb por lado)" % (t, 1e4 * t))
+    log("  =========================================")
+    log("")
+    log("  c(u) maker+maker = %.4f pb   taker+taker = %.4f pb" % (2e4 * m, 2e4 * t))
+    log("  contra lo asumido hoy: maker %.4f pb   taker %.4f pb"
+        % (2e4 * COMISION_MAKER_ASUMIDA, 2e4 * COMISION_TAKER_ASUMIDA))
+    try:
+        import hashlib, hmac, json as _j, time as _t, urllib.request as _u
+        q = "timestamp=%d&recvWindow=5000" % int(_t.time() * 1000)
+        f = hmac.new(args.secreto.encode(), q.encode(), hashlib.sha256).hexdigest()
+        r = _u.Request("%s/fapi/v1/feeBurn?%s&signature=%s" % (BASE, q, f),
+                       headers={"X-MBX-APIKEY": args.clave})
+        log("  descuento BNB: %s" % _j.loads(_u.urlopen(r, timeout=20).read().decode()))
+    except Exception:
+        log("  descuento BNB: no legible")
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--autotest", action="store_true")
     ap.add_argument("--leer", action="store_true")
+    ap.add_argument("--leer-mainnet", dest="leer_mainnet", action="store_true")
+    ap.add_argument("--clave", default="")
+    ap.add_argument("--secreto", default="")
     ap.add_argument("--informe", action="store_true")
     a = ap.parse_args(argv)
     if a.autotest:
         return _autotest()
+    if a.leer_mainnet:
+        return etapa_leer_mainnet(a)
     if a.leer:
         return etapa_leer(a)
     if a.informe:
