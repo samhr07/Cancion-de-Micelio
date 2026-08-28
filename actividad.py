@@ -291,6 +291,59 @@ def _multitaper(x, dt, NW=4.0, K=7):
     return frec, S / K * dt
 
 
+def _arp_ajuste(x, p_):
+    n = x.size
+    xc = x - x.mean()
+    Xl = np.column_stack([xc[p_ - 1 - i:n - 1 - i] for i in range(p_)])
+    yl = xc[p_:]
+    ph, *_ = np.linalg.lstsq(Xl, yl, rcond=None)
+    e = yl - Xl @ ph
+    s2 = float(np.var(e))
+    aic = n * np.log(max(s2, 1e-300)) + 2 * p_
+    return ph, float(np.sqrt(s2)), aic
+
+
+def _orden_por_aic(x, ordenes=(1, 2, 3, 5, 8, 12, 20, 30)):
+    """[!] EL ORDEN DEL NULO SE ELIGE, NO SE FIJA EN 1.
+
+    Con `nulo=AR(1)` sobre la serie de actividad aparecia un "pico" a 904 s con
+    exceso x4.6 y `p global = 0.000`. Barriendo el orden:
+
+        AR( 1): 12.3 % de frecuencias sobre q95   pico x4.63   p = 0.000
+        AR( 5):  9.1 %                            pico x2.99   p = 0.000
+        AR(20):  5.1 % (= el nominal)             pico x1.52   p = 0.317
+
+    El "pico" era el NULO, no el mercado: un AR(1) no puede imitar la
+    persistencia real de `nu` y su desajuste aparece como exceso de BANDA ANCHA
+    -- concentrado en 600-900 s, el 26 % de esa banda sobre q95 --, no como un
+    pico estrecho. Es el mismo modo de fallo que el Sec.C.8 numero 8 de la
+    Adenda C y que los tres nulos que fallaron el 2026-08-23: **un nulo
+    demasiado estrecho fabrica hallazgos**.
+    """
+    mejor, orden = None, 1
+    for p_ in ordenes:
+        if x.size < 10 * p_:
+            continue
+        try:
+            _, _, aic = _arp_ajuste(x, p_)
+        except Exception:
+            continue
+        if mejor is None or aic < mejor:
+            mejor, orden = aic, p_
+    return orden
+
+
+def _arp_sur(x, p_, rng):
+    ph, s, _ = _arp_ajuste(x, p_)
+    n = x.size
+    z = np.zeros(n)
+    z[:p_] = rng.normal(0, float(np.std(x)), p_)
+    e = rng.normal(0, s, n)
+    for i in range(p_, n):
+        z[i] = float(z[i - p_:i][::-1] @ ph) + e[i]
+    return z
+
+
 def _ar1_sur(x, rng):
     a = float(np.corrcoef(x[:-1], x[1:])[0, 1])
     a = min(max(a, 0.0), 0.995)
@@ -332,11 +385,13 @@ def etapa_espectro(args) -> int:
         return 0
     frec, S = _multitaper(x, 300.0)
     rng = np.random.default_rng(21)
+    orden = _orden_por_aic(x)
+    log("  orden del nulo elegido por AIC: AR(%d)   [ver `_orden_por_aic`: con"
+        " AR(1) aparecia un pico espurio]" % orden)
     sur = np.empty((N_SUR, frec.size))
-    a_ = None
+    a_ = float(np.corrcoef(x[:-1], x[1:])[0, 1])
     for i in range(N_SUR):
-        z, a_ = _ar1_sur(x, rng)
-        sur[i] = _multitaper(z, 300.0)[1]
+        sur[i] = _multitaper(_arp_sur(x, orden, rng), 300.0)[1]
     q95 = np.percentile(sur, 95, axis=0)
     v = frec > 0
     exceso = S[v] / np.maximum(q95[v], 1e-300)
@@ -349,7 +404,8 @@ def etapa_espectro(args) -> int:
     im = int(np.argmax(exceso))
     per = 1.0 / fv[im]
     log("")
-    log("  AR(1) ajustado al residuo: a = %.4f   %d sustitutos SIMULADOS" % (a_, N_SUR))
+    log("  rho1 del residuo = %.4f   %d sustitutos SIMULADOS de AR(%d)"
+        % (a_, N_SUR, orden))
     log("  frecuencias sobre el q95 puntual : %d de %d (%.1f %%, por azar 5 %%)"
         % (int(np.sum(exceso > 1)), exceso.size, 100 * np.mean(exceso > 1)))
     log("  pico: periodo %.0f s = %.2f h   exceso x%.2f   p GLOBAL (max) = %.4f"

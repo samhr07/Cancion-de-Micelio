@@ -4494,6 +4494,64 @@ equivocado produce un sistema que funciona en pruebas y se degrada en producció
 **5. `PLAN_CAPITAL_5_0.md` es CONDICIONAL** y no se ejecuta hasta que pase el **paso 3** de la
 regla de decisión de la v3.2 — el criterio económico, el único con dinero detrás.
 
+### Deudas §7.2 y §7.5 saldadas (2026-08-27) — `actividad.py`, 5/5
+
+#### §7.2 — La curva en U se resuelve a favor de ACTIVIDAD
+
+`R²` fuera de muestra prediciendo `log σ(t+1)`, por bloques contiguos, con nulo por rotación:
+
+| fragmento | n | `σ(t)` | **`ν(t)`** | ambos | nulo q95 |
+|---|---|---|---|---|---|
+| estacional_0 | 1 516 | +0.4978 | **+0.4711** | +0.5119 | 0.1663 |
+| estacional_1 | 987 | +0.7029 | **+0.7540** | +0.7550 | 0.3286 |
+| estacional_2 | 415 | +0.1594 | **+0.2485** | +0.2456 | 0.0401 |
+| estacional_3 | 277 | +0.1395 | **+0.2322** | +0.2013 | 0.1297 |
+| captura_v33 | 189 | +0.4358 | **+0.4427** | +0.4363 | 0.3853 |
+
+**`ν` gana en 4 de 5 fragmentos.** La pregunta «curva en U: ¿volatilidad o actividad?» del §4.3
+del traspaso **se retira de la lista, resuelta a favor de actividad**. Marco: Clark (1973) y
+Tauchen & Pitts (1983) — **no es hallazgo**.
+
+⚠ Reserva de potencia: por fragmento el `n` es de 189 a 1 516 casillas y los márgenes contra el
+nulo van de **1.15×** (captura_v33) a 6.2× (estacional_2). El resultado fuerte es el **agrupado**
+(`n = 3 081`, `R² = 0.6153`, **7.7×** el suelo); por fragmento la comparación `σ` contra `ν` es
+pareada y sufre menos, pero los niveles absolutos de las dos últimas filas no se leen solos.
+
+#### ⚠ §7.5 — NO hay pico en `ν`. Y el pico que apareció primero era MI NULO
+
+Multitaper sobre el residuo de `log ν` tras retirar el ciclo diurno (que explica el 23.3 %),
+tramo contiguo de 82.33 h, **nulo de ruido rojo SIMULADO** — nunca tabla asintótica.
+
+**Primera corrida, con AR(1) como pedía el guion:** pico a **904 s**, exceso **×4.10**,
+`p global = 0.0000`, y dentro de la banda de la v2.1 §2. Es decir: **hallazgo**.
+
+**No lo era.** La firma no cuadraba: **63 de 494 frecuencias (12.8 %) sobre el q95 puntual**,
+cuando un ciclo genuino da un pico *estrecho*, no un exceso repartido por el 13 % del espectro.
+Barriendo el orden del nulo:
+
+| nulo | frecuencias sobre q95 | pico | `p` global |
+|---|---|---|---|
+| AR(1) | 12.3 % | ×4.63 | 0.000 |
+| AR(5) | 9.1 % | ×2.99 | 0.000 |
+| **AR(20)** (elegido por AIC) | **3.8 %** | **×1.48** | **0.335** |
+
+Y el exceso estaba concentrado en **600–900 s (26 % de esa banda sobre q95)**, que es donde un
+AR(1) desajusta más: **banda ancha, no pico**. Un AR(1) no puede imitar la persistencia real de
+`ν` (`ρ₁ = 0.8845`), y su desajuste se lee como señal.
+
+**Con el orden elegido por AIC: NO HAY PICO.** La expectativa declarada antes de correr se
+cumple, y la pregunta de ciclo endógeno abierta desde la v2.2 **queda cerrada sobre la serie de
+actividad**, que es donde nunca se había contrastado.
+
+⚠ **El patrón de la sesión, y conviene tenerlo escrito:** es la **cuarta vez en un día** que un
+nulo demasiado estrecho estuvo a punto de producir un hallazgo falso — el barajado de `ε` en la
+Adenda C (75–1538× demasiado estrecho), los tres nulos del 2026-08-23 que no separaban nivel
+diario de forma intradía, y ahora el AR(1) del espectro. **La regla que sale: el nulo tiene que
+reproducir la propiedad del dato que hace ancho al estadístico, y si no se sabe cuál es, se
+barre el parámetro que la controla y se mira si el veredicto se mueve.**
+
+---
+
 ### ⚠ ADENDA C CERRADA (2026-08-27) — no hay banda viable donde el instrumento resuelve
 
 `identidad.py`, 7/7 controles. Suelo congelado (5 fragmentos × 9 horizontes) **antes** de
