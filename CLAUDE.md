@@ -4495,6 +4495,62 @@ equivocado produce un sistema que funciona en pruebas y se degrada en producció
 **5. `PLAN_CAPITAL_5_0.md` es CONDICIONAL** y no se ejecuta hasta que pase el **paso 3** de la
 regla de decisión de la v3.2 — el criterio económico, el único con dinero detrás.
 
+### v4.2 §7.3 y §7.4 — las dos últimas deudas. `deudas_v42.py`, 9/9
+
+#### ✅ §7.3 — El micro-precio SÍ mejora, y por 7.2×
+
+`micro = (P_a·q_b + P_b·q_a)/(q_a+q_b)` (Stoikov), sobre las 1 031 154 observaciones alineadas
+de `captura_v33`:
+
+| observable | % de ceros | cambios por 1000 pasos |
+|---|---|---|
+| punto medio | 96.67 % | 33.3 |
+| **MICRO-PRECIO** | **76.16 %** | **238.4** |
+| precio de transacción | 72.61 % | 273.9 |
+
+⚠ **Mi compuerta estaba puesta sobre la cantidad equivocada, y hay que decirlo.** La escribí como
+«la *fracción* de ceros debe bajar a menos de la mitad». De 96.67 % a 76.16 % son «sólo» 20
+puntos porcentuales — y con ese criterio el veredicto salía «no sustancial». Pero lo que alimenta
+a un estimador es el **número de observaciones que se mueven**, y ése pasa de 33.3 a 238.4 por
+mil: **×7.2**. **Cuarto umbral de este proyecto puesto a ojo que hubo que corregir midiendo**
+(tras `UMBRAL_TAYLOR_JACOBIANO`, la compuerta de `R²` de la v3.3, y el `|d| < 0.06` del §3).
+
+**Con el criterio correcto: el punto 2 del §6 de la v4.1 —reajustar M0/M1/M2 sobre el
+micro-precio— queda JUSTIFICADO y pasa a la lista.**
+
+#### ⚠ §7.4 — `η̂` NO ES ROBUSTO. El veredicto de la v3.3 §2 se queda sin base
+
+| `Δ` de colapso | n tras colapsar | `η̂` | `N_c` | `N_a` |
+|---|---|---|---|---|
+| **0 ms** (lo que midió la v3.3) | 1 031 154 | **0.6200** | 98 718 | 79 616 |
+| 10 ms | 182 860 | **0.0076** | 999 | 65 990 |
+| 50 ms | 143 979 | 0.0058 | 624 | 54 179 |
+| 200 ms | 84 118 | 0.0051 | 311 | 30 581 |
+
+Réplica en `estacional_0` (8.9 M transacciones): **0.5916 → 0.0061** con el mismo colapso de
+10 ms.
+
+⚠ **La lectura NO es «tick grande aplica».** `η̂` se mueve por un **factor 80** con una sola
+elección de preprocesado. Un estadístico así **no puede sostener un veredicto estructural en
+ninguna de las dos direcciones**. Lo que queda establecido es más incómodo:
+
+> **El `η̂ = 0.62` de la v3.3 §2 dependía enteramente de contar cada transacción de una ráfaga
+> como un evento separado.** Y sobre ese número se **cancelaron sus §4 y §5** — este último
+> descrito por la propia orden como «el apartado con más valor de información del documento».
+
+**Reabrirlos exigiría PREREGISTRAR la ventana de colapso antes de mirar.** Elegirla ahora,
+sabiendo que 10 ms invierte el veredicto, sería elegir el resultado. Queda anotado como deuda con
+su condición, no como resultado.
+
+⚠ **Y un control mío falló primero, por juguete degenerado.** El caso de prueba del colapso tenía
+8 puntos: tras fundir las ráfagas quedaban 4, el filtro `solo_un_tick` los descartaba todos y
+`η` salía infinita. Al rehacerlo con 400 eventos apareció **el mecanismo**, que conviene tener
+escrito: colapsar una ráfaga de 3 niveles **no** la convierte en un movimiento de 1 tick, la
+convierte en uno de **3 ticks** — que `solo_un_tick` entonces **excluye**. El efecto no es
+reetiquetar continuaciones: es **sacarlas del recuento** (`N_c` 239 → 0 en el control).
+
+---
+
 ### ⚠ v4.2 §4 — LA SUPERFICIE `R(H, θ)`. **NO HAY ÓPTIMO**. `superficie.py`, 7/7
 
 Rejilla congelada con hash **antes** de tocar dato (§4.3 guarda 1):
