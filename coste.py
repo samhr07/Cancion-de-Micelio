@@ -74,58 +74,33 @@ BASE = "https://fapi.binance.com"
 
 # --- componentes ASUMIDAS -------------------------------------------------
 # Binance USD-M futures, VIP 0. NO leidas de la cuenta.
-# --- NIVEL VIP LEIDO DE LA CUENTA DE MAINNET (2026-08-23) ------------------
-# `/api/v3/account` con la clave de Mainnet devolvio `commissionRates` de spot
-# = 0.00100000 maker y taker, que es EXACTAMENTE el escalon VIP 0 de spot
-# (0.1000 %). El nivel VIP de Binance es UNIFICADO entre spot y futuros -- lo
-# fija el volumen a 30 dias y la tenencia de BNB, no el producto -- asi que la
-# cuenta esta en VIP 0 tambien en futuros.
-#
-# De ahi, por la tabla publica de futuros USD-M para VIP 0:
-VIP_LEIDO_DE_CUENTA = 0                # LEIDO: spot commissionRates = 0.001
-COMISION_MAKER_ASUMIDA = 0.000200      # 0.0200 %  VIP 0
-COMISION_TAKER_ASUMIDA = 0.000400      # 0.0400 %  VIP 0  <- CORREGIDA, ver abajo
-COMISIONES_LEIDAS = False              # sigue False: ver `criterio_sec8`
+# --- TARIFAS REALES, LEIDAS DE LA CUENTA DE MAINNET (2026-08-28) -----------
+# `/fapi/v1/commissionRate` con clave firmada de Mainnet (Enable Reading +
+# Enable Futures, IP restringida, sin trading ni retiros). El criterio del Sec.8
+# del PREREGISTRO_3_2, abierto desde la v3.1, QUEDA CUMPLIDO.
+COMISION_MAKER_ASUMIDA = 0.000200      # 2.0000 pb por lado   LEIDA
+COMISION_TAKER_ASUMIDA = 0.000500      # 5.0000 pb por lado   LEIDA
+COMISIONES_LEIDAS = True
+VIP_LEIDO_DE_CUENTA = 0                # `/fapi/v2/account` -> feeTier = 0
+BNB_BURN_ACTIVO = False                # `/fapi/v1/feeBurn` -> {'feeBurn': False}
+MMR_TRAMO1_MAINNET = 0.0040            # hasta 300 000 USD de nocional
 
-# ⚠ LA TAKER SE CORRIGE DE 0.000500 A 0.000400, y no es un capricho:
-#   - leida de Testnet:                       0.000400
-#   - derivada del VIP 0 leido de Mainnet:    0.000400
-#   Dos vias independientes coinciden. El 0.000500 que arrastraban
-#   `propagador.py`, `cola.py` y `tick_grande.py` es una tarifa VIEJA: Binance
-#   bajo la taker de futuros de 0.0500 % a 0.0400 %.
-#   ⚠ ATENCION AL SENTIDO DEL CAMBIO: baja el coste, o sea AFLOJA el requisito
-#   (`c(u)` taker+taker pasa de 10.02 a 8.02 pb, `R2_req` x0.64). Un cambio que
-#   afloja un criterio hay que mirarlo dos veces; aqui no toca ningun veredicto
-#   porque TODO el Sec.1 se midio con maker+maker, que no cambia.
+# ⚠ ESTO CORRIGE UNA CORRECCION MIA DEL 2026-08-23, Y EN LA DIRECCION MALA.
+# Aquel dia baje la taker de 0.000500 a 0.000400 apoyandome en dos vias que
+# "coincidian": la lectura de TESTNET y la tabla publica de futuros para VIP 0.
+# La cuenta real dice **0.000500**. Las dos vias coincidian porque las dos eran
+# indirectas -- Testnet no es la cuenta, y una tabla publica no es un escalon
+# leido --, y coincidir no es lo mismo que acertar. El `0.0005` que arrastraban
+# `propagador.py`, `cola.py` y `tick_grande.py` era el CORRECTO desde el
+# principio, y lo que lo salvo fue haberlo conservado como "conservador" en vez
+# de borrarlo.
+# Consecuencia: `c(u)` taker+taker vuelve a 10.00 pb (no 8.02) y `R2_req` de la
+# ejecucion taker se multiplica por 4.19 respecto a maker, no por 2.69.
 COMISION_TAKER_CONSERVADORA = 0.000500
 
-# --- LEIDO DE TESTNET el 2026-08-23, con credenciales de la cuenta demo -----
-# [!] NO CIERRA EL CRITERIO DEL Sec.8 y no se usa por omision. El escalon es
-#     propiedad de la CUENTA de Mainnet; una cuenta de Testnet nace siempre en
-#     `feeTier = 0` (verificado: `/fapi/v2/account` devolvio 0) y no sabe nada
-#     del descuento BNB, del nivel VIP real ni de un referido.
-#
-# ⚠ PERO CONTRADICE AL REPO EN LA TAKER, y hay que decidirlo:
-#     leido en Testnet : maker 0.000200   taker 0.000400
-#     asumido en 4 modulos: maker 0.000200   taker 0.000500
-#   La maker coincide exacta. La taker asumida es un 25 % MAS ALTA que la leida
-#   -- probablemente una tarifa vieja: Binance bajo la taker de futuros de
-#   0.0500 % a 0.0400 % en algun momento. Se conserva 0.0005 por omision porque
-#   es la CONSERVADORA (mas coste = requisito mas duro = conclusion negativa mas
-#   robusta), y se expone la leida para que la proxima sesion decida con el dato
-#   de Mainnet delante, no con este.
-COMISION_MAKER_TESTNET = 0.000200
-COMISION_TAKER_TESTNET = 0.000400
-TESTNET_FEE_TIER = 0
-
-# --- LEIDO DE TESTNET: `leverageBracket`, que la v1.3 no pudo leer ----------
-# La v1.3 dejo escrito que `mmr` no se puede leer sin credenciales y que
-# `mercado.leer_mmr` devuelve el valor por defecto INFLADO por un factor de
-# seguridad de 2x. El valor que asumia era `MMR_PRIMER_TRAMO_BTCUSDT = 0.004`
-# para nocional <= 50 000, y la lectura lo confirma EXACTO. El factor 2x era
-# conservadurismo puro, no ignorancia.
-MMR_TRAMOS_TESTNET = [(50000, 0.0040), (250000, 0.0050), (3000000, 0.0100),
-                      (20000000, 0.0250), (40000000, 0.0500)]
+# ⚠ EL DESCUENTO BNB **NO** ESTA ACTIVO. El Sec.4.4 de la v4.2 construye su
+# tabla de expectativas con `lastre = 4.49 pb`, que es maker CON descuento. El
+# lastre real es **4.888 pb** y esa tabla queda desplazada en contra.
 
 # --- componentes MEDIDAS --------------------------------------------------
 # `curvas_estacional`, 34 812 523 ticks alineados de los cuatro tramos largos.
@@ -241,12 +216,14 @@ def criterio_sec8() -> dict:
     """?Se cumple "escalon de comisiones LEIDO de la cuenta, no asumido"?"""
     c = c_u("maker_maker")
     return {"cumplido": bool(COMISIONES_LEIDAS),
-            "parcial": True,
-            "leido_de_la_cuenta": "nivel VIP = %d (via commissionRates de spot)" % VIP_LEIDO_DE_CUENTA,
-            "de_tabla_publica": "tarifas de futuros USD-M para ese VIP",
-            "sin_leer": "descuento BNB en futuros (`/fapi/v1/feeBurn`), -10 % si esta activo",
-            "fraccion_de_c_que_es_asumida": c["comision_pb"] / c["total_pb"],
-            "bloqueante": "la clave de Mainnet no tiene `enableFutures`"}
+            "parcial": False,
+            "leido_de_la_cuenta": ("maker %.6f, taker %.6f, feeTier %d, BNB %s"
+                                   % (COMISION_MAKER_ASUMIDA, COMISION_TAKER_ASUMIDA,
+                                      VIP_LEIDO_DE_CUENTA, BNB_BURN_ACTIVO)),
+            "de_tabla_publica": "nada",
+            "sin_leer": "nada",
+            "fraccion_de_c_que_es_asumida": 0.0,
+            "bloqueante": None}
 
 
 # ===========================================================================
@@ -298,7 +275,7 @@ def etapa_informe(args) -> int:
                 % (esq, Hs, c["comision_pb"], c["cruce_pb"],
                    c["seleccion_adversa_pb"], c["financiacion_pb"], c["total_pb"]))
     log("")
-    log("  --- lectura de TESTNET (2026-08-23), que NO cierra el criterio ---")
+    log("  --- lectura de TESTNET (historica; la de MAINNET ya la sustituye) ---")
     log("    maker: leida %.6f  contra asumida %.6f   -> %s"
         % (COMISION_MAKER_TESTNET, COMISION_MAKER_ASUMIDA,
            "COINCIDE" if abs(COMISION_MAKER_TESTNET - COMISION_MAKER_ASUMIDA) < 1e-9
@@ -376,10 +353,15 @@ def _autotest() -> int:
     # cambiado a 0.0400 %. Un test que fija una tarifa es justamente lo que
     # impide que una tarifa se mueva en silencio -- que es como el 0.0005 viejo
     # sobrevivio en cuatro modulos sin que nadie lo notara.
-    chk(abs(ct["comision_pb"] - 8.0) < 1e-9, "taker+taker da 8.00 pb (0.0400 % por lado)",
+    # [!] ESTE CONTROL YA FALLO DOS VECES Y LAS DOS CON RAZON: primero al bajar
+    # la taker a 0.0400 % sobre evidencia indirecta, y despues al volver a
+    # 0.0500 % con la lectura REAL de la cuenta. Un test que fija una tarifa es
+    # lo que impide que se mueva en silencio, y aqui impidio que se quedara mal.
+    chk(abs(ct["comision_pb"] - 10.0) < 1e-9,
+        "taker+taker da 10.00 pb (0.0500 % por lado, LEIDO de la cuenta)",
         "%.4f" % ct["comision_pb"])
-    chk(abs(COMISION_TAKER_CONSERVADORA - 0.0005) < 1e-12,
-        "la taker vieja se conserva expuesta, no borrada")
+    chk(abs(COMISION_TAKER_ASUMIDA - COMISION_TAKER_CONSERVADORA) < 1e-12,
+        "la taker real coincide con la que se conservo como conservadora")
     chk(VIP_LEIDO_DE_CUENTA == 0, "el nivel VIP leido de la cuenta de Mainnet es 0")
     cbnb = c_u("maker_maker", 0.0, maker=0.9 * COMISION_MAKER_ASUMIDA,
                taker=0.9 * COMISION_TAKER_ASUMIDA)["total_pb"]
@@ -404,14 +386,16 @@ def _autotest() -> int:
         "a 8 h la financiacion es la tasa entera")
 
     # la bandera no se puede falsear sin pasar tarifas
-    chk(c_u("maker_maker")["comisiones_leidas"] is False,
-        "sin credenciales, `comisiones_leidas` es False")
+    chk(c_u("maker_maker")["comisiones_leidas"] is True,
+        "`comisiones_leidas` es True: las tarifas estan LEIDAS de la cuenta")
     chk(c_u("maker_maker", maker=0.0001, taker=0.0003)["comisiones_leidas"] is True,
         "pasando tarifas explicitas, se marca como leidas")
     cr = criterio_sec8()
-    chk(cr["cumplido"] is False, "el criterio del Sec.8 se reporta INCUMPLIDO")
-    chk(cr["fraccion_de_c_que_es_asumida"] > 0.75,
-        "y la parte asumida domina c(u)", "%.1f %%" % (100 * cr["fraccion_de_c_que_es_asumida"]))
+    chk(cr["cumplido"] is True, "el criterio del Sec.8 se reporta CUMPLIDO")
+    chk(cr["fraccion_de_c_que_es_asumida"] == 0.0,
+        "y ninguna parte de c(u) descansa ya en un numero asumido")
+    chk(BNB_BURN_ACTIVO is False,
+        "el descuento BNB esta LEIDO y esta APAGADO -> lastre 4.888 pb, no 4.49")
 
     log("")
     log("RESULTADO: %d fallo(s)" % fallos)

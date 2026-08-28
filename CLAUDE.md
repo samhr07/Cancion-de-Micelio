@@ -4494,6 +4494,86 @@ equivocado produce un sistema que funciona en pruebas y se degrada en producció
 **5. `PLAN_CAPITAL_5_0.md` es CONDICIONAL** y no se ejecuta hasta que pase el **paso 3** de la
 regla de decisión de la v3.2 — el criterio económico, el único con dinero detrás.
 
+### ✅ v4.2 §1.1 — COMPUERTA ABIERTA (2026-08-28). El criterio del §8 queda CUMPLIDO
+
+Leído de `/fapi/v1/commissionRate` con clave firmada de Mainnet (`Enable Reading` + `Enable
+Futures`, IP restringida, **sin trading ni retiros** — verificado antes de usarla):
+
+```
+maker REAL = 0.000200 = 2.0000 pb por lado     ->  c(u) maker+maker = 4.0000 pb
+taker REAL = 0.000500 = 5.0000 pb por lado     ->  c(u) taker+taker = 10.0000 pb
+feeTier = 0        feeBurn (descuento BNB) = False        mmr tramo 1 = 0.0040 (hasta 300 000)
+```
+
+**El criterio «escalón de comisiones leído de la cuenta, no asumido», abierto desde la v3.1,
+queda CUMPLIDO.** `COMISIONES_LEIDAS = True`.
+
+⚠ **Y corrige una corrección mía del 2026-08-23, en la dirección mala.** Aquel día bajé la taker
+de `0.000500` a `0.000400` apoyándome en dos vías que «coincidían»: la lectura de **Testnet** y
+la tabla pública de futuros para VIP 0. **La cuenta real dice 0.000500.** Las dos vías
+coincidían porque **las dos eran indirectas** —Testnet no es la cuenta, y una tabla publicada no
+es un escalón leído—, y coincidir no es acertar. El `0.0005` que arrastraban `propagador.py`,
+`cola.py` y `tick_grande.py` era **el correcto desde el principio**; lo que lo salvó fue haberlo
+conservado como «conservador» en vez de borrarlo.
+
+⚠ **El descuento BNB está APAGADO.** El §4.4 de la v4.2 construye su tabla de expectativas con
+`lastre = 4.49 pb`, que es maker **con** descuento. No aplica.
+
+---
+
+### v4.2 §2 y §3 — `L(H)` medida con sus cinco términos. `curva_coste.py`, 7/7
+
+`L(H) = c(u) + A(H) + F(H) + (1−p(H))·C_respaldo(H)`, sobre los cinco fragmentos, con
+colocación en rejilla **uniforme en tiempo** y `NIVEL BARRIDO` contado como llenado.
+
+| `H` | `p(H)` | `A(H)` | `C_respaldo(H)` | `(1−p)·C_resp` | **`L` maker** | **`L` taker** |
+|---|---|---|---|---|---|---|
+| 15 min | 0.878 | 1.11 | 9.07 | 1.11 | **6.24** | 11.13 |
+| 30 min | 0.916 | 1.37 | 14.29 | 1.20 | **6.60** | 11.39 |
+| 1 h | 0.937 | 1.49 | 19.18 | 1.21 | **6.75** | 11.54 |
+| 2 h | 0.953 | 2.02 | 31.88 | 1.51 | **7.63** | 12.12 |
+| 4 h | 0.967 | 1.49 | 44.75 | 1.48 | **7.18** | 11.70 |
+| 8 h | 0.981 | 0.77 | 104.79 | 2.02 | **7.21** | 11.19 |
+| 24 h | 0.993 | 0.31 | 52.54 | 0.36 | **5.10** | 10.74 |
+
+*(todo en pb; medianas entre fragmentos de la mediana de cada uno; distribuciones completas por
+fragmento en el acta)*
+
+**Cuatro resultados:**
+
+1. ⚠ **El lastre real es 6.2–7.6 pb, no los 4.888 pb que se venían usando** — y desde luego no
+   los 4.49 del §4.4. Como `R²_req ∝ L²`, **toda curva requerida publicada hasta hoy está baja
+   por un factor 1.6–2.4.**
+2. ✅ **La nota de la v4.1 sobre `C_respaldo` estaba mal y el §3 lo anticipó.** Aquélla decía que
+   pierde peso al crecer `H` porque `p` sube. **`C_respaldo` CRECE fuerte con `H`** (9 → 105 pb),
+   y `p` también, así que el producto `(1−p)·C_respaldo` **no es monótono**: 1.11, 1.20, 1.21,
+   1.51, 1.48, **2.02**, 0.36. Había que medirlo, no razonarlo.
+3. **`p(H)` es alta: 0.88 a 15 min, 0.99 a 24 h.** Con la salvedad declarada: `NIVEL BARRIDO`
+   cuenta como llenado sin conocer la posición en cola, así que es una **cota superior**. Se
+   eligió así a propósito — una `p` optimista hace la conclusión económica más difícil de
+   rechazar, no más fácil.
+4. **`A(H)` es pequeña y casi plana** (mediana 0.3–2.0 pb) pero con dispersión enorme y
+   **casi simétrica** (p10 ≈ −p90: −95 y +96 pb a 24 h). La mediana es un centro débil aquí: la
+   selección adversa no es un coste sistemático grande, es una varianza grande.
+
+#### ⚠ `F(H)`: la financiación es una TRANSFERENCIA con signo, no un coste
+
+| `H` | p(cruce) | `E[F]` largo | `E[F]` corto | \|F\| mediana | \|F\| p90 |
+|---|---|---|---|---|---|
+| 15 min | 0.031 | +0.0073 | **−0.0073** | 0.0133 | 0.0279 |
+| 1 h | 0.125 | +0.0292 | **−0.0292** | 0.0533 | 0.1116 |
+| 8 h | 1.000 | +0.2333 | **−0.2333** | 0.4261 | 0.8928 |
+| 24 h | 3.000 | +0.6999 | **−0.6999** | 1.2783 | 2.6784 |
+
+Con la tasa media medida de **+0.2333 pb/8 h**, **un corto la COBRA**. Tratarla como coste sin
+signo destruye una fuente de ventaja — es el modo de fallo 4 del §8 de la orden. Y es discreta:
+a `H` < 8 h una posición paga sólo si cruza una liquidación, con probabilidad `H/28800`.
+
+Numéricamente es despreciable frente a los 6–7 pb del resto del lastre hasta bien pasadas las
+8 h, pero deja de serlo a 24 h y más.
+
+---
+
 ### Deudas §7.2 y §7.5 saldadas (2026-08-27) — `actividad.py`, 5/5
 
 #### §7.2 — La curva en U se resuelve a favor de ACTIVIDAD
