@@ -4693,6 +4693,77 @@ reetiquetar continuaciones: es **sacarlas del recuento** (`N_c` 239 → 0 en el 
 
 ---
 
+### ⚠⚠ §1 ESTRATIFICADO POR σ PRONOSTICADA — REGLA DE PARADA APLICADA: LÍNEA CERRADA
+
+`estratos.py`, 6/6. La tarea marcada BLOQUEANTE desde el 2026-08-23, ejecutada con las tres
+correcciones acumuladas: **`L(H)` real** (6.2–7.6 pb), **`κ = 2.0627`** (dos direcciones, no
+1.755) y **control de potencia por estrato**.
+
+**Estratificación declarada antes de medir:** `σ` pronosticada = `σ` realizada en `[t−H, t]`.
+Persistencia pura, sin parámetros, conocida en `t`. Cortes de tercil fijados en entrenamiento.
+
+**Regla de parada, acordada con el operador ANTES de ejecutar:** *si en el estrato superior,
+donde el instrumento resuelve, el margen no baja de 3×, resultado negativo y se cierra la línea
+de microestructura.*
+
+```
+filas del estrato ALTO donde el instrumento RESUELVE : 10 de 23
+margen MINIMO en el estrato ALTO                     : 9.3x
+```
+
+| fragmento | `H` | n | `R²` medido | `R²_req` | margen |
+|---|---|---|---|---|---|
+| **estacional_0** | 3 600 s | 2 328 | 0.001997 | 1.863 % | **9.3×** |
+| estacional_3 | 1 800 s | 462 | 0.004074 | 4.151 % | 10.2× |
+| captura_v33 | 1 800 s | 477 | 0.002306 | 2.944 % | 12.8× |
+| estacional_1 | 900 s | 2 313 | 0.000401 | 0.562 % | 14.0× |
+
+**El margen no baja de 3× en ninguna fila resoluble. Por la regla acordada: RESULTADO NEGATIVO
+y SE CIERRA LA LÍNEA DE MICROESTRUCTURA.**
+
+#### ⚠ Y la trampa declarada antes de medir se cumple exactamente
+
+Estaba escrito: *«si `R²_medido` también escala con `ν`, la razón no mejora y el
+condicionamiento no compra nada»*. Medido:
+
+| estrato | `R²_req` mediano | `R²` medido mediano | margen mediano |
+|---|---|---|---|
+| bajo | 2.727 % | 0.000772 | 21.4× |
+| medio | 2.112 % | 0.000840 | 81.2× |
+| **ALTO** | **1.518 %** | **0.000376** | **14.0×** |
+
+**Condicionar SÍ baja el requisito** —de 2.73 % a 1.52 %, un factor 1.8— **pero el `R²` medido
+baja también**, de 7.7e-4 a 3.8e-4. **El margen no mejora.** Condicionar por volatilidad
+pronosticada no compra nada, y quedaba dicho antes de mirarlo.
+
+#### ⚠ Dos defectos propios, y uno era la diferencia entre resultado y no-resultado
+
+1. **Medía sólo en validación.** La identidad es un **momento sin parámetros ajustados**:
+   `Corr(ε, r)²` no se estima en un bloque y se evalúa en otro. Lo único con riesgo de fuga son
+   los cortes de tercil, y ésos sí vienen de entrenamiento. Restringir a validación tiraba el
+   **80 %** de los orígenes y multiplicaba el suelo por ~√5, con lo que **0 de 21 filas
+   resolvían**: el «no resuelve» era **mío**, no del mercado. Con todos los orígenes, 10 de 23
+   resuelven y la regla se puede aplicar.
+2. **Alineación de rezagos, por segunda vez en un control mío** (la primera fue en
+   `identidad.py`). El retorno arranca en `mid[i+1]` para ser predictivo, así que una señal
+   sintética inyectada con **un solo** paso de retardo deja `ε_i` fuera de la ventana y el
+   estimador hace bien en devolver ~0. Corregido a dos pasos.
+
+#### Un techo estructural que conviene tener escrito
+
+Al reparar el control apareció algo que explica los `R²` diminutos de la Adenda C a `H` largo:
+**el `R²` de UN solo signo sobre una ventana de `H` pasos satura en ~`1/H`.** Un incremento de
+los `H` no puede explicar más que su parte. Con `H` = 900 el techo es **1.1e-3**; el `R²`
+medido en el estrato ALTO de `estacional_1` a 900 s es 4.0e-4, o sea **el 36 % de su propio
+techo teórico**. Subir la amplitud de la señal no mueve ese techo, porque la señal entra también
+en la varianza. Verificado en el control: con `H` = 60, techo 1/60 = 1.67e-2 y medido 1.76e-2.
+
+**Consecuencia: la versión univariante de la identidad NO puede alcanzar requisitos del orden del
+1 % a horizontes de minutos, ni con señal perfecta.** El §C.3.4 de la Adenda C lo decía como cota
+inferior cualitativa; esto lo cuantifica.
+
+---
+
 ### ⚠⚠ v4.2 §4 CORREGIDO (2026-08-28) — la deriva se colaba por una CUARTA puerta
 
 **Detectado por el operador con un argumento de coherencia, no midiendo:** *«la mediana del nulo
