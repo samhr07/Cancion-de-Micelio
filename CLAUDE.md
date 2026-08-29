@@ -9,7 +9,7 @@ IPOPT y qpOASES). No se han validado contra CUDA ni acados.**
 
 ---
 
-## ESTADO ACTUAL (2026-08-08)
+## ESTADO ACTUAL (2026-08-29)
 
 Ocho tandas de trabajo aplicadas, en este orden:
 
@@ -2037,6 +2037,132 @@ dato. La captura de 8 h con `tr_maker` está corriendo.
 - `γ` de la autocorrelación de signos, y la comprobación de coherencia
   `pendiente ≈ (1−γ)/2 − β` del A.4, que es la validación del mecanismo por dos vías.
 - Raíces de `G(τ)` con un estadístico cuyo nulo no sea degenerado.
+
+## Sesión 2026-08-29 — PROYECTO NUEVO: cribado de activos (v4.0)
+
+⚠ **El proyecto v1.0–v3.1 queda CERRADO** con `ACTA_CIERRE_MICELIO_1_0_A_3_1.md`.
+Lo que sigue arranca con hipótesis, preregistro, umbrales y regla de parada propios,
+y **no hereda ninguna hipótesis abierta** del anterior. Leer el acta antes que nada.
+
+### La hipótesis nueva, y por qué es distinta de la vieja
+
+**Condicionar por volatilidad DENTRO de un activo no mejora el margen** (§1
+estratificado, 2026-08-28, predicho antes de medirlo). **Elegir un activo
+permanentemente más volátil sí puede hacerlo**, porque el mecanismo es distinto: los
+tramos volátiles de BTC son tramos de **información**, donde la competencia es
+máxima; un activo de menor capitalización es **estructuralmente** más volátil y
+**menos competido**.
+
+**Predicción falsable, declarada antes de medir:** en el cribado, `σ₁` y `R²`
+predictivo **NO** estarán negativamente correlacionados entre activos. Muere si
+`ρ_Spearman ≤ −0.30` con `p < 0.05`; en ese caso no se captura nada.
+
+### El criterio económico, derivado
+
+```
+R2_req(H) = ( 2*c_lado / (kappa * sigma_1 * H**H_p) )**2 ,   kappa = sqrt(2/pi)
+```
+
+Como la comisión USDⓈ-M es **idéntica en todos los pares**, la única variable libre
+es `σ₁`, y todo el cribado se ordena por ese número. Comprobación de consistencia,
+fijada como test: `σ₁ = 1.30 pb·s^(−0.5)` implica `R²_ref = 0.004131`, **dentro de la
+banda 0.002–0.008** declarada para el predictor direccional de BTC.
+
+⚠ **Inconsistencia registrada y no resuelta** (§3.4 del preregistro): los tres
+factores dados (7.87× agregado, 3.4× `estacional_0`, 1.2× `estacional_1`) implican un
+`σ₁` agregado de 0.165 que queda **por debajo de los dos estratos** (0.382 y 1.083),
+cuando debería quedar entre ellos. Explicación más probable: el agregado usa el `R²`
+del predictor agrupado, menor que el de cada estrato. **No se usa ninguno de los tres
+como umbral**: C1.1 se apoya solo en `σ₁ ≥ 2.60`, que es absoluto.
+
+### Archivos nuevos
+
+- `ACTA_CIERRE_MICELIO_1_0_A_3_1.md` — liquida el proyecto viejo.
+- `PREREGISTRO_CRIBADO_4_0.md` — **commiteado antes de medir** (`91dcf9b`).
+- `ORDEN_TRABAJO_CRIBADO_4_0.md` — cómo se ejecuta.
+- `cribado_activos.py` — Etapa 1. `python cribado_activos.py`.
+- `identidad_multivariante.py` — la residual de BTC (§C.3.5).
+  `python identidad_multivariante.py --datos=<captura.npz|dir>`.
+
+### ⚠ DOS COSAS NO EJECUTADAS, y por qué
+
+1. **El cribado no ha corrido contra mercado.** `fapi.binance.com`,
+   `api.binance.com` y `data-api.binance.vision` están **denegados por la política de
+   egreso** de la sesión remota (403 al CONNECT; GitHub sí resuelve, luego es política
+   y no red). La corrida real es local, en un comando.
+2. **La identidad multivariante no ha corrido sobre BTC real.** El código y los datos
+   de las sesiones 2026-08-11 a 2026-08-29 —modelo de volatilidad `R² = 0.615`,
+   `captura_estacional.py`, §1 estratificado, §C.3.5, corrección del 2026-08-29— **no
+   están en este árbol**; `git log` terminaba en `d591256`. `rasgos_desde_captura`
+   reconstruye la familia de rasgos que sí está documentada y va marcada
+   `# NOTA DE INTERPRETACION:`; **hay que sustituirla por la del §C.3.5** al correr.
+
+Todo lo que se afirma sobre los estimadores está medido **contra datos sintéticos con
+verdad conocida**, y así está declarado. **20/20** criterios v4.0.
+
+### Hallazgos de esta tanda, todos medidos
+
+**1. `σ₁` es una EXTRAPOLACION y su error lo domina `H_p`.** El ajuste vive en
+[60, 3600] s (rango declarado) y `σ₁` es su valor en H = 1 s, **60× por debajo** del
+punto más corto. Un error `d` en `H_p` da un factor `60^(−d)` sobre `σ₁`: `d = 0.012`
+son ~5 %. Sobre 8 semillas de paseo con verdad conocida, `σ₁` sale sesgado **−1.0 % a
+−4.4 %, siempre del mismo signo**. El rango no se cambia (está declarado); se publica
+el error típico y se marca `[MARGINAL en C1.1]` a los pares a menos de 2 errores del
+umbral. El test **verifica el mecanismo**, no solo tolera el error: exige que el error
+de `σ₁` sea el que predice `60^(−d)`.
+
+**2. Roll cambia veredictos, no decora.** Rebote inyectado de tamaño conocido:
+`s_eff` recuperado 4.932 pb contra 5.000; `σ₁` 0.9092 → 0.6614 contra verdad 0.6455.
+En el ensayo de humo, un par con `σ₁` crudo 3.51 cayó a **2.55** tras Roll y **dejó de
+superar la compuerta**. Sin corregir, el cribado elegiría pares cuya volatilidad es
+horquilla — y el sesgo va justo en la dirección que favorece a los pares malos.
+
+**3. Rotación circular contra barajado: el barajado se equivoca por 29×.** Con rasgos
+y objetivo AR(1) de ρ = 0.98 **independientes** (`R²` verdadero = 0):
+
+| | valor |
+|---|---|
+| `R²` en muestra (regresión espuria) | **0.0807** contra `p/n` = 0.0042 |
+| suelo por **rotación** p95 | **0.2676** → NO FALSABLE ✔ |
+| suelo por **barajado** p95 | 0.00913 → FALSABLE ✘ |
+
+El barajado destruye la autocorrelación; la rotación conserva marginal **y** memoria
+de ambas series y destruye solo el alineamiento. Con contraprueba: una relación real
+entre series igual de persistentes vuelve a salir FALSABLE.
+
+**4. La curtosis se satura en `1/f` con datos sucios.** Fijado como test permanente:
+con una fracción `f` de valores espurios enormes, la curtosis observada tiende a `1/f`
+**sea cual sea la cola real**. Medido: sucia 496.9 con `f = 0.002` (1/f = 500), limpia
+749.5. Es el mecanismo exacto del 601.8 → 1179.7 de la v3.0, ahora demostrado en
+general en vez de observado una vez.
+
+**5. `R²_max` multivariante ≥ máximo univariante, por construcción**, verificado sobre
+30 matrices de covarianza al azar. Y la consecuencia económica está fijada como test:
+si la multivariante rinde 2× la univariante, el factor sobre `estacional_0` baja de
+3.4× a **2.404×** — porque el margen va con `√R²`.
+
+### Defectos propios encontrados y corregidos
+
+- **Los tests se añadieron después del `sys.exit(main())`** de `tests_v13.py`, así que
+  nunca llegaron a definirse: la suite decía 56 tests y pasaba. Un test que no existe
+  se ve exactamente igual que uno que pasa.
+- **`rasgos_y_objetivo` calculaba el retorno del bloque 0 desde su propia primera
+  vela**, dando un retorno corto que se mezclaba con los demás como si fuera
+  comparable. Ahora es NaN y la máscara lo descarta (cuesta 2 bloques de ~2160;
+  inventarse la apertura cuesta un sesgo silencioso).
+- **Rasgos constantes hacían singular a `Σ`**. Se descartan, no se avisan: un rasgo
+  que no varía no puede explicar variación.
+- Dos literales truncados en asertos de test (0.9047619 contra 0.9047619047619048).
+
+### Pendiente
+
+1. **Correr `identidad_multivariante.py` sobre los datos de BTC en disco**, con los
+   rasgos del §C.3.5 en lugar del adaptador provisional. Fija el factor 3.4×/2.4×.
+2. **Correr `cribado_activos.py` en local**, donde el egreso a Binance esté permitido.
+3. Etapa 2 y Etapa 3 según el §2 y §3 del orden de trabajo.
+4. Traer al repositorio el material de las sesiones 2026-08-11 a 2026-08-29, o
+   declararlo definitivamente fuera del árbol.
+
 
 ## Convenciones
 

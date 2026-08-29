@@ -50,3 +50,7 @@ captura_*.log
 
 # Conversiones de los PDF a Markdown: se regeneran desde el PDF
 Markdown de PDF*/
+
+# Cache del cribado de activos (v4.0): klines por par, se regeneran
+cribado_cache/
+cribado_etapa1.txt
