@@ -5520,6 +5520,78 @@ de la v3.0, ahora demostrado en general en vez de observado una vez.
    esta rama se retiró por cerrar en la v3.1.
 
 
+### §C.3.5 multivariante — el ejecutor que faltaba. `multivariante_c35.py`, 11/11
+
+**Por qué estaba abierto, y no era falta de datos ni de teoría.** `identidad.py`
+**implementa** el §C.3.5 (`r2_identidad_multi`), pero sólo lo llama desde
+`etapa_calibra` y desde su autotest: **`etapa_medir` no lo usa**. La función estaba
+validada y nada la corría sobre la rejilla decisiva. Eso es todo lo que significaba
+«queda SIN CONTRASTAR».
+
+`multivariante_c35.py` es ese ejecutor. Espeja `estratos.py` fila a fila —mismos
+fragmentos, mismos `H`, mismos terciles de `σ` pronosticada, misma regla de parada—
+y cambia **sólo el estadístico**, para que las dos tablas se lean sin traducción.
+
+**Dos cosas que NO hereda de `identidad.py`, y son correcciones:**
+
+1. **`κ`**. `identidad.r2_req` usa `H.FACTOR_DECIL = 1.755`, el de operar en **una**
+   dirección. La banda muerta `|α| > c` opera en las dos y el valor es **2.0627**.
+   `estratos.py` ya usa el corregido; `horizonte.py` e `identidad.py` **siguen con
+   el 1.755**. Son 1.38× en `R²_req`, y en la dirección que **infla** el requisito
+   — o sea la que hace la conclusión negativa demasiado fácil.
+2. **`L(H)` real de cinco términos** (6.24–7.63 pb), no comisión pura de 4.888.
+   `R²_req ∝ L²`, así que es un factor 1.6–2.4.
+
+#### ⚠ El suelo es PROPIO, y ese es el punto del módulo
+
+Con `k = 5` regresores el `R²` en muestra se infla ~`k/n`. **Reutilizar el suelo
+univariante no es inofensivo, y está medido**: sobre sorteos nulos multivariantes,
+
+| suelo usado | falsos positivos |
+|---|---|
+| **univariante** | **67 %** |
+| **propio (multivariante)** | 13 % (nominal 5 %; el exceso es del test, ver nota en el código) |
+
+Es decir: con el suelo equivocado, dos de cada tres nulos se habrían declarado
+FALSABLES. La rotación va además **en bloque** — desplazar `X` entera contra `r`
+conserva `Σ` exactamente (verificado a 1.1e-16) mientras que rotar columna a columna
+la cambia (5.3e-02), y `Σ` es justo lo que el estimador usa.
+
+#### Controles (`python multivariante_c35.py --autotest` → 11/11)
+
+Los dos que más valen: **el anidamiento se comprueba en 15 sorteos, no en uno**
+(con `ε_t` como primera columna la multivariante no puede rendir menos que la
+univariante — sin ella no es teorema), y **el diseño no mira el futuro** (cambiar
+`ε` sólo después de todos los orígenes deja `X` idéntica, a 0.00e+00).
+
+⚠ **Dos controles se reescribieron por ser flojos.** «`R²` sin relación ≈ `k/n`» y
+«recupera el `R²` poblacional» pasaban por tolerancia amplia, no por discriminar:
+un sorteo suelto se aparta ~1.5 desviaciones sin que nada esté mal. Sustituidos por
+**media de 12 sorteos contra su propio error típico**, que es más exigente. Es la
+misma corrección que la v4.1 §3 tuvo que hacer con el `|d| < 0.06`, y el **quinto**
+umbral de este proyecto puesto a ojo que hubo que medir.
+
+#### ⚠ NO EJECUTADO sobre BTC: los datos no están en esta sesión
+
+`telemetria/` y los `.npz` están gitignorados y viven en la máquina del operador.
+Esta sesión corre en un contenedor en la nube: **una USB conectada al portátil no
+tiene ruta hasta aquí** (se comprobó: `/mnt/user-data`, `/mnt/attach` y `/media`
+vacíos, y los únicos `.npz` del disco son fixtures de NumPy). Se corre en local:
+
+```
+python multivariante_c35.py --autotest        # 11/11, sin datos
+python multivariante_c35.py --etapa=medir     # la tabla, sobre telemetria/
+```
+
+**Y el desenlace ya está escrito, para que no se elija después de verlo:** si en el
+estrato ALTO no queda ninguna fila falsable, el techo del §C.3.5 —superior por
+construcción al univariante— sigue por debajo del requisito, y la lectura es que
+**el problema no era el techo del predictor univariante**; migrar de activo con esta
+misma familia de predictor no tiene por qué ir mejor. Si el margen baja de 3× donde
+el univariante no resolvía, entonces el techo **sí** era la restricción y el §C.3.5
+abre una banda que hay que examinar.
+
+
 ## Convenciones
 
 - **Todo `R²` se etiqueta CONTEMPORÁNEO o PREDICTIVO.** Son cantidades distintas y no
