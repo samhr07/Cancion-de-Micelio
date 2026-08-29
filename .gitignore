@@ -57,3 +57,7 @@ ssa_log_*.txt
 phi_*.txt
 telemetria/estacional/
 captura_estacional.log
+
+# Cache del cribado de activos (v5.1): klines por par, se regeneran
+cribado_cache/
+cribado_etapa1.txt

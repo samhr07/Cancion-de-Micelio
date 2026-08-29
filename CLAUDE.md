@@ -5417,6 +5417,181 @@ Tres mediciones independientes, con instrumentos distintos, apuntando al mismo s
 
 ---
 
+## Sesión 2026-08-29 (b) — Cribado de activos (v5.1), y una rama escrita sobre historia obsoleta
+
+Abre una línea nueva: **dejar de buscar el margen dentro de BTC y buscar un activo distinto.**
+Preregistro propio, commiteado antes de medir. `Micelio.py` sin cambios.
+
+### ⚠ LO PRIMERO: esta rama se escribió contra `d591256` y eso invalidó tres cosas
+
+La sesión remota clonó el repositorio cuando `master` estaba en `d591256` (v3.1 §2,
+2026-08-08). Todo el trabajo de 2026-08-10 a 2026-08-29 —`identidad.py`, `estratos.py`,
+`captura_estacional.py`, `cont2014.py`, las v3.2, v3.3, v4.0, v4.1, v4.2 y el
+`PLAN_CAPITAL_5_0`— **era invisible desde ahí**. Consecuencias, todas corregidas al fusionar:
+
+1. **Se escribió un `identidad_multivariante.py` que duplicaba `identidad.py`.** Retirado.
+   El §C.3.5 **ya estaba implementado y ejecutado** (`r2_identidad_multi`, autotest 6/6,
+   sesión 2026-08-27). Dos implementaciones de la misma identidad son un pasivo, no un
+   respaldo: divergen y nadie sabe cuál manda.
+2. **Se escribió un acta de cierre que cerraba el proyecto en la v3.1.** Retirada. El
+   proyecto siguió cinco versiones más. Un acta con la fecha de defunción equivocada es peor
+   que ninguna.
+3. **La numeración chocaba:** `v4.0` ya es `ORDEN_TRABAJO_EJECUCION_4_0`. Renumerado a
+   **v5.1**.
+
+⚠ **Y una corrección de fondo que vino de leer `identidad.py`.** Esta rama afirmaba que el
+techo multivariante es «superior por construcción» al univariante. `identidad.py` ya advierte
+que **eso NO ES UN TEOREMA**: sólo vale si los rasgos univariantes están **anidados** en los
+multivariantes. Con agregados de flujo `X_j = Σ ε_{t−i}` que no contienen `ε_t`, la
+multivariante **puede rendir menos**. El test que acompañaba a la afirmación pasaba sólo
+porque usaba el mismo conjunto de rasgos en ambos lados — anidamiento por construcción, no
+prueba del caso general. Retirado junto con el módulo.
+
+**La lección, que es de la misma familia que las ya registradas:** un clon obsoleto no
+produce un error ruidoso, produce trabajo coherente sobre premisas falsas. Antes de abrir
+línea nueva en una sesión remota, comprobar contra qué `master` se está trabajando.
+
+### La hipótesis, declarada antes de medir
+
+**Condicionar por volatilidad DENTRO de un activo no mejora el margen** (§1 estratificado:
+margen mínimo 9.3×, línea cerrada). **Elegir un activo permanentemente más volátil sí puede
+hacerlo**, porque el mecanismo es distinto: los tramos volátiles de BTC son tramos de
+**información**, donde la competencia es máxima; un activo de menor capitalización es
+**estructuralmente** más volátil y **menos competido**.
+
+**Predicción falsable:** en el cribado, `σ₁` y `R²` predictivo **NO** estarán negativamente
+correlacionados entre activos. Muere si `ρ_Spearman ≤ −0.30` con `p < 0.05`.
+
+### El criterio económico
+
+```
+R2_req(H) = ( 2*c_lado / (kappa * sigma_1 * H**H_p) )**2 ,   kappa = sqrt(2/pi)
+```
+
+La comisión USDⓈ-M es **idéntica en todos los pares**, así que la única variable libre es
+`σ₁`. Consistencia fijada como test: `σ₁ = 1.30 pb·s^(−0.5)` implica `R²_ref = 0.004131`,
+dentro de la banda 0.002–0.008 del predictor direccional.
+
+### Archivos
+
+- `PREREGISTRO_CRIBADO_5_1.md` — commiteado antes de medir (`91dcf9b`).
+- `ORDEN_TRABAJO_CRIBADO_5_1.md` — cómo se ejecuta.
+- `cribado_activos.py` — Etapa 1. `python cribado_activos.py`.
+
+### ⚠ NO EJECUTADO: el cribado no ha corrido contra mercado
+
+`fapi.binance.com`, `api.binance.com` y `data-api.binance.vision` están **denegados por la
+política de egreso** de la sesión remota (403 al CONNECT; GitHub sí resuelve, luego es
+política y no red). Todo lo que se afirma sobre los estimadores está medido **contra datos
+sintéticos con verdad conocida**. La corrida real es local, en un comando.
+
+### Hallazgos medidos
+
+**1. `σ₁` es una EXTRAPOLACION y su error lo domina `H_p`.** El ajuste vive en [60, 3600] s
+y `σ₁` es su valor en H = 1 s, **60× por debajo** del punto más corto. Un error `d` en `H_p`
+da un factor `60^(−d)`: `d = 0.012` son ~5 %. Sobre 8 semillas con verdad conocida, `σ₁` sale
+sesgado **−1.0 % a −4.4 %, siempre del mismo signo**. El rango no se cambia (está declarado);
+se publica el error típico y se marca `[MARGINAL en C1.1]` a los pares a menos de 2 errores
+del umbral. El test **verifica el mecanismo**: exige que el error de `σ₁` sea el que predice
+`60^(−d)` a partir del de `H_p`.
+
+**2. Roll cambia veredictos, no decora.** Rebote inyectado de tamaño conocido: `s_eff`
+recuperado 4.932 pb contra 5.000; `σ₁` 0.9092 → 0.6614 contra verdad 0.6455. En el ensayo de
+humo, un par con `σ₁` crudo 3.51 cayó a **2.55** tras Roll y **dejó de superar la compuerta**.
+El sesgo del rebote bid-ask va justo en la dirección que favorece a los pares malos.
+
+**3. La curtosis se satura en `1/f` con datos sucios.** Fijado como test permanente: con una
+fracción `f` de valores espurios enormes, la curtosis tiende a `1/f` **sea cual sea la cola
+real**. Medido: sucia 496.9 con `f = 0.002`, limpia 749.5. Es el mecanismo del 601.8 → 1179.7
+de la v3.0, ahora demostrado en general en vez de observado una vez.
+
+### Defectos propios corregidos
+
+- **Los tests se añadieron después del `sys.exit(main())`** del runner, así que nunca llegaban
+  a definirse: la suite decía 56 y pasaba. Un test que no existe se ve igual que uno que pasa.
+- `rasgos_y_objetivo` medía el retorno del bloque 0 desde su propia primera vela; ahora es NaN
+  y la máscara lo descarta.
+
+### Pendiente
+
+1. **Correr `cribado_activos.py` en local**, donde el egreso a Binance esté permitido.
+2. Etapa 2 y Etapa 3 según el §2 y §3 del orden de trabajo.
+3. **Decidir si hace falta un acta de cierre** que cubra de la v3.2 a la v4.2. La que traía
+   esta rama se retiró por cerrar en la v3.1.
+
+
+### §C.3.5 multivariante — el ejecutor que faltaba. `multivariante_c35.py`, 11/11
+
+**Por qué estaba abierto, y no era falta de datos ni de teoría.** `identidad.py`
+**implementa** el §C.3.5 (`r2_identidad_multi`), pero sólo lo llama desde
+`etapa_calibra` y desde su autotest: **`etapa_medir` no lo usa**. La función estaba
+validada y nada la corría sobre la rejilla decisiva. Eso es todo lo que significaba
+«queda SIN CONTRASTAR».
+
+`multivariante_c35.py` es ese ejecutor. Espeja `estratos.py` fila a fila —mismos
+fragmentos, mismos `H`, mismos terciles de `σ` pronosticada, misma regla de parada—
+y cambia **sólo el estadístico**, para que las dos tablas se lean sin traducción.
+
+**Dos cosas que NO hereda de `identidad.py`, y son correcciones:**
+
+1. **`κ`**. `identidad.r2_req` usa `H.FACTOR_DECIL = 1.755`, el de operar en **una**
+   dirección. La banda muerta `|α| > c` opera en las dos y el valor es **2.0627**.
+   `estratos.py` ya usa el corregido; `horizonte.py` e `identidad.py` **siguen con
+   el 1.755**. Son 1.38× en `R²_req`, y en la dirección que **infla** el requisito
+   — o sea la que hace la conclusión negativa demasiado fácil.
+2. **`L(H)` real de cinco términos** (6.24–7.63 pb), no comisión pura de 4.888.
+   `R²_req ∝ L²`, así que es un factor 1.6–2.4.
+
+#### ⚠ El suelo es PROPIO, y ese es el punto del módulo
+
+Con `k = 5` regresores el `R²` en muestra se infla ~`k/n`. **Reutilizar el suelo
+univariante no es inofensivo, y está medido**: sobre sorteos nulos multivariantes,
+
+| suelo usado | falsos positivos |
+|---|---|
+| **univariante** | **67 %** |
+| **propio (multivariante)** | 13 % (nominal 5 %; el exceso es del test, ver nota en el código) |
+
+Es decir: con el suelo equivocado, dos de cada tres nulos se habrían declarado
+FALSABLES. La rotación va además **en bloque** — desplazar `X` entera contra `r`
+conserva `Σ` exactamente (verificado a 1.1e-16) mientras que rotar columna a columna
+la cambia (5.3e-02), y `Σ` es justo lo que el estimador usa.
+
+#### Controles (`python multivariante_c35.py --autotest` → 11/11)
+
+Los dos que más valen: **el anidamiento se comprueba en 15 sorteos, no en uno**
+(con `ε_t` como primera columna la multivariante no puede rendir menos que la
+univariante — sin ella no es teorema), y **el diseño no mira el futuro** (cambiar
+`ε` sólo después de todos los orígenes deja `X` idéntica, a 0.00e+00).
+
+⚠ **Dos controles se reescribieron por ser flojos.** «`R²` sin relación ≈ `k/n`» y
+«recupera el `R²` poblacional» pasaban por tolerancia amplia, no por discriminar:
+un sorteo suelto se aparta ~1.5 desviaciones sin que nada esté mal. Sustituidos por
+**media de 12 sorteos contra su propio error típico**, que es más exigente. Es la
+misma corrección que la v4.1 §3 tuvo que hacer con el `|d| < 0.06`, y el **quinto**
+umbral de este proyecto puesto a ojo que hubo que medir.
+
+#### ⚠ NO EJECUTADO sobre BTC: los datos no están en esta sesión
+
+`telemetria/` y los `.npz` están gitignorados y viven en la máquina del operador.
+Esta sesión corre en un contenedor en la nube: **una USB conectada al portátil no
+tiene ruta hasta aquí** (se comprobó: `/mnt/user-data`, `/mnt/attach` y `/media`
+vacíos, y los únicos `.npz` del disco son fixtures de NumPy). Se corre en local:
+
+```
+python multivariante_c35.py --autotest        # 11/11, sin datos
+python multivariante_c35.py --etapa=medir     # la tabla, sobre telemetria/
+```
+
+**Y el desenlace ya está escrito, para que no se elija después de verlo:** si en el
+estrato ALTO no queda ninguna fila falsable, el techo del §C.3.5 —superior por
+construcción al univariante— sigue por debajo del requisito, y la lectura es que
+**el problema no era el techo del predictor univariante**; migrar de activo con esta
+misma familia de predictor no tiene por qué ir mejor. Si el margen baja de 3× donde
+el univariante no resolvía, entonces el techo **sí** era la restricción y el §C.3.5
+abre una banda que hay que examinar.
+
+
 ## Convenciones
 
 - **Todo `R²` se etiqueta CONTEMPORÁNEO o PREDICTIVO.** Son cantidades distintas y no
