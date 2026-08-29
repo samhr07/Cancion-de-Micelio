@@ -4693,6 +4693,79 @@ reetiquetar continuaciones: es **sacarlas del recuento** (`N_c` 239 → 0 en el 
 
 ---
 
+### ⚠⚠ v4.2 §4 CORREGIDO (2026-08-28) — la deriva se colaba por una CUARTA puerta
+
+**Detectado por el operador con un argumento de coherencia, no midiendo:** *«la mediana del nulo
+es +8.48 % anual, y bajo un nulo honesto entras al azar y pagas comisiones — tendría que ser
+negativa, del orden del peaje»*. Tenía razón en el fondo. **Dos precisiones sobre la prueba:**
+
+1. El estadístico del nulo es el **máximo sobre ~48 celdas**, no una celda típica, y el máximo de
+   muchas celdas ruidosas **es positivo por construcción** aunque el nulo sea limpio. La prueba
+   correcta es la **celda individual**. Medida: mediana **−0.62** ✓.
+2. Pero la contaminación **existía**: quitar el intercepto y marcar las celdas de signo único no
+   bastaba. La celda ganadora tenía el **92.3 % de las posiciones en la misma dirección** y
+   `media(rv) = 105.21 pb` en el tramo del +24 %. Mi guarda excluía repartos por debajo del 5 %:
+   **un 92/8 pasaba**.
+
+#### La corrección definitiva: `cap` es una COVARIANZA
+
+```
+cap = E[signo · retorno]  −  E[signo] · E[retorno]     sobre el subconjunto SELECCIONADO
+```
+
+Mide **habilidad de selección** —«cuando voy largo gano más que cuando voy corto»— y **no**
+exposición direccional neta. Con signo constante da **0 exacto**, así que la guarda del 5 % se
+vuelve innecesaria y **se retira**. Es el mismo estimando que la identidad de la Adenda C.
+
+⚠ Retirar la media del **bloque** no bastaba: una celda 94/6 seguía midiendo la deriva del
+**subconjunto seleccionado**, que no es la del bloque.
+
+#### El nulo, ahora honesto
+
+| | antes (defecto 1 parcial) | tras retirar deriva de bloque | **con `cap` = covarianza** |
+|---|---|---|---|
+| mediana del **máximo** | **+8.48** | +1.13 | **−0.96** |
+| p95 del máximo | +9.70 | — | **−0.84** |
+| máximo de 200 sorteos | +10.20 | +2.57 | **−0.72** |
+| mediana de celda individual | — | — | **−0.62** |
+
+**Todos negativos.** Entrar al azar y pagar peaje da pérdida, como debe.
+
+#### La superficie corregida: 78 de 79 celdas negativas
+
+| fragmento | celdas | máximo |
+|---|---|---|
+| estacional_0 | 13 | negativo en todas |
+| estacional_1 | 28 | negativo en todas |
+| estacional_2 | 16 | negativo en todas |
+| estacional_3 | 10 | negativo en todas |
+| captura_v33 | 12 | **+0.13** (H = 1 h, q90) |
+
+**El `+7.24 %` que se publicó era mayormente haber estado largo en un tramo que subió el 24 %.**
+No se puede citar. El máximo real es **+0.13 % anual**, y sus vecinas de la misma fila son
+−0.64, −0.39, −0.21, −0.37, −0.30: **celda aislada**.
+
+⚠ **`P(max R_nulo ≥ R*) = 0.0000` y NO significa lo que parece.** Con `cap` de esperanza nula
+bajo el nulo, `R_nulo = d·(T/H)·(0 − L)/10⁴` es **estrictamente negativo**, así que cualquier
+valor positivo lo supera. **El `p` deja de discriminar**; lo que decide es la magnitud y el
+aislamiento. Por la fila 3 del §5: **SOBREAJUSTE. Se reporta y no se decide.**
+
+#### ⚠ Cinco defectos propios más en esta corrección
+
+1. La **cuarta puerta** de la deriva (celdas 92/8), arriba.
+2. El error estándar analítico del control **ignoraba el solapamiento**: orígenes cada 60 s con
+   `H` = 900 s son ~15 solapes, y `sd/√n` lo subestima por √15. El nulo por permutación no
+   tiene ese problema; un error analítico sí.
+3. Un umbral de razón fija (`< 0.1`) sustituido por uno **autocalibrado** contra el propio ruido
+   de muestreo. **Quinto umbral a ojo** de este proyecto.
+4. Una aserción de **monotonía de `cap` con el umbral** que no es propiedad garantizada del
+   estimador —el umbral se fija en entrenamiento y se aplica a validación— y que había tocado ya
+   dos veces. **Retirada con su motivo en vez de ajustada una tercera.**
+5. Una aserción que exigía `cap > 0` en todas las celdas y que fallaba **porque la definición
+   nueva funciona**: una celda de signo constante da cero exacto.
+
+---
+
 ### ⚠ v4.2 §4 — LA SUPERFICIE `R(H, θ)`. **NO HAY ÓPTIMO**. `superficie.py`, 7/7
 
 Rejilla congelada con hash **antes** de tocar dato (§4.3 guarda 1):
