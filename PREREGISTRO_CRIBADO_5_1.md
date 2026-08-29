@@ -1,8 +1,9 @@
-# Preregistro — Cribado de activos (v4.0)
+# Preregistro — Cribado de activos (v5.1)
 
 **Fecha de redacción:** 2026-08-29. **Autor:** Samuel Hoyos R.
 **Commiteado ANTES de cualquier medición**, como en `PREREGISTRO_3_1.md` (`66bed94`).
-Proyecto anterior cerrado en `ACTA_CIERRE_MICELIO_1_0_A_3_1.md`.
+Proyecto anterior: su registro vivo es `CLAUDE.md`, que llega hasta la v4.2
+(`ORDEN_TRABAJO_FRECUENCIA_4_2`, ejecutada el 2026-08-28) y `PLAN_CAPITAL_5_0.md`.
 
 > Regla que gobierna este documento: **ningún umbral declarado aquí se rebaja después.**
 > Si el cribado no pasa la compuerta, el resultado del cribado es "no pasa", no un umbral
@@ -95,7 +96,7 @@ R2_referencia = ( 2*2.000 / (0.79788 * 1.30 * 3600**0.5) )**2 = 0.004131
 
 **Predicción de consistencia:** `0.004131` cae dentro de la banda declarada `0.002–0.008`
 del modelo direccional de BTC. Se fija como test permanente
-(`test_v40_umbral_sigma1_es_consistente_con_R2_declarado`). **Si fallara, el que está mal
+(`test_v51_umbral_sigma1_es_consistente_con_R2_declarado`). **Si fallara, el que está mal
 es este preregistro**, y se corrige aquí con commit fechado — no se ajusta el umbral para
 que cuadre.
 
@@ -196,13 +197,18 @@ política y no red). **Etapa 1 queda implementada y probada contra datos sintét
 verdad conocida, y sin ejecutar contra mercado.** La corrida real es local, en un solo
 comando.
 
-### 7.2 Las cifras de BTC del §3.2 no son reproducibles en este repositorio
-El código y los datos de las sesiones 2026-08-11 a 2026-08-29 —el modelo de volatilidad
-`R² = 0.615`, `captura_estacional.py`, el §1 estratificado, el §C.3.5, la corrección
-falsable/no-falsable del 2026-08-29— **no están en este árbol**. `git log` termina en
-`d591256` (v3.1 §2). Las seis cifras del §3.2 entran como **constantes declaradas**, no
-como mediciones replicadas, y el código las exige como parámetros explícitos con
-**centinela en cero**: olvidarlas falla ruidosamente en vez de operar con un literal.
+### 7.2 Las cifras de BTC del §3.2 se toman de `master`, no se remiden aquí
+El material que las sostiene **sí está en el árbol** tras fusionar `master`:
+`identidad.py` (§C.3.5, con `r2_identidad_multi` y suelo por rotación circular),
+`estratos.py`, `captura_estacional.py`, `cont2014.py` y el registro de
+`CLAUDE.md`. Este preregistro **no las vuelve a medir**: las cita como constantes de
+entrada, y el código las exige como parámetros explícitos con **centinela en cero**,
+de modo que olvidarlas falla ruidosamente en vez de operar con un literal.
+
+⚠ **La versión inicial de este documento afirmaba que ese material no existía en el
+repositorio.** Era cierto contra `d591256`, la base obsoleta desde la que se escribió, y
+dejó de serlo al fusionar `master`. Se corrige aquí en vez de en silencio, como manda la
+cabecera.
 
 ### 7.3 El escalón de comisiones sigue asumido, no leído
 `/fapi/v1/commissionRate` es firmado. Se usan tarifas públicas VIP 0. Mismo criterio no

@@ -1,5 +1,5 @@
 """
-Proyecto: Canción del Micelio — Cribado de activos (ORDEN_TRABAJO_CRIBADO_4_0)
+Proyecto: Canción del Micelio — Cribado de activos (ORDEN_TRABAJO_CRIBADO_5_1)
 Módulo: cribado_activos.py — Etapa 1, cribado sin captura.
 
 ⚠ NO SE IMPORTA DESDE `Micelio.py`. Igual que `propagador.py` y `oscilador.py`:
@@ -8,7 +8,7 @@ este módulo MIDE. Si el resultado lo justifica, la integración es otra versió
 QUE HACE
 --------
 Mide, por cada par USDⓈ-M, los seis números que deciden si vale la pena capturarlo,
-y aplica la **compuerta 1** de `PREREGISTRO_CRIBADO_4_0.md` §4 con los umbrales
+y aplica la **compuerta 1** de `PREREGISTRO_CRIBADO_5_1.md` §4 con los umbrales
 declarados ANTES de correr. Después contrasta la predicción falsable del §2:
 `σ₁` y `R²` predictivo NO deben estar negativamente correlacionados entre activos.
 
@@ -51,7 +51,7 @@ import numpy as np
 # CONSTANTES DECLARADAS EN EL PREREGISTRO — NO SE TOCAN AQUI
 # ==============================================================================
 # Cualquier cambio a estos valores es un cambio al preregistro y necesita commit
-# fechado que diga que cambio y por que (§ cabecera del PREREGISTRO_CRIBADO_4_0).
+# fechado que diga que cambio y por que (§ cabecera del PREREGISTRO_CRIBADO_5_1).
 
 KAPPA = math.sqrt(2.0 / math.pi)          # E[y*signo(y_hat)] = kappa*rho*sigma_H
 COMISION_MAKER_PB = 2.000                  # USDⓈ-M VIP 0, 0.0200 %  -> pb por lado
@@ -216,7 +216,7 @@ def ajustar_ley_sigma(filas: list) -> dict:
     # Un error `d` en H_p se convierte en un factor 60^(-d) sobre sigma_1, o sea que
     # d = 0.012 ya son ~5 % en sigma_1. Medido sobre paseos sinteticos con verdad
     # conocida, la dispersion de sigma_1 entre semillas es de ~3.5 % con H_p bueno a
-    # 0.008 (ver `test_v40_firma_recupera_sigma1_y_Hp_de_verdad_conocida`).
+    # 0.008 (ver `test_v51_firma_recupera_sigma1_y_Hp_de_verdad_conocida`).
     # No se cambia el rango de ajuste —esta declarado— pero se publica el error, para
     # que un par cerca del umbral C1.1 se vea que esta cerca en vez de parecer nitido.
     gl = len(filas) - 2
@@ -724,7 +724,7 @@ def _get(ruta: str, peso: int, reintentos: int = 4):
         _gastar(peso)
         try:
             req = urllib.request.Request(BASE + ruta,
-                                         headers={"User-Agent": "cancion-micelio/4.0"})
+                                         headers={"User-Agent": "cancion-micelio/5.1"})
             with urllib.request.urlopen(req, timeout=30) as r:
                 return json.loads(r.read().decode())
         except urllib.error.HTTPError as e:
@@ -874,8 +874,8 @@ def reporte(resultados: list) -> str:
                                if np.isfinite(r["sigma1_roll_pb"]) else 0.0))
 
     A("=" * 126)
-    A("CRIBADO DE ACTIVOS v4.0 - ETAPA 1 - TABLA COMPLETA (%d pares)" % len(buenos))
-    A("Umbrales del PREREGISTRO_CRIBADO_4_0 Sec. 4, declarados antes de medir.")
+    A("CRIBADO DE ACTIVOS v5.1 - ETAPA 1 - TABLA COMPLETA (%d pares)" % len(buenos))
+    A("Umbrales del PREREGISTRO_CRIBADO_5_1 Sec. 4, declarados antes de medir.")
     A("Comisiones %s (maker %.3f pb/lado)."
       % ("LEIDAS" if COMISIONES_LEIDAS_DE_LA_CUENTA else "ASUMIDAS VIP 0",
          COMISION_MAKER_PB))
@@ -988,7 +988,7 @@ def main(argv) -> int:
         elif a.startswith("--horquilla="):
             muestras_horquilla = int(a.split("=")[1])
 
-    log("== CRIBADO v4.0 - ETAPA 1 ==")
+    log("== CRIBADO v5.1 - ETAPA 1 ==")
     log("pares=%d  dias=%d  muestras de horquilla=%d" % (n_pares, dias, muestras_horquilla))
     log("Umbrales: C1.1 sigma1 >= %.2f pb | C1.2 horquilla <= %.2f pb | "
         "C1.4 cola <= %.2f | C1.5 curtosis <= %.0f"

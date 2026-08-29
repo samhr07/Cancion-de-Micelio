@@ -365,3 +365,174 @@ def razon_de_varianzas(filas, H_ref):
         return {}
     base = d[H_ref] ** 2
     return {H: (v ** 2) / base for H, v in d.items() if base > 0}
+
+
+# ==============================================================================
+# FIRMA EN TIEMPO DE TICKS — resuelve la discrepancia POR CONSTRUCCION
+# ==============================================================================
+# ⚠ EL CONFUNDIDOR ERA MEZCLAR DOS RELOJES EN EL MISMO ESTADISTICO. La firma de
+# la Adenda A mide `H` en SEGUNDOS mientras pone un punto de partida POR TICK:
+# los tramos con mas ticks aportan mas muestras, y como actividad y volatilidad
+# van juntas, la varianza por segundo sube alli. Solapada y no solapada dejan de
+# estimar la misma cantidad, y por eso discrepaban en signo.
+#
+# La confirmacion estaba delante y no se senalo: el control barajado destruye el
+# AGRUPAMIENTO de volatilidad pero conserva los TIEMPOS DE LLEGADA. Con
+# incrementos iid, los tramos con mas ticks siguen teniendo mas varianza por
+# segundo, mecanicamente. Que la pendiente barajada saliera -0.0403 y no cero es
+# exactamente esa firma: si el sesgo viniera del agrupamiento, barajar lo habria
+# eliminado.
+#
+# La firma en TIEMPO DE TICKS no tiene el confundidor, porque el paso de muestreo
+# y el horizonte son el mismo reloj. Y es ademas lo que la v2.0 establecio: la
+# ESTIMACION vive en tiempo de ticks. A la firma se le aplico reloj de pared por
+# inercia.
+#
+# Consecuencia que hay que aceptar: `H*` pasa a `H*_ticks = (c/sigma_tick)^2`, y
+# su valor en segundos depende de nu. Con nu variando por factor 20, `H*` en
+# segundos NO es una constante — pero eso es mas honesto, no menos.
+def firma_en_ticks(precios, n_ticks, solapada=True):
+    """σ(n)/√n contra `n` en TICKS. Un solo reloj, sin confundidor."""
+    p = np.asarray(precios, dtype=float)
+    filas = []
+    for n in n_ticks:
+        n = int(n)
+        if n < 1 or n >= len(p) // 4:
+            continue
+        if solapada:
+            r = p[n:] - p[:-n]
+        else:
+            idx = np.arange(0, len(p) - n, n)
+            r = p[idx + n] - p[idx]
+        if len(r) < 30:
+            continue
+        sd = float(np.std(r, ddof=1))
+        filas.append({
+            "n": n,
+            "n_muestras": len(r),
+            "n_indep": max(1, (len(p) - n) // n),
+            "sigma": sd,
+            "sigma_por_raiz_n": sd / math.sqrt(n),
+        })
+    return filas
+
+
+def pendiente_en_ticks(filas, n_lo, n_hi):
+    """Pendiente de `log[σ(n)/√n]` contra `log n`, en tiempo de ticks."""
+    n = np.array([f["n"] for f in filas], dtype=float)
+    y = np.array([f["sigma_por_raiz_n"] for f in filas])
+    sel = (n >= n_lo) & (n <= n_hi) & (y > 0)
+    if sel.sum() < 3:
+        return {"pendiente": float("nan"), "n": int(sel.sum())}
+    X = np.column_stack([np.log(n[sel]), np.ones(sel.sum())])
+    b, *_ = np.linalg.lstsq(X, np.log(y[sel]), rcond=None)
+    return {"pendiente": float(b[0]), "H_p": float(b[0] + 0.5), "n": int(sel.sum())}
+
+
+# ==============================================================================
+# CONTROL POSITIVO — dada una verdad CONOCIDA, ¿el estimador la recupera?
+# ==============================================================================
+# ⚠ LA MITAD QUE FALTABA. Cinco sesiones de controles NEGATIVOS ("¿hay algo?",
+# por barajado) y ninguno POSITIVO ("dada una verdad conocida, ¿mi estimador la
+# recupera?"). El negativo convierte un hallazgo en "no puedo rechazar"; el
+# positivo es lo que lo convierte en "puedo medir".
+def convolucion_causal(f, h):
+    """Δp_t = Σ_{k≥0} h(k)·f_{t−k}.  SOLO pasado.
+
+    ⚠ `np.convolve(..., mode="same")` CENTRA el núcleo, o sea que mete el futuro
+    dentro del presente. Sobre un test de predictibilidad eso fabrica la señal
+    que se pretende medir — la misma familia que la media móvil centrada contra
+    la que advierte el §5 de la v3.1.
+    """
+    return np.convolve(f, h, mode="full")[: len(f)]
+
+
+def nucleo_monotono(tau, G_inf, tau0):
+    """`G(τ) = G∞·τ/(τ₀+τ)`: estrictamente creciente y saturante.
+
+    CERO sobrepaso por construccion. Es el nulo correcto para preguntar "¿mi
+    estimador fabrica el descenso que observo?".
+    """
+    tau = np.asarray(tau, dtype=float)
+    return G_inf * tau / (tau0 + tau)
+
+
+def ajustar_nucleo_monotono(R, tau_max_ajuste):
+    """Ajusta `G∞` y `τ₀` a la parte CRECIENTE de la R medida."""
+    tau = np.arange(1, min(tau_max_ajuste, len(R)), dtype=float)
+    y = np.asarray(R[1 : len(tau) + 1], dtype=float)
+    sel = y > 0
+    if sel.sum() < 10:
+        return float("nan"), float("nan")
+    tau, y = tau[sel], y[sel]
+    # ⚠ La linealizacion `1/G = (tau0/G_inf)/tau + 1/G_inf` es fragil: invertir
+    # una R ruidosa amplifica los valores pequenos y el ajuste reventaba. Se usa
+    # busqueda directa en rejilla sobre tau0 con G_inf por minimos cuadrados
+    # condicionada, que no invierte nada.
+    mejor = (float("inf"), float("nan"), float("nan"))
+    for tau0 in np.geomspace(1.0, max(10.0, 5.0 * tau[-1]), 200):
+        base = tau / (tau0 + tau)
+        den = float(np.dot(base, base))
+        if den <= 0:
+            continue
+        G_inf = float(np.dot(base, y) / den)
+        sse = float(np.sum((y - G_inf * base) ** 2))
+        if sse < mejor[0]:
+            mejor = (sse, G_inf, float(tau0))
+    return mejor[1], mejor[2]
+
+
+def control_positivo_sobrepaso(R_real, n_ticks, eps_real, vol_real, rng,
+                               n_sim=60, max_rezago=800, tau_ajuste=None,
+                               precio_real=None):
+    """¿Un propagador MONOTONO conocido produce el descenso pico->final medido?
+
+    Bootstrap parametrico bajo el nulo monotono, con la SNR calibrada para que el
+    `R` simulado tenga la MISMA magnitud y el mismo error de estimacion que el
+    real: el descenso espurio depende criticamente de eso.
+    """
+    if tau_ajuste is None:
+        tau_ajuste = int(np.argmax(R_real))
+    G_inf, tau0 = ajustar_nucleo_monotono(R_real, tau_ajuste)
+    if not (math.isfinite(G_inf) and math.isfinite(tau0) and tau0 > 0):
+        return {"error": "no se pudo ajustar el nucleo monotono"}
+
+    G = nucleo_monotono(np.arange(0, max_rezago + 2), G_inf, tau0)
+    h = np.diff(np.concatenate([[0.0], G]))  # h(k) = G(k) - G(k-1)
+    n = int(n_ticks)
+
+    # ⚠ CALIBRACION DEL RUIDO — el primer intento estaba mal y divergia.
+    # Se buscaba la `sigma` que reprodujera la MAGNITUD del pico de R, pero el
+    # valor esperado de `R` NO depende de sigma: el ruido iid es ortogonal a
+    # `eps`, asi que anade varianza al ESTIMADOR y no sesgo a la estimacion. El
+    # bucle multiplicativo no podia converger y salia sigma = 833 con
+    # incrementos reales de ~0.2 USD, o sea un nulo de ruido puro cuyo "descenso
+    # espurio" daba medianas del 100 % y maximos del 182 000 %.
+    #
+    # Lo que hay que igualar es el ERROR DE ESTIMACION, y para eso basta con que
+    # la serie simulada tenga la MISMA VOLATILIDAD que la real: sigma se fija
+    # como la desviacion de los incrementos reales.
+    sigma = float(np.std(np.diff(precio_real), ddof=1)) if precio_real is not None else 1.0
+
+    descensos, pico_no_final = [], 0
+    for _ in range(n_sim):
+        e = rng.permutation(eps_real)[:n] if len(eps_real) >= n else rng.choice(eps_real, n)
+        dp = convolucion_causal(e.astype(float), h) + rng.normal(0, sigma, n)
+        p = np.cumsum(dp)
+        Rs = ajustar_respuesta_impulso(p, e, np.ones(n), max_rezago=max_rezago)
+        i = int(np.argmax(Rs))
+        if i < len(Rs) - 1:
+            pico_no_final += 1
+        pico = float(Rs[i])
+        if pico > 0:
+            descensos.append(1.0 - float(Rs[-1]) / pico)
+    d = np.asarray(descensos)
+    return {
+        "G_inf": G_inf, "tau0": tau0, "sigma_calibrada": sigma,
+        "n_sim": n_sim,
+        "pico_no_en_el_final": pico_no_final,
+        "descenso_p50": float(np.median(d)) if d.size else float("nan"),
+        "descenso_p90": float(np.percentile(d, 90)) if d.size else float("nan"),
+        "descenso_max": float(np.max(d)) if d.size else float("nan"),
+        "descensos": d,
+    }

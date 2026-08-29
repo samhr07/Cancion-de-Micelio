@@ -1,84 +1,46 @@
-# Orden de trabajo — Cribado de activos (v4.0)
+# Orden de trabajo — Cribado de activos (v5.1)
 
 **Fecha:** 2026-08-29. Hipótesis, predicción falsable y umbrales en
-`PREREGISTRO_CRIBADO_4_0.md`, **commiteado antes que este documento**. Proyecto
-anterior liquidado en `ACTA_CIERRE_MICELIO_1_0_A_3_1.md`.
+`PREREGISTRO_CRIBADO_5_1.md`, **commiteado antes que este documento**. Proyecto
+anterior sigue registrado en `CLAUDE.md` (llega a la v4.2) y `PLAN_CAPITAL_5_0.md`.
 
 Este documento dice **cómo se ejecuta**. No redefine ningún umbral: los umbrales
 están en el preregistro y aquí solo se aplican.
 
 ---
 
-## §0 — Tarea residual de BTC, y va primera
+## §0 — Tarea residual de BTC: YA ESTÁ HECHA en `master`
 
-**Por qué primera:** cambia el criterio de diseño de todo lo demás. La identidad
-multivariante es la única cosa del proyecto viejo que quedó sin contrastar, es
-barata, y su resultado fija el `R²` alcanzable que entra en el factor 3.4×.
+⚠ **Esta sección se escribió sobre una base obsoleta (`d591256`) y su premisa era falsa.**
+La identidad multivariante del §C.3.5 **no está sin contrastar**: `identidad.py` la
+implementa (`r2_identidad_multi`, `R² = c' Σ⁻¹ c / σ²_r(H)` sobre agregados de flujo
+pasado `X_j = Σ_{i<L_j} ε_{t−i}`), con suelo por rotación circular, autotest 6/6, y la
+sesión 2026-08-27 la ejecutó. **No se duplica.** El módulo que esta rama traía
+(`identidad_multivariante.py`) se ha retirado por eso.
 
-> Si la multivariante rinde **2×** la univariante, el factor necesario baja a
-> **2.4×** y el cribado se vuelve mucho más fácil. La aritmética: el margen va con
-> `ρ = √R²`, luego el factor de `σ` requerido va con `1/√R²`, y `3.4/√2 = 2.404`.
-> Fijado como test (`test_v40_factor_de_sigma_reproduce_el_2_4x_anunciado`).
-
-### Cómo se corre
-
-```
-python identidad_multivariante.py --datos=<captura.npz | directorio_de_bloques>
-python identidad_multivariante.py --datos=telemetria/ --ventana=200 --rotaciones=500
-```
-
-### Lo que devuelve, y cómo se lee
-
-1. **Techo por fila** — el `R²` univariante de cada rasgo por separado.
-2. **`R²_max` multivariante** — `c' Σ⁻¹ c / var(y)`, el techo del mejor predictor
-   lineal. **Superior por construcción** al mejor univariante (el univariante es el
-   mismo cociente restringido a una coordenada); verificado sobre 30 matrices al azar
-   en `test_v40_techo_multivariante_es_superior_por_construccion`.
-3. **Suelo por rotación circular** — la distribución de `R²_max` bajo
-   desalineamiento.
-4. **Marca falsable / NO falsable** — la corrección del 2026-08-29.
-
-⚠ **Un `R²` por debajo del suelo no es un `R²` pequeño: es un `R²` que no significa
-nada.** No entra en el criterio económico ni en el factor de σ.
-
-### ⚠ Por qué rotación circular y no barajado — medido, no razonado
-
-El barajado destruye la autocorrelación, y estos rasgos son series con memoria
-fuerte. Medido en `test_v40_rotacion_conserva_la_memoria_y_barajar_no`, con rasgos y
-objetivo AR(1) de ρ = 0.98 **independientes entre sí** (o sea `R²` verdadero = 0):
+Lo que el registro de `master` establece, y que entra aquí como dato de partida:
 
 | | valor |
 |---|---|
-| `R²` en muestra (regresión espuria) | **0.0807** contra `p/n` = 0.0042 |
-| suelo por **rotación** (p95) | **0.2676** → **NO FALSABLE** ✔ correcto |
-| suelo por **barajado** (p95) | 0.00913 → **FALSABLE** ✘ equivocado |
-| razón entre suelos | **29×** |
+| `σ(t)` desde 3 rezagos de (`ν`, `σ`) | `R² = +0.6153` contra suelo 0.0798 → **7.7×**, se lee |
+| `ν(t) → σ(t+1)` | `R² = +0.5464` contra suelo 0.0508 → **11×**, se lee |
+| suelo por rotación contra barajado | **14× más ancho** (0.0798 contra 0.0058) |
+| §1 estratificado por `σ` pronosticada | **margen mínimo 9.3×** — LÍNEA CERRADA |
+| v4.2 §4, superficie `R(H, θ)` | **NO HAY ÓPTIMO**, `P(max R_nulo ≥ R*) = 0.985` |
 
-Un suelo por barajado habría declarado significativa una regresión enteramente
-espuria. La contraprueba está en `test_v40_suelo_deja_pasar_una_relacion_real`: con
-una relación real entre series igual de persistentes, la marca vuelve a FALSABLE.
+⚠ **Y una corrección de fondo a lo que esta rama afirmaba.** `identidad.py` advierte que
+«la multivariante no puede rendir menos que la univariante» **NO ES UN TEOREMA**: sólo se
+cumple si los rasgos univariantes están **anidados** en los multivariantes. Con agregados
+de flujo `X_j` que no contienen `ε_t`, la multivariante **puede rendir menos**. La
+redacción anterior de esta rama («superior por construcción») era demasiado fuerte, y el
+test que la acompañaba sólo pasaba porque usaba el mismo conjunto de rasgos en los dos
+lados, que es anidamiento por construcción.
 
-### Guardas numéricas, con su porqué
-
-- **`Σ⁻¹` nunca por `np.linalg.inv`.** Es la nota de "menores" del diagnóstico
-  original, y aquí muerde: con rasgos casi colineales `Σ` queda mal condicionada y la
-  inversa infla el techo sin avisar. Se resuelve por sistema lineal y se publican
-  `cond(Σ)` y el rango efectivo.
-- **Rasgos constantes se descartan**, no se avisan: un rasgo que no varía no puede
-  explicar variación, y su contribución al techo es ruido numérico.
-- **El sesgo `~p/n` se publica** junto al techo, porque es exactamente lo que el
-  suelo está midiendo.
-
-### ⚠ Precondición que NO se cumple en este árbol
-
-El conjunto de rasgos del §C.3.5 y el modelo de `R² = 0.615` **no están en este
-repositorio** (§7.2 del preregistro). `rasgos_desde_captura` reconstruye la familia
-de rasgos que **sí** está documentada (desequilibrio firmado del propagador v3.1 §2,
-volumen, ν, volatilidad realizada) y va marcada `# NOTA DE INTERPRETACION:`.
-**Al correr sobre los datos reales hay que sustituirla por el conjunto del §C.3.5.**
-La identidad del §1 no cambia al hacerlo — solo cambian `X` e `y`.
-
----
+**Consecuencia sobre el factor 3.4×:** con la multivariante ya medida y las filas
+decisivas marcadas NO FALSABLES (`b8f3155`), el factor **no baja**. La relación sigue
+siendo `factor_nuevo = factor_actual / √(R²_nuevo/R²_referencia)`, pero no hay ganancia
+que aplicar. El cribado se ordena por `σ₁` contra el umbral absoluto de C1.1, que no
+depende de ese factor.
 
 ## §1 — Etapa 1: cribado sin captura
 
@@ -107,7 +69,7 @@ python cribado_activos.py --sin-cache            # ignora cribado_cache/
 σ de velas de 1 min **sobreestima** por rebote bid-ask, y sobreestima **más** cuanto
 más ancha es la horquilla — la dirección que favorece justo a los pares malos.
 Verificado inyectando un rebote de tamaño conocido
-(`test_v40_roll_recupera_el_spread_y_desinfla_sigma1`): `s_eff` recuperado 4.932 pb
+(`test_v51_roll_recupera_el_spread_y_desinfla_sigma1`): `s_eff` recuperado 4.932 pb
 contra 5.000 inyectados, y `σ₁` de 0.9092 → 0.6614 contra una verdad de 0.6455.
 
 En el ensayo de humo sobre pares sintéticos, un par con `σ₁` crudo de **3.51** cayó a
@@ -182,8 +144,8 @@ sigue.** No se prueba con el siguiente par: se diagnostica la captura.
 ## §3 — Etapa 3: el mismo criterio económico, sin rebajarlo
 
 - Identidad de covarianza multivariante (§C.3.5), con techo `R²_max` **por fila**,
-  suelo por rotación circular y la marca falsable/no-falsable. **Mismo módulo del
-  §0**, ya probado.
+  suelo por rotación circular y la marca falsable/no-falsable, **con `identidad.py` de
+  `master`**, que ya la implementa y tiene autotest 6/6.
 - `L(H)` medida con sus cinco términos, **con la horquilla real del par nuevo**, que
   allí no será despreciable — a diferencia de BTC.
 - Superficie `R(H, θ)` con cap definida como covarianza.
@@ -204,9 +166,9 @@ sigue.** No se prueba con el siguiente par: se diagnostica la captura.
 
 | pieza | estado |
 |---|---|
-| `identidad_multivariante.py` | **implementado y probado**; sin correr sobre BTC real (datos fuera del árbol) |
+| identidad multivariante (§C.3.5) | **YA HECHA en `master`**: `identidad.py`, sesión 2026-08-27. No se duplica |
 | `cribado_activos.py` | **implementado y probado**; **sin correr contra mercado** (egreso denegado, §7.1) |
-| suite de aceptación | **20/20 criterios v4.0** (`python tests_v13.py`) |
+| suite de aceptación | **12/12 criterios v5.1** (`python tests_v13.py`) |
 | Etapa 2 | no iniciada; depende del §1 |
 | Etapa 3 | no iniciada; depende del §2 |
 

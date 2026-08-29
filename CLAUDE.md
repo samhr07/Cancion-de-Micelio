@@ -9,7 +9,108 @@ IPOPT y qpOASES). No se han validado contra CUDA ni acados.**
 
 ---
 
-## ESTADO ACTUAL (2026-08-29)
+## ESTADO ACTUAL (2026-08-09)
+
+### Lo primero que hay que saber
+
+**La v3.2 ya se ejecutó y su regla de decisión se paró en el paso 3.** Queda una línea abierta.
+No se abre una tercera.
+
+| línea | qué decide | estado |
+|---|---|---|
+| **v3.2** `ORDEN_TRABAJO_MIGRACION_3_2` | impacto permanente contra transitorio (M0/M1/M1′/M2) | **EJECUTADA** el 2026-08-10 sobre 1 031 155 ticks continuos. Paso 2 pasa, **paso 3 falla**: `q90(\|μ̂\|) = 11.30` contra `1.5·c(u) = 39.05`. Falta el §7 (exige captura completa) |
+| **v4.0** `ORDEN_TRABAJO_EJECUCION_4_0` | cuánto cuesta operar | `captura_estacional` corriendo, 21 días. §4.2 y §5 ya resueltos |
+| **v4.2** `ORDEN_TRABAJO_FRECUENCIA_4_2` | ¿existe un par (tenencia `H`, umbral `θ`) rentable? | **EJECUTADA el 2026-08-28.** §1.1 tarifas **leídas** (criterio del §8 CUMPLIDO), §1.2 Adenda C, §2 y §3 `L(H)` medida, §4 superficie. **Veredicto: NO HAY ÓPTIMO**, `P(max R_nulo ≥ R*) = 0.985` |
+| **v4.1** `ORDEN_TRABAJO_HORIZONTE_4_1` | a qué horizonte (si a alguno) la señal paga el peaje | §11, §2, §3 hechos. El §1 se rehizo el 2026-08-23 y su veredicto quedó **RETRACTADO el mismo día**: `σ₁` y `ν` se agruparon sobre las 24 h y el requisito varía **8.4×** según la hora. **Pendiente: §1 estratificado por casilla horaria.** Quedan §6, §5, §4 |
+
+✅ **Estado de la captura estacional (2026-08-22): SU COMPUERTA PASA.** Es la primera vez.
+**32 429 468 transacciones y 223 546 502 snapshots de libro, 0 partes ilegibles** de 3 207, 2.0 GB.
+Cobertura **15 522 min = 10.78 días equivalentes**, **mínimo por casilla 60** contra los ≥ 30 que
+pide la compuerta, **0 casillas vacías de 168**. Calidad: 0 precios ≤ 0, 0 ids duplicados, 0
+tiempos no monótonos, `maker` = 49.29 % (no degenerado). El proceso lleva **240 h sin reiniciarse**
+(PID 17332, desde el 2026-08-12) y el vigilante no ha tenido que reponerlo ni una vez.
+
+**Dos tramos continuos largos, y son de REGÍMENES OPUESTOS** — que es lo que este proyecto
+llevaba pidiendo desde que la v3.2 encontró que nada replica entre capturas con `ν` distinta:
+
+| tramo | horas | ticks | `ν` | recorrido de precio | ventanas limpias 15/30/60/120/240 min |
+|---|---|---|---|---|---|
+| 2026-08-12 11:46 → 08-17 23:36 UTC | **131.83** | 8 898 312 | 18.75 tx/s | 62 484 – 64 601 (**3.4 %**, lateral) | 513 / 251 / 120 / 55 / 23 |
+| 2026-08-18 01:26 → 08-21 11:54 UTC | **82.47** | 19 985 140 | **67.31 tx/s** | 63 979 – **79 555** (**24.3 %**, tendencia) | 325 / 160 / 78 / 37 / 18 |
+
+`ν` difiere **3.6×** entre los dos y el recorrido de precio **7×**. Ventana limpia = sin ningún
+hueco > 10 s. Ids ausentes 1.04 % y 1.56 % respectivamente.
+
+⚠ **Hueco de 24.26 h el 2026-08-21 (06:54 → 07:09 local del día siguiente), y la causa es NUEVA.**
+Reconstruido del registro de eventos: 06:54:02 `Kernel-Power 105` **cambio de fuente de energía**
+(se desenchufó) + `506` entrada en espera moderna → 06:54:55 `172` **«Conectividad: Disconnected.
+Motivo: Policy Setting»** → 07:27:40 `42` suspensión → hueco en el propio registro → 08-22
+07:09:26 eventos `Kernel-Boot` y salto del reloj de `08-21T12:27:44` a `08-22T12:09:26`. Eso es
+**hibernación (S4)**, no apagado: el PID sobrevivió intacto y volvió a volcar solo.
+**Corrige la regla que teníamos escrita:** la espera moderna es inofensiva **enchufado** — probado
+en 8 ciclos — pero **en batería Windows desconecta la red por directiva**. Segunda vez que la
+batería cuesta datos (la primera, el 2026-08-10, por umbral crítico). **Mantener el portátil
+enchufado es la única medida que ha hecho falta y la única que faltaba.**
+
+⚠ **La cobertura ya no bloquea nada. Rehacer el §1 de la v4.1 sobre estos dos tramos es lo
+siguiente**, y por primera vez con potencia: contra las 8/4/2 ventanas con las que el §1 se declaró
+NO DECIDIBLE, ahora hay **838 a 15 min, 411 a 30 min y 198 a 1 h** sumando los dos tramos. Y el
+tramo en tendencia es justo el régimen donde un `R²` no nulo es plausible.
+
+⚠ **Lo que la v3.2 dejó sin decidir NO es por falta de datos**: el estimador de `D` **no tiene
+potencia** a la autocorrelación de signos real (`γ̂ = 0.798`) — bajo `D = 1` verdadero devuelve
+cualquier cosa entre 0.0 y 7.3. Capturar más no lo arregla; hace falta otro estadístico.
+
+**`Micelio.py` no se toca desde la v2.2.** Todo lo posterior es código de análisis aparte.
+
+**Preregistros vigentes y congelados:** `PREREGISTRO_3_2.md` (9 enmiendas, todas anteriores a
+mirar dato) y `PREREGISTRO_4_0.md` (1 enmienda). Los dos llevan registro de enmiendas con hash
+antes/después y constancia de si había resultado a la vista.
+
+**Suites:** `tests_v13.py` 56/56 · `ssa.py` 11/11 · `migracion_v32.py` **20/20** · `cola.py` 9/9 ·
+`difusividad.py` 5/5 · `tick_grande.py` **28/28** · `horizonte.py` **14/14**.
+
+⚠ **Retractaciones vigentes — no citar lo retirado:**
+- ⚠ **`η̂` NO ES MEDIBLE sobre este instrumento** (2026-08-28). Ni el 0.62 de la v3.3 §2
+  ni el ~0.006 colapsado son mediciones. El modelo de Robert-Rosenbaum supone un precio
+  eficiente **continuo** que cruza barreras de una en una, y aquí el **79-80 %** de los cambios
+  del punto medio son saltos **multi-tick** (media 8.8-9.1 ticks). El `η̂` de la v3.3 canceló su
+  §4 y su §5; el §4 sigue cancelado por otra razón, **el §5 se rehabilita**. Toda tabla de
+  `η̂` futura lleva al lado la comprobación de Dayri-Rosenbaum (`2ηα` contra la horquilla observada).
+- ⚠ **No existe «la» `γ` de este mercado** (v4.1 §3.1, 2026-08-12). Estimada por GPH y Whittle
+  local, `γ̂` recorre de **+0.69 a −0.26** según el ancho de banda `m = N^α`, en las dos capturas.
+  El mismo barrido sobre fGn de `γ` conocida es **plano** (salto máximo 0.06–0.13 contra 0.45–0.48
+  sobre el dato), así que el fallo es de la serie: **el flujo de órdenes no tiene un régimen de
+  escala único.** Cualquier fórmula que use `γ` hereda esa indeterminación.
+- ⚠ **`β` implícita NO mide el núcleo, y en el §1 de la v3.3 no medía nada** (v4.1 §3.3). Es la
+  identidad `β = 0 ⟺ γ = 2−2H` del ruido gaussiano fraccionario: un contraste de coherencia entre
+  dos exponentes. Ajustando `γ` y `H` **en la misma ventana**, `β` recorre 0.40 (v33) y 0.49
+  (estacional) contra una distancia entre hipótesis de 0.21 y 0.16. El **+0.148** que la v3.3
+  publicó es un punto arbitrario de esa curva.
+- **El impacto «transitorio» de la v3.1 §2 era el REBOTE BID-ASK** (sesión 2026-08-10). Sobre el
+  precio de transacción `D = 0.107`; sobre el punto medio, que no tiene rebote, `D = 11.53` y el
+  signo se invierte. El spread mediano de la captura es 1 tick exacto.
+- ⚠ **`D = 11.53` NO es «núcleo creciente medido»** (v4.1 §3.4, sesión 2026-08-12). Se cita como
+  **«ajuste no identificado en el régimen `τ₀` en cota»** y nada más. `β = −0.160` con `τ₀` pegada
+  a su cota inferior es firma de **mala especificación del estimador**: `β` se reporta en la
+  literatura en `(0, 1)`, y un núcleo que crece sin cota sobre `[0, K]` implica impacto de mercado
+  creciente indefinidamente, que es económicamente imposible (arbitraje ilimitado). El propio
+  §5.2 de la v3.2 ya decía que `β` y `τ₀` no están identificados por separado. **No se abre un
+  quinto estadístico para arreglarlo: se degrada la afirmación.**
+- **La difusividad de la sesión (e) NO replica.** Sobre `captura_v33` la pendiente de la firma en
+  ticks es **+0.091** (`H_p = 0.591`) con control barajado plano (−0.012), contra el +0.007 que
+  dio `captura_larga`. **Este tramo es super-difusivo.**
+- **Los «tres regímenes» de difusividad NO existen** (commit `432f459`). El rango de ajuste
+  estaba fijo en ticks y la banda en segundos difería por factor 7; a banda común la reversión
+  desaparece, y sobre banda común la pendiente **no es estimable** (cambia de +0.02 a +1.52 solo
+  con la densidad de la rejilla). La difusividad más allá de ~12 min **sigue sin verificarse**.
+- **φ′ se retira del vocabulario; se escribe `q̄`** (commit `9b2267e`). Es `1/q̄` y el hallazgo es
+  Jones-Kaul-Lipson (1994), no un descubrimiento. Ni la estimación de `δ` por esa vía ni el apoyo
+  a M1′ sobreviven a sus nulos.
+- **Toda cifra de ejecución anterior al commit `0e3b9e0` se descarta**: el llenado adverso estaba
+  clasificado como no-llenado y el sesgo ocultaba justo los llenados malos.
+
+### Historial
 
 Ocho tandas de trabajo aplicadas, en este orden:
 
@@ -46,6 +147,16 @@ el estado *anterior* del código.
    raíces reales — NO HAY OSCILADOR**, y todo el AR(2) queda explicado a 7 decimales por paseo
    aleatorio + rebote bid-ask. **56/56** criterios.
 
+9. **Cambio de herramienta: SSA en lugar de EMD, y φ′ contra el precio** — sesión
+   2026-08-08 (f). **Ningún cambio a `Micelio.py`.** La búsqueda de `ω_m` por atractor de
+   frecuencias queda **abandonada por decisión del operador**. Dos resultados: la
+   descomposición SSA del precio real es **la escalera armónica de la ventana** (`T = 2L/k`,
+   error 0.0000, idéntica sobre un paseo aleatorio), y **φ′ = ticks/BTC se asocia
+   positivamente con la volatilidad realizada en 16 de 16 ventanas** (p de signos 3.05e-05).
+   **El período y φ′ son independientes** (`L` explica el 79 % de la varianza de `T`; φ′ no
+   añade nada significativo): se apuntaba a la **frecuencia** y lo que resultó medible es la
+   **amplitud**.
+
 ⚠ **Lee las sesiones 2026-08-07 (b) y 2026-08-08 antes de tocar nada que dependa de `ω_m`.**
 `ω_m`, `Φ`, `Ψ`, `Ω`, `Ω_crit`, `A_arm` y los nodos de fase **no tienen sustento empírico**.
 Lo que sobrevive está en "Qué sobreviviría si (A) se confirma".
@@ -79,6 +190,28 @@ corregir el filtro 90 veces con la misma medición, y eso está corregido en ori
 - `captura_larga.py` — **v2.2**: captura continua por bloques (48 h) con escritura atómica.
 - `experimento_v22.py` — **v2.2**: nulos por sustitutos, histograma de banda y árbitro
   multitaper. `python experimento_v22.py`.
+- `ssa.py` — **v3.2**: Análisis Espectral Singular. Descomposición exacta, w-correlación,
+  barrido de `L` con parada por **mínimo local**, detección de pares, **Monte Carlo SSA**
+  contra nulos AR(1) / ARIMA(1,1,0) / barajado, escalera de ventana y color de ruido.
+  `python ssa.py --autotest` → **11/11**. **No se importa desde `Micelio.py`.**
+- `barrido_ssa.py` / `graficar_ssa.py` — **v3.2**: toma de datos por ventanas (logea `t`,
+  precio, id de tick, cantidad, signo y volumen neto, más autovalores, autovectores y
+  w-correlación de **cada** `L`) y las figuras de matplotlib sobre ese log.
+- `phi_precio.py` — **v3.2**: φ′ = ticks por volumen inyectado contra el precio, en bloques
+  disjuntos, con nulo por desplazamiento circular y por barajado.
+- `horizonte.py` — **v4.1**: `H_p` en los dos relojes con control barajado, `σ₁` en pb, y las
+  dos curvas del §1 (`R²` medido contra `R²` requerido). `--autotest` → **14/14**.
+- `tick_grande.py` — **v3.3 + v4.1 §3**: `γ` como exponente (no `C(1)`), `H`, `β` implícita, `η̂`
+  de Robert-Rosenbaum, costes en pb y `N_eff` bajo memoria larga. La v4.1 añade los dos
+  estimadores **espectrales** de `γ` (`gph`, `whittle_local`), el barrido de banda, `N_eff`
+  coherente y `curva_beta_implicita`. `--autotest` → **28/28**. **No se importa desde `Micelio.py`.**
+- `correcciones_v41.py` — **v4.1 §3**: el ejecutor de las correcciones a la v3.3, sobre las **dos**
+  series (entrenamiento de `captura_v33` y el tramo continuo de 23.33 h de `captura_estacional`).
+  `PREDICCION_SESGO_GAMMA_4_1.md` lleva las cuatro predicciones congeladas antes de medir.
+- `experimento_v32.py` — **v3.2**: **el ejecutor del preregistro**. Etapas `muestra`, `fuga`,
+  `delta`, `A`, `osc`, `B`, `decision`; abre el conjunto de prueba sólo en la última. `log()`
+  transcribe a ASCII por sí sola, para que la consola cp1252 deje de ser una regla que recordar.
+- `migracion_v32.py` — **v3.2**: el estimador M0/M1/M2/M2-osc y sus 18 controles.
 - `oscilador.py` / `experimento_v30.py` — **v3.0**: primitivas `k`, `m`, `γ`, `Q` por AR(2) con
   hipótesis nula, verificación dimensional y descomposición del rebote bid-ask.
   `python experimento_v30.py`. **No se importa desde `Micelio.py`.**
@@ -2038,134 +2171,3360 @@ dato. La captura de 8 h con `tr_maker` está corriendo.
   `pendiente ≈ (1−γ)/2 − β` del A.4, que es la validación del mecanismo por dos vías.
 - Raíces de `G(τ)` con un estadístico cuyo nulo no sea degenerado.
 
-## Sesión 2026-08-29 — PROYECTO NUEVO: cribado de activos (v4.0)
+## Sesión 2026-08-08 (e) — La firma en tiempo de ticks resuelve la discrepancia
 
-⚠ **El proyecto v1.0–v3.1 queda CERRADO** con `ACTA_CIERRE_MICELIO_1_0_A_3_1.md`.
-Lo que sigue arranca con hipótesis, preregistro, umbrales y regla de parada propios,
-y **no hereda ninguna hipótesis abierta** del anterior. Leer el acta antes que nada.
+Tres tareas pedidas: firma en reloj de ticks, control positivo, `τ_pico` en ambos relojes.
 
-### La hipótesis nueva, y por qué es distinta de la vieja
+### ⚠ CONFIRMADO: el sesgo era mezclar dos relojes, no el agrupamiento de volatilidad
 
-**Condicionar por volatilidad DENTRO de un activo no mejora el margen** (§1
-estratificado, 2026-08-28, predicho antes de medirlo). **Elegir un activo
-permanentemente más volátil sí puede hacerlo**, porque el mecanismo es distinto: los
-tramos volátiles de BTC son tramos de **información**, donde la competencia es
-máxima; un activo de menor capitalización es **estructuralmente** más volátil y
-**menos competido**.
+La confirmación estaba en mis propios datos y no la señalé: el barajado destruye el
+**agrupamiento** de volatilidad pero conserva los **tiempos de llegada**. Con incrementos iid,
+los tramos con más ticks siguen teniendo más varianza por segundo, mecánicamente. Que la
+pendiente barajada saliera −0.0403 y no cero era exactamente esa firma.
 
-**Predicción falsable, declarada antes de medir:** en el cribado, `σ₁` y `R²`
-predictivo **NO** estarán negativamente correlacionados entre activos. Muere si
-`ρ_Spearman ≤ −0.30` con `p < 0.05`; en ese caso no se captura nada.
+**Firma en tiempo de ticks** (`σ(n)/√n` contra `n` en ticks), 446 892 ticks, ν = 39 tx/s:
 
-### El criterio económico, derivado
+| n [ticks] | 2 | 8 | 32 | 128 | 512 | 1024 | 4096 | 8192 |
+|---|---|---|---|---|---|---|---|---|
+| solapada | 0.1964 | 0.2088 | 0.3045 | 0.4579 | 0.5631 | 0.5839 | 0.5721 | 0.5393 |
+| **no solapada** | **0.1984** | **0.2127** | **0.3044** | **0.4584** | **0.5640** | **0.5835** | 0.5466 | 0.5474 |
+
+**Los dos estimadores coinciden a tres decimales.** La discrepancia de signo desaparece **por
+construcción**, no por corrección de sesgo.
+
+Y el control negativo se limpia solo:
+
+| pendiente sobre barajados | reloj de pared | **reloj de ticks** |
+|---|---|---|
+| rango completo | −0.0796 | **−0.0054** |
+| rango largo | −0.0403 | **−0.0028** |
+
+**El sesgo del estimador desaparece.** Es la confirmación de que venía de los dos relojes.
+
+**Resultado en tiempo de ticks:**
+
+| rango | pendiente | lectura |
+|---|---|---|
+| [2, 256] ticks | +0.228 | microestructura: el rebote bid-ask muriéndose |
+| **[256, 8192] ticks** | **+0.007 / +0.003** | **DIFUSIVO** (control barajado: −0.003) |
+
+Más allá de la microestructura, **el precio es difusivo en tiempo de ticks**. La "reversión" del
+A.2 era íntegramente el artefacto de los dos relojes.
+
+Consecuencia aceptada: `H*` pasa a `H*_ticks = (c/σ_tick)²`, y su valor en segundos depende de
+ν. Con ν variando por factor 20, **`H*` en segundos no es una constante** — más honesto, no menos.
+
+### ⚠ El control positivo funciona, pero su nulo NO es conservador
+
+Sustituyendo la razón degenerada por un bootstrap paramétrico bajo núcleo monótono
+`G(τ) = G∞·τ/(τ₀+τ)`, con σ calibrada a la volatilidad real (0.1806 USD):
+
+| | valor |
+|---|---|
+| descenso medido pico→final | **16.8 %** |
+| descenso espurio bajo el nulo monótono | MED 0.0 %, p90 0.1 %, **máx 0.4 %** |
+| sorteos ≥ 16.8 % | **0 de 60** |
+
+Parecía cerrado. **No lo está**, por dos razones que encontré después:
+
+1. **`R` no tiene un solo pico.** Extendiendo el rango: 1.95 en τ=398, baja a 1.55 en 1000,
+   **sube a 2.09 en 1800**, vuelve a bajar. El "descenso" depende de dónde se trunca:
+
+   | max_rezago | 600 | 800 | 1000 | 1500 | 2000 | 2300 |
+   |---|---|---|---|---|---|---|
+   | pico | 398 | 398 | 398 | 1500 (borde) | 1642 | 1642 |
+   | descenso | 9.9 % | 16.8 % | 20.4 % | 0.0 % | 12.1 % | 16.9 % |
+
+2. **Mi nulo usa signos iid.** `rng.permutation(eps_real)` destruye la memoria larga del flujo
+   de órdenes — que es precisamente lo que produce estas ondulaciones a rezagos largos. El nulo
+   es **demasiado estrecho**, y por eso da máx 0.4 % donde el real da 16.8 %.
+
+**Conclusión:** el sobrepaso sigue sin establecerse, y ahora se sabe qué haría falta — un nulo
+monótono con **flujo de memoria larga**, no con signos iid. Es la misma lección otra vez: el
+control positivo solo vale si su nulo reproduce las propiedades del dato que importan.
+
+⚠ Nota de calibración: con σ ajustada a la volatilidad real el nulo da máx 0.4 %; con otra SNR
+da 15.4 %. **El resultado depende críticamente de la SNR**, así que el número aislado no
+significa nada sin declarar cómo se calibró.
+
+### `τ_pico` en ambos relojes — sin conclusión
+
+| captura | ν [tx/s] | pico [ticks] | pico [s] |
+|---|---|---|---|
+| v31 | 5.6 | 398 (o 1642 según ventana) | 71 (o 293) |
+| larga (regla de tick) | 39.0 | 668 | 17.1 |
+
+**No es estable en ninguno de los dos relojes**, pero el propio `τ_pico` no es una cantidad bien
+definida mientras `R` tenga varios máximos locales. La pregunta —¿en qué reloj vive el
+decaimiento del impacto?— sigue abierta y es la que sostiene la arquitectura de dos relojes
+desde la v2.0. Hace falta más dato antes de responderla.
+
+### Lo que sí queda establecido de esta sesión
+
+- La firma de volatilidad **debe medirse en tiempo de ticks**; en reloj de pared el estimador
+  tiene sesgo propio y los dos muestreos discrepan en signo.
+- Más allá de la microestructura (n > 256 ticks) el precio es **difusivo**.
+- El propagador **existe** (sesión d): pico 1.95 contra 0.003–0.016 con signos barajados.
+
+## Sesión 2026-08-08 (f) — SSA en lugar de EMD, y φ′ contra el precio (v3.2)
+
+Cambio de estrategia pedido por el operador: **se abandona la búsqueda de `ω_m` como atractor
+de frecuencias** y se pasa a SSA (Análisis Espectral Singular). Objetivo declarado: una
+**ventana de toma de datos** con logeo completo, no un modelo. **`Micelio.py` sin cambios.**
+
+### Por qué SSA y no EMD: la EMD no tiene hipótesis nula, SSA sí
+
+La v2.2 dejó demostrado que la EMD devuelve un "ciclo" de 118.1 s sobre un paseo aleatorio
+puro, y de 37.5 s al partir la ventana en dos. SSA **no arregla eso por sí solo** — se
+comprobó y también fabrica pares oscilatorios sobre ruido. Lo que sí tiene es el test que
+falta: **Monte Carlo SSA** (Allen & Smith 1996), que contrasta los autovalores observados
+contra los de un nulo ajustado a los mismos datos.
+
+### La condición de parada del barrido de `L`
+
+Buscar `ortogonalidad == 0` no termina nunca: el ruido de medición —el mismo que alimenta `R`
+en el EAKF— siempre filtra energía entre componentes, así que el mínimo alcanzable es
+estrictamente positivo y desconocido. Implementado como **rejilla finita** (no hay bucle) con
+elección por **mínimo local interior**, y dos salvaguardas:
+
+- si el mínimo cae en un extremo de la rejilla, devuelve `hay_minimo_local = False` en lugar
+  de entregar el borde como si fuera una elección;
+- cada punto del barrido lleva al lado **el mismo estadístico medido sobre sustitutos
+  barajados**. Una métrica que baja igual sin estructura no mide separación, mide la rejilla.
+
+### Controles del propio estimador (`python ssa.py --autotest`) — 11/11
+
+Este proyecto llevaba cinco sesiones ejecutando controles **negativos** con disciplina. Estos
+son la mitad que faltaba, los **positivos**: dada una verdad conocida, ¿el estimador la
+recupera?
+
+| control | resultado |
+|---|---|
+| reconstrucción exacta (suma de elementales = serie) | error **1.1e-12** |
+| dos períodos conocidos, 120 y 37 muestras | **0.63 %** y **0.02 %** de error |
+| ruido blanco → β | **+0.002 ± 0.017** |
+| paseo aleatorio → β | **+1.977 ± 0.018** (ROJO) |
+| señal enterrada en AR(1), MC-SSA | la marca, **p = 0.000** |
+| AR(1) puro, MC-SSA | 6/20 sobre p95 |
+| curva monótona → mínimo local | **no discrimina** (correcto) |
+| paseo aleatorio → escalera `2L/k` | error **0.0317** (cae en ella) |
+| señal con ciclos → escalera `2L/k` | error **0.6020** (la rompe) |
+
+⚠ **Sobre un paseo aleatorio puro, SSA también fabrica pares oscilatorios**, con período que
+escala con la ventana: 152.4 muestras con L=400 (0.38·L) y 60.4 con L=200 (0.30·L). Es el
+defecto de la EMD intacto. Lo que cambia es que **MC-SSA lo detecta**: 1/20 componentes sobre
+el p95, o sea el 5 % del azar.
+
+### ⚠ HALLAZGO: los autovectores del precio real son los armónicos de la VENTANA
+
+Medido sobre 8 ventanas de 8 192 ticks de `captura_v31b` (97 742 tx, 4.33 h, ν = 6.0 tx/s) y
+8 de `captura_larga` (480 757 tx, 14.39 h, ν por ventana de **21 a 109 tx/s**).
+
+`T/L` de los primeros autovectores, **idéntico en las 16 ventanas**, con `L` entre 96 y 768 y
+en los dos observables (precio y volumen neto acumulado):
+
+```
+1.600   0.889   0.667   0.500   0.400   0.333   0.286
+```
+
+Que es `T = 2L/k`. Error mediano al escalón, y energía del primer autovector:
+
+| serie | error a `2L/k` | E(EOF1) | E del par dominante |
+|---|---|---|---|
+| **8 ventanas reales, v31b** | **0.0000** (6/8 exacto) | 97.6–99.8 % | **0.00–0.01 %** |
+| **8 ventanas reales, larga** | **0.0000–0.0335** | 84.2–99.4 % | 0.00–0.06 % |
+| ctrl_paseo (paseo aleatorio) | 0.0347 | 90.8 % | 0.16 % |
+| ctrl_barajado (incrementos reales barajados) | 0.0264 | 98.1 % | 0.03 % |
+| **ctrl_positivo (T = 120 y 37 conocidos)** | **0.1250 / 0.4235** | **45.8 %** | **85.93 %** |
+
+El control positivo recupera su verdad: 128 ticks (verdad 120) con el 85.9 % de la energía y
+37 ticks (verdad 37) con el 11.8 %, y MC-SSA marca **exactamente las componentes 1, 2, 3 y 4**
+—los dos pares verdaderos, ni una más—. Sobre BTC real, la descomposición es
+**indistinguible de la de un paseo aleatorio**, y los pares que el detector encuentra llevan
+0.00–0.06 % de la energía.
+
+**La escalera no se mueve al cambiar ν por un factor 18** (6 → 109 tx/s). Si el período
+viniera del mercado, cambiar la tasa de transacciones lo movería.
+
+### Ortogonalidad por ventana
+
+| serie | media \|w-corr\| | razón real/barajado |
+|---|---|---|
+| 8 ventanas reales v31b, precio | 0.1425–0.1456 | **0.882–0.993** |
+| 8 ventanas reales larga, precio | 0.1392–0.1532 | 0.944–1.043 |
+| ctrl_paseo | 0.1459 | 0.998 |
+| ctrl_barajado | 0.1448 | 0.987 |
+| **ctrl_positivo** | **0.0933** | **0.629** |
+
+La métrica discrimina —el control positivo se separa con claridad— y sobre datos reales dice
+que la separación es la de un sustituto barajado. La curva contra `L` es además **plana** en
+las ventanas reales: los mínimos locales que se eligen son poco profundos, así que **la `L`
+elegida sobre datos reales no es una elección informada**, y así queda anotado.
+
+### Sobre retornos la escalera se rompe, pero no aparece ciclo
+
+Aplicar SSA al **nivel** garantiza que el primer EOF sea la tendencia y se lleve ~98 %. Se
+repitió sobre `retorno` y `vol_neto` (v31b, 8 ventanas):
+
+| observable | escalera | E(EOF1) | E del par dominante | razón real/nulo |
+|---|---|---|---|---|
+| retorno | 0.125–6.16 (med **1.16**) | 0.3–11.5 % | 0.65–3.00 % | 0.63–0.83 |
+| vol_neto | 0.007–0.125 (med **0.032**) | 1.0–5.6 % | 0.56–5.54 % | 0.81–1.16 |
+| ctrl_positivo (retorno) | 5.53 | 29.7 % | **58.58 %** | 0.862 |
+| ctrl_paseo (retorno) | 11.28 | 0.28 % | 0.56 % | 0.750 |
+
+En retornos ya no hay escalera, pero tampoco energía oscilatoria: 0.65–3.00 % contra 58.58 %
+del control. Y `ctrl_paseo` da razón 0.750, dentro del rango de los datos reales, así que esa
+métrica **no discrimina** en este observable.
+
+### ⚠ Dos límites de MC-SSA encontrados por los controles
+
+1. **Sobre series casi blancas el test es inservible.** Con `nulo=ar1` sobre retornos marca
+   **23–30 de 30** componentes en los datos reales… y **30/30 en `ctrl_paseo`**, que es ruido
+   iid puro. El sesgo anticonservador conocido (proyectar sobre las EOF de los propios datos)
+   se vuelve fatal cuando el espectro es plano y todos los autovalores son parecidos.
+2. **`ar1_incrementos` es demasiado severo con señales fuertes.** En `ctrl_positivo` sobre el
+   nivel da **0/30**: pierde un ciclo verdadero y grande, porque el AR(1) ajustado a los
+   incrementos absorbe la propia sinusoide y ensancha el nulo. `ar1` sobre el nivel lo detecta
+   con 4/4.
+
+**Ningún nulo es el bueno por sí solo**, y por eso el log guarda los tres. Es la misma lección
+de la sesión (e): el control solo vale si su nulo reproduce las propiedades del dato que
+importan.
+
+### ⚠ φ′ CONTRA EL PRECIO — y la separación que el operador pidió
+
+`φ′ = ticks por volumen inyectado [ticks/BTC]`, la derivada del reloj de transacciones
+respecto del de volumen. Sobre bloques **disjuntos** de m = 64 ticks: `φ′_b = m / Σq`. Es el
+inverso del tamaño medio de operación: φ′ alta = muchas operaciones pequeñas.
+
+El criterio del operador: si `T/L` es constante en todas las ventanas pero la asociación
+φ′–precio **varía**, entonces la escalera es del aparato y la asociación es del mercado.
+Medido:
+
+| magnitud (v31b) | rango entre ventanas | sd | signo | p de signos |
+|---|---|---|---|---|
+| **T/L (período SSA)** | **0.0908** | **0.0314** | — | — |
+| **Spearman(log φ′, V)** | 0.2486 | 0.0942 | **8/8** | **0.0078** |
+| Pearson(log φ′, log V) | 0.4679 | 0.1411 | 7/8 | 0.0703 |
+| ρ(log φ′, \|ΔP\|) | 0.3441 | 0.1037 | 7/8 | 0.0703 |
+| ρ(log φ′, flujo neto) | 0.7449 | 0.3111 | 4/8 | 1.0000 |
+| ρ(log φ′, nivel de precio) ESPURIA | 0.4707 | 0.1406 | 2/8 | 0.2891 |
+| ρ predictiva (φ′ → volatilidad siguiente) | 0.2237 | 0.0796 | 5/8 | 0.7266 |
+| ρ predictiva (φ′ → retorno siguiente) | 0.2695 | 0.0830 | 2/8 | 0.2891 |
+
+**El período es la magnitud más estable de todas** (rango 0.09) y la asociación φ′–volatilidad
+varía 3× más. Son dos cosas distintas, que es exactamente lo que había que decidir.
+
+**Y la asociación es real.** Replicada en las dos capturas, con nulo por **desplazamiento
+circular** del volumen contra el precio (conserva intacto el agrupamiento de operaciones
+grandes, que barajar destruye; los precios no se tocan, así que la volatilidad del bloque es
+idéntica bajo el nulo y lo único que se rompe es el emparejamiento):
+
+| captura | ν | ρ Spearman mediana | p < 0.05 individual | V(φ′ alto)/V(φ′ bajo) |
+|---|---|---|---|---|
+| v31b | 4.6–9.6 tx/s | +0.204 (0.033 a 0.282) | 4/8 | **1.181** (1.07–1.25) |
+| larga | 21–109 tx/s | **+0.338** (0.114 a 0.484) | **6/8**, z hasta **+5.27** | **1.412** (1.12–1.87) |
+
+**16 de 16 ventanas con signo positivo → p de signos = 3.05e-05.** En terciles: la volatilidad
+realizada es un **18 % mayor** (v31b) y un **41 % mayor** (larga) en el tercil alto de φ′ que
+en el bajo, y la razón supera 1 en las 16 ventanas.
+
+Lecturas, en orden:
+
+1. **Cuando el mercado se fragmenta en operaciones pequeñas, la volatilidad realizada por
+   unidad de volumen sube.** Es una propiedad del mercado, no del estimador: el nulo no la
+   reproduce y el efecto es más fuerte donde ν es mayor.
+2. ⚠ **Pearson no era ciego, estaba roto — y el defecto era mío.** Hay bloques con volatilidad
+   **exactamente cero** (64 ticks sin que el precio se mueva): **2.82 %** en `captura_v31b` y
+   **0.62 %** en `captura_larga`. Metidos en un logaritmo se van a −27.6, unas **30
+   desviaciones** fuera, y dominaban la correlación ellos solos. Con ellos dentro, Pearson daba
+   −0.093 a +0.158 en v31b y −0.558 a +0.391 en larga, errático y sin significación.
+   Excluyéndolos —y solo de las correlaciones sobre `log V`— pasa a **7/8 y 8/8 positivo**, con
+   medianas **+0.193** y **+0.363**, de acuerdo con Spearman. Spearman no los necesita: el
+   rango de un cero está bien definido y es el más bajo, que es justo lo que son.
+   **Sin la comprobación gráfica no se habría visto**: los ceros aparecieron como una fila de
+   puntos aplastada contra el borde del eje logarítmico.
+3. **No hay componente direccional ni predictiva.** ρ(φ′, retorno) da 2/8 y 3/8; ρ(φ′, retorno
+   siguiente) da 2/8 y 3/8; ρ(φ′, volatilidad del bloque **siguiente**) da 5/8 y 3/8. φ′ dice
+   **cuánto** se mueve el precio en el mismo bloque, no **hacia dónde**, y no lo anticipa.
+4. La correlación con el **nivel** de precio es espuria por construcción (dos series no
+   estacionarias) y sale 2/8: se calcula porque se preguntó por ella, y se reporta marcada.
+
+### ⚠ El período y φ′ son INDEPENDIENTES — se apuntaba a la frecuencia y lo medible era la amplitud
+
+Medido cruzando las dos magnitudes sobre las **16 ventanas** (8 de `captura_v31b` y 8 de
+`captura_larga`), que es la comprobación que faltaba para cerrar la separación:
+
+| par | Pearson | Spearman | t (n = 16) |
+|---|---|---|---|
+| **`T` contra `L`** (la ventana de análisis) | **+0.891** | **+0.938** | **+7.36** |
+| `T/L` contra φ′ mediana | −0.347 | −0.162 | −1.38 |
+| `T` contra φ′ mediana | −0.469 | −0.306 | −1.99 |
+| `T/L` contra ν | −0.105 | −0.165 | — |
+| `T/L` contra ρ(φ′, V) | −0.153 | −0.103 | — |
+| φ′ mediana contra ν | −0.082 | −0.035 | — |
+
+Con n = 16 el umbral es |t| > 2.14. **El período lo determina `L` y nada más**: `L` explica el
+**79 %** de la varianza de `T`, y la dependencia residual de φ′ —una vez quitada `L`— no es
+significativa. No se puede descartar una dependencia débil con 16 ventanas; sí se puede
+descartar que sea el mecanismo dominante, porque apenas queda varianza por repartir.
+
+**Lo que esto significa para el diseño del sistema.** Desde la v1.1 el proyecto apunta a una
+**frecuencia**: `ω_m`, `ω_ang`, `A_arm`, los nodos de fase, `Φ`, `Ψ`, `Ω`, `Ω_crit`, `C`,
+`c²_vol`, el término `γ_ω·ω_m` de `ρ_k`. Todas esas cantidades son una frecuencia o una fase.
+La v3.0 ya había dictado `k = 0, raíces reales, NO HAY OSCILADOR`; esta sesión añade que el
+período que devuelve la descomposición es el de la ventana y no el del mercado.
+
+**Lo único que sobrevive a la medición es una relación de amplitud**: φ′ contra la volatilidad
+realizada, 16/16 ventanas, p de signos 3.05e-05, con un efecto del +18 % al +41 % entre
+terciles. φ′ no mueve el período: mueve **cuánto** se mueve el precio.
+
+**Consecuencia, y queda marcada como hipótesis de diseño SIN PROBAR:** una variable que
+modula amplitud y no fase no entra en la matriz de transición `A` —que es donde vive la
+dinámica— sino en las **covarianzas de ruido**. En términos del EAKF, φ′ es candidata natural
+a entrar en `Q_k` y `R_k`, que es exactamente donde la Sec. 7.3.3 del PDF pone `ρ_k`. La forma
+`ρ_k = 1 + γ_ω|ω_m| + γ_Q|ΣQ|` tiene el término equivocado: `γ_ω|ω_m|` es la frecuencia, que
+no tiene sustento empírico, mientras que un término en φ′ sí lo tendría. **Nada de esto está
+medido todavía** —haría falta comprobar que modular `Q` con φ′ mejora el NIS y la blancura de
+la innovación— y no se ha tocado `Micelio.py`.
+
+### Reservas de esta sesión
+
+- **La `L` elegida sobre datos reales no significa nada.** La curva de ortogonalidad contra
+  `L` es plana; los mínimos son de baja prominencia. El barrido discrimina en el control
+  positivo y no en el mercado.
+- **Todo esto mide DENTRO de la ventana**: 8 192 ticks son ~22 min a ν = 6 y ~2 min a ν = 109,
+  y `L ≤ 1024`. **No dice nada sobre la hipótesis (B) de la v2.2** (escala de decenas de
+  minutos), que sigue sin decidir.
+- El efecto de φ′ es **modesto y variable**: individualmente significativo en 10 de 16
+  ventanas. Lo que lo sostiene es la consistencia de signo, no la magnitud de ninguna.
+- `captura_larga` no persiste `tr_maker`, así que en esa réplica el flujo firmado no es
+  interpretable. `captura_v31b` sí lo trae.
+- m = 64 ticks por bloque es una elección **sin calibrar**. Habría que barrer m y comprobar a
+  qué escala vive la asociación — que es la misma pregunta de los dos relojes de la sesión (e).
+
+### Pendiente
+
+- ⚠ **φ′ NO va en `Q_k`, y la propuesta de arriba está mal planteada.** Se corrige aquí en vez
+  de borrarla, porque el error es instructivo. Ver la nota siguiente.
+- Barrer `m` en φ′ y ver si la asociación vive en el reloj de ticks o en el de volumen.
+
+### ⚠ Corrección sobre φ′ (2026-08-09): qué es, qué no es, y dónde va
+
+**Qué es.** `φ′ = m/Σq` con `m = 64` **fijo**, así que `corr(log φ′, −log volumen) = +1.000000`
+exactamente: **φ′ es función solo del volumen**, y sus unidades son transacciones/BTC = 1/BTC.
+**No** es precio/volumen, así que no es dimensionalmente la λ de Kyle ni `G₀`. En este proyecto
+«tick» significa *transacción* desde la v2.0, y confundirlo con el tick de precio lleva justo a
+esa lectura.
+
+El hallazgo se reformula sin misterio: **a número de transacciones fijo, menos volumen va con más
+volatilidad.**
+
+**No es artefacto de construcción.** Test disjunto —φ′ de los ticks **pares**, σ de los
+**impares**, sin nada compartido—: mediana **+0.1883**, **14/16** ventanas, p de signos
+**0.0042**. Sobrevive.
+
+**Pero sí es un proxy de `G₀`, y eso importa más.** Estimando `G₀` por bloque con la regresión
+`Δp = G₀·ε·q`:
+
+| | mediana | signo | valores |
+|---|---|---|---|
+| **REAL** `ρ(log φ′, G₀)` | **+0.6323** | **8/8** | 0.618 0.600 0.691 0.602 0.734 0.549 0.670 0.646 |
+| **NULO** (desplazamiento circular de `q, ε` contra precios) | −0.0908 | 2/8 | −0.183 … +0.164 |
+
+El nulo era obligatorio porque `G₀ = Σ(Δp·εq)/Σ(εq)²` y `φ′ ∝ 1/Σq` **comparten `q`**. No lo
+reproduce: la asociación es real.
+
+### ⚠ Segunda corrección, del mismo día: el enlace con `G₀` NO sobrevive
+
+**1. Retirar φ′ del vocabulario. Escribir `q̄` (tamaño medio de operación).** El
+`corr = +1.000000` no es un hallazgo: es una identidad algebraica, porque `log φ′ = log 64 −
+log Σq`. φ′ no es una variable, es un **nombre para `1/q̄`**, y el nombre hacía daño — invitaba a
+tratar como descubrimiento una reexpresión. Con `q̄` cada frase se lee sola: «φ′ alta se asocia a
+volatilidad» → «**operaciones pequeñas se asocian a volatilidad**».
+
+**2. Y así reformulado, el hallazgo tiene nombre en la literatura.** A igual número de
+operaciones, operaciones más pequeñas van con más volatilidad: eso es **Jones, Kaul & Lipson
+(1994)** — el número de transacciones, no su tamaño, es lo que porta la información de
+volatilidad. Uno de los hechos estilizados mejor replicados de la microestructura. **No es un
+descubrimiento.** Lo bueno es que la tubería mide cosas reales y el test disjunto lo confirma
+limpiamente; lo útil es que ahora la literatura dice qué esperar.
+
+**3. Mi nulo de φ′–`G₀` no contrastaba lo que yo creía.** Bajo desplazamiento circular el
+numerador de `G₀ = Σ(Δp·εq)/Σ(εq)²` se vuelve una suma de signos aleatorios, así que lo que se
+destruye es la **alineación precio-flujo** — no el acoplamiento por **escala de volumen**, que
+sobrevive porque la magnitud sigue yendo como `1/√Σq²`. El nulo acreditaba algo cierto pero
+distinto de lo que hacía falta.
+
+**El test que sí discrimina, y falla.** Con `Δp = G·ε·q^δ` y `q ≈ q̄` dentro del bloque sale
+`log G₀ = const + (1−δ)·log φ′`, así que la pendiente da `δ` por una ruta independiente. Medido:
+
+```
+pendiente = +1.6286   IC95 bootstrap [+1.4896, +1.7562]   ->   delta = -0.63
+```
+
+**`δ = −0.63` está fuera del rango admisible** (`δ ∈ [0,1]`): implicaría que operaciones más
+grandes mueven **menos** el precio en términos absolutos. La derivación supone `q` poco disperso
+dentro del bloque, y el **coeficiente de variación de `q` por bloque es 2.60 (p90 3.94)** — la
+aproximación `q ≈ q̄` está gruesamente violada. **El caveat resultó ser la restricción
+vinculante, no una nota al pie.** No hay `δ` que sellar como predicción.
+
+**4. Y la predicción sobre M1′ tampoco se sostiene.** La correlación parcial controlando por el
+tamaño medio:
+
+| | ρ(σ, G₀ \| q̄) |
+|---|---|
+| REAL | +0.2563 (976 bloques) |
+| **NULO — signo barajado dentro del bloque** | **+0.2625** (666 bloques) |
+
+El nulo conserva `Δp` y `q` intactos —y con ellos todo acoplamiento por escala— y rompe **solo**
+la alineación precio-flujo. **Lo reproduce exactamente**, así que la asociación es **mecánica**:
+`σ` y `G₀` comparten `Δp`, y condicionar a `G₀ > 0` selecciona bloques donde el precio se movió
+*con* el flujo. **M1′ no recibe apoyo por esta vía.**
+
+Lo que sí queda medido y no es mecánico: `ρ(q̄, G₀) = −0.7022`, o sea que operaciones más grandes
+tienen menor impacto **por unidad**, que es la concavidad del impacto (`δ < 1`). Pero cuantificar
+`δ` desde aquí exige bloques con `q` mucho menos disperso.
+
+**Dónde va en la arquitectura, y no es en `Q`.** Descomponiendo:
+
+```
+Δp  =  φ′·(flujo OBSERVADO)  +  φ′·(flujo NO observado)
+```
+
+El primer término es **medido** y pertenece a la ecuación de estado, con φ′ como coeficiente. Solo
+el segundo va a `Q`. Meter φ′ entero en `Q` es devolver al residuo una cantidad que se puede
+medir — **el mismo error que el §0 de la v3.1 diagnosticó en el AR(2)**, reaparecido en otro sitio.
+
+Y si algo de φ′ acaba en `Q`, dos correcciones más:
+1. **La dependencia es cuadrática**: `Var(Δp) = φ′²·Var(flujo)`. Un término `γ_φ|φ′|` es
+   incoherente con su propia derivación.
+2. **No es aditivo con lo que ya está.** `ρ_k = 1 + γ_ω|ω_m| + γ_Q|ΣQ|` trata flujo e impacto
+   como contribuciones independientes y no lo son: φ′ es impacto **por** flujo, así que la
+   cantidad física es el producto `(φ′·|ΣQ|)²`, no dos sumandos. Sustituir `γ_ω|ω_m|` por un
+   tercer sumando conserva la incoherencia y solo cambia la etiqueta.
+- Barrer `m` en φ′ y ver si la asociación vive en el reloj de ticks o en el de volumen.
+- Nulo de MC-SSA que funcione sobre series casi blancas (el sesgo anticonservador lo invalida).
+- SSA multivariante (M-SSA) sobre `[precio, φ′]`, que es el paso natural ahora que hay una
+  asociación establecida entre los dos canales.
+- Sigue en pie todo lo de la v3.1: núcleo paramétrico del propagador, `γ` de la
+  autocorrelación de signos y la comprobación `pendiente ≈ (1−γ)/2 − β`.
+
+## Sesión 2026-08-10 — v3.2 EJECUTADA: la compuerta pasó y la decisión se para en el paso 3
+
+Ejecuta `PREREGISTRO_3_2.md` de punta a punta sobre `captura_v33`, con el preregistro
+**congelado desde el 2026-08-09** y sus 9 enmiendas todas anteriores a mirar dato.
+`Micelio.py` sin cambios (`git diff --stat` vacío). Suite **56/56**.
+Ejecutor nuevo: `experimento_v32.py`.
+
+### ⚠ VEREDICTO: el paso 2 pasa, el paso 3 falla. Hay señal medible y está 3.5× por debajo del coste
+
+```
+PASO 1  compuerta          1 031 154 ticks continuos contra 741 000     PASA
+PASO 2  LL/N contra M0     M2 gana; IC95 [+6.857e-03, +8.084e-03]       PASA
+PASO 3  criterio economico q90(|mu|) = 11.30  contra  1.5*c(u) = 39.05  FALLA
+PASOS 4 y 5                no se ejecutan: la regla se para en el primero que falla
+```
+
+**No es «no hay señal».** M2 bate a M0 fuera de muestra con un IC que excluye 0 con holgura,
+`R²` fuera de muestra +0.014, y el residuo es blanco (`|ρ₁| < 0.007` en los tres modelos). La
+estructura está ahí y está medida. Lo que falla es que **no llega a pagar las comisiones**:
+
+| | valor |
+|---|---|
+| `\|μ̂\|` de M2 en prueba | q50 **5.16** · q90 **11.30** · q99 15.39 · **máx 17.12** USD/BTC |
+| umbral `1.5·c(u)` | **39.05** USD/BTC |
+| `c(u)` que el paso 3a exigiría | 7.53 USD/BTC = **0.579 pb** por lado |
+| comisión maker VIP 0 **asumida** | **2.000 pb** por lado → falta un **factor 3.46** |
+
+`c(u)` es aquí **comisión pura**: maker+maker no cruza el spread, así que
+`c = 2 × 0.0002 × 65 100 = 26.03 USD/BTC`. El obstáculo no es la microestructura, son 4 pb.
+
+⚠ **`μ̂` de M1 es CERO IDÉNTICAMENTE, y no es un fallo del cálculo.** Con impacto permanente
+(`f_∞ = 1`) el núcleo es constante, así que `μ̂_t(H) = G₀·Σ_j x_{t−j}·[G(H+j) − G(j)] ≡ 0`: el
+movimiento ya ocurrió y no queda nada que capturar. Es el contenido económico de la hipótesis de
+MkII, y por eso el paso 3 se evalúa sobre `μ̂` y no sobre el ajuste.
+
+⚠ **El §11 (abandono) NO se activa**, y hay que decir por qué con precisión. El §9.2 lo
+condiciona a «3a falla **con 3b satisfecha**». Aquí 3b también falla, pero **3b es degenerado en
+este caso**: `frac(|μ̂| ≥ 1.5c) = 0` exactamente porque `máx|μ̂| = 17.12 < 39.05`, o sea que su
+fallo es una *consecuencia* de 3a y no una medida de potencia. La potencia sí está acreditada por
+otro lado —el paso 2 detecta la estructura con un IC que excluye 0—, así que el caso real no es
+ninguno de los dos que el §9 contempla: **señal medible, por debajo del coste.**
+
+### ⚠ El resultado que reordena la lectura: el signo de `D` se INVIERTE entre observables
+
+El §3 del preregistro declara el punto medio como observable primario y el precio de transacción
+como control secundario, con regla falsable escrita antes. Ajustando **la misma M2 sobre las dos
+columnas**, con la misma muestra y la misma malla:
+
+| observable | `β` | `τ₀` | `D = G(K)/G(0)` | lectura |
+|---|---|---|---|---|
+| **punto medio** (primario) | **−0.160** | pegada al límite | **11.53** | ~~núcleo creciente~~ → **ajuste no identificado** (v4.1 §3.4) |
+| precio de transacción (control) | **+4.69** | pegada al límite | **0.107** | decae al 11 % |
+
+**El impacto «transitorio» que la v3.1 §2 midió sobre el precio de transacción era el rebote
+bid-ask.** El spread mediano de esta captura es **0.1000 USD = exactamente 1 tick** (p90 igual),
+así que una compra imprime en el ask y la siguiente vuelve al bid: el 89 % de la «reversión» es
+Roll, no un propagador. Sobre el punto medio, que no tiene rebote, **la reversión desaparece y el
+signo se invierte**.
+
+Es la misma familia de hallazgo que el §5.2 de la v2.0 y la Adenda A: una cantidad que parecía del
+mercado y era del instrumento. Aquí el preregistro lo cazó porque obligaba a llevar **las dos
+columnas siempre**.
+
+### ⚠ `D > 1` no es «permanente»: la dicotomía del §5.2 no contiene el resultado
+
+⚠ **RECLASIFICADO por la v4.1 §3.4 (2026-08-12).** Todo este apartado se leyó en su día como
+«núcleo creciente medido». **No lo es.** `β < 0` con `τ₀` en cota es firma de mala especificación
+del estimador, no del mercado, y la afirmación queda degradada a **«ajuste no identificado en el
+régimen `τ₀` en cota»**. Lo que sigue se conserva como registro de lo que se midió y de por qué
+la regla de una cola del §5.2 no contenía el caso — no como evidencia sobre la forma del núcleo.
+
+`D = 11.53` con `β < 0` significa núcleo que **crece** con el rezago: ni permanente (`D = 1`) ni
+transitorio (`D < 1`). El perfil lo confirma: `D(K/4) = 9.24 → D(K/2) = 10.32 → D(K) = 11.53`.
+
+La regla escrita del §5.2 es **de una cola** —«`D̂ ≥ q05` → no se rechaza `D = 1` → permanente»— y
+aplicada literalmente habría declarado **impacto permanente y MkII bien especificada** sobre datos
+que dicen lo contrario. Se lee la distribución simulada **completa**, que el propio §5.2 manda
+generar, y por arriba también:
+
+```
+D_hat = 11.5252     q05 = 0.0000     q95 = 7.2704     ->  se rechaza D = 1 POR ARRIBA
+```
+
+Esto **no es una enmienda**: es leer entera la misma simulación. Callarlo sería reportar
+«permanente» sobre evidencia de lo contrario.
+
+### ⚠ Y el contraste de `D` se derrumba a la γ real — el nulo emparejado lo delata
+
+El §5.2.quater obliga a **regenerar `q05` con la `γ̂` medida**, y ahí está el hallazgo:
+
+| | γ = 0.3 (§5.2.bis, antes de datos) | **γ̂ = 0.798 (medido)** |
+|---|---|---|
+| `D̂` mediana bajo `D = 1` verdadero | 0.9950 | **0.2854** |
+| `q05` | 0.9698 | **0.0000** |
+| `q95` | — | **7.2704** |
+| sd del nulo | 0.0158 | enorme |
+
+**Con la autocorrelación de signos real, el estimador de `D` devuelve cualquier cosa entre 0 y 7.3
+cuando la verdad es exactamente 1.** El contraste permanente-contra-transitorio **no tiene
+potencia a la γ de este mercado**, y eso lo dice el propio procedimiento que el preregistro
+congeló. La malla de potencia del §5.2.bis se midió a γ = 0.3 y no transporta.
+
+Dicho de otro modo: `D̂ = 11.53` cae fuera del nulo, pero el nulo es tan ancho que la cifra no
+sostiene una lectura fina. Lo que sí sostiene es que **el signo del efecto no es el que la
+dicotomía esperaba**.
+
+⚠ Reserva: el nulo se regeneró con **24 sorteos**, no más, por coste (206 s). `q95` con 24
+muestras es una estimación pobre.
+
+### ⚠ Este tramo es SUPER-DIFUSIVO — la sesión 2026-08-08 (e) NO replica
+
+Firma de volatilidad en **tiempo de ticks**, no solapada, sobre entrenamiento, **con su control de
+incrementos barajados al lado** (que es lo que la sesión (e) estableció como obligatorio):
+
+| n [ticks] | 2 | 8 | 32 | 64 | 256 | 1024 | 4096 | 16384 |
+|---|---|---|---|---|---|---|---|---|
+| σ/√n **real** | 0.799 | 0.520 | 0.343 | **0.327** | 0.433 | 0.505 | 0.588 | **0.634** |
+| σ/√n **barajado** | 1.102 | 1.102 | 1.100 | 1.097 | 1.099 | 1.127 | 1.138 | 0.993 |
+
+```
+pendiente [256, 16384]   real +0.0907     barajado -0.0123
+H_p                      real  0.591      barajado  0.488     (0.5 = difusivo)
+```
+
+**El control barajado sale plano y el real no.** La sesión 2026-08-08 (e) concluyó «más allá de la
+microestructura el precio es difusivo» con pendiente +0.007 sobre `captura_larga` (ν = 39 tx/s);
+sobre `captura_v33` (ν = 17.5 tx/s) la pendiente es **+0.091**, trece veces mayor y con el control
+limpio. **La difusividad no es una propiedad estable del mercado**, o al menos no lo es entre estas
+dos capturas. ~~Y encaja por dos vías con el núcleo creciente: un `G` que crece y un `H_p > 0.5`
+son el mismo hecho medido desde dos sitios.~~ ⚠ **Esa última frase se retira** (v4.1, 2026-08-12):
+el «núcleo creciente» está reclasificado como ajuste no identificado (§3.4) y `H_p = 0.591` no
+sobrevivió al reloj de pared (§2, banda [0.371, 0.552]). Dos cifras retiradas no se corroboran
+entre sí.
+
+⚠ **No hay plateau, y eso obligó a resolver una ambigüedad del preregistro.** El §2.2 escribe
+`H*_ticks = (c/σ_tick)²` sin decir **cuál** `σ_tick`. Esa fórmula es la solución de `σ(H) = c`
+*bajo difusión exacta*, y aquí la curva es en **U**: `(c/σ)²` da **6347** con el σ del mínimo y
+**1688** con el del extremo, y **ninguno cumple `σ(H*) = c`**. Se resuelve por **punto fijo**
+—interpolar `log σ` contra `log n` y despejar—, que es lo que la fórmula quiere decir y que bajo
+difusión coincide exactamente con ella. **La elección se tomó después de ver la firma y se declara
+como lectura, no como enmienda.**
+
+### El §2.2 queda resuelto: el piso de 1 950 se puede retirar
+
+Era una pregunta abierta declarada en el preregistro («o se justifica el piso con un argumento
+propio o se retira, y el reporte dice cuál de las dos»):
+
+```
+H*_ticks medido (punto fijo)  =  2233 ticks  =  127.7 s a nu = 17.49
+piso heredado                 =  1950 ticks
+```
+
+**El `H*_ticks` medido ata, el piso no.** El piso no está multiplicando el requisito de datos, y
+como es un literal heredado sin argumento vivo, **se retira**. Con el embargo medido la compuerta
+exige 848 540 ticks y hay 1 031 154 → sigue pasando.
+
+### §4.2 — el test de fuga pasa, y el control con poder pasa por un factor 1 000
+
+Cuatro variantes, las cuatro al reporte como exige el preregistro. Métrica: `ΔLL/N` de M1 contra
+**su propio** M0 en validación (los niveles absolutos no son comparables entre variantes porque
+cambia el observable).
+
+| variante | `ΔLL/N` vs su M0 | `G₀` | expectativa declarada | resultado |
+|---|---|---|---|---|
+| **correcta** | +4.290e-04 | +0.001101 | el valor a reportar | — |
+| adelantada +1 | **+1.841e-03** | +0.002285 | debe subir claramente | **4.3×** ✔ |
+| retrasada −10 | +4.098e-04 | +0.001083 | debe bajar | baja ✔ |
+| **BARAJADA** | **+4.359e-07** | +0.010056 | debe caer al nivel de M0 | **0.1 %** ✔ |
+
+La barajada —el único control con poder— cae a la milésima parte de la ganancia. **La ganancia de
+M1 viene del emparejamiento libro-transacción**, no de la marginal de `e_t` ni de la
+especificación.
+
+### §4.3 — esto es OFI-L1 APROXIMADO, y los dos diagnósticos obligatorios
+
+| diagnóstico | valor | umbral declarado |
+|---|---|---|
+| `q` excede la cantidad del mejor nivel del último snapshot | **2.77 %** | 20 % → **M1 es medición, no cota inferior** |
+| residuo de reconciliación `ΔV` contra transacciones | **93.5 %** | — (es actividad de límite no observada) |
+
+El 93.5 % no es un error: dice que el libro se mueve casi todo por actividad de límite invisible
+entre snapshots, que es exactamente lo que el §4.3 advierte. La etiqueta «OFI-L1 aproximado» se
+mantiene en todo el reporte.
+
+Y la predicción falsable del signo se sostiene sobre el observable primario:
+`E[y_mid·ε] = +0.017275 > 0`.
+
+### §5.1 — `δ = 0` gana en validación, y `δ = 0.5` (MkII) NO es el máximo
+
+| δ | M1 `ΔLL/N` | M2 `ΔLL/N` | `β` de M2 | `D` de M2 |
+|---|---|---|---|---|
+| **0.00** | **+3.173e-03** | **+7.763e-03** | −0.160 | 11.53 |
+| 0.25 | +1.641e-03 | +6.356e-03 | −0.166 | 12.70 |
+| **0.50** (MkII) | +4.244e-04 | **+4.387e-03** | −0.191 | 18.62 |
+| 1.00 | +1.677e-05 | +1.571e-03 | −0.312 | 118.07 |
+
+`δ = 0.5` da **1.77× menos** ganancia que `δ = 0` sobre el punto medio, y el orden es monótono en
+los dos observables y los dos modelos. **El volumen no ayuda: lo que informa es el signo.** La
+celda `δ = 0.5` se reporta aunque no gane, como manda el §5.1.
+
+### §5.4 — el residuo es blanco en los tres modelos
+
+| modelo | ρ₁ | ρ₂ | ρ₃ | ρ₁₀ | ρ₁₀₀ | ρ a rezago `embargo` |
+|---|---|---|---|---|---|---|
+| M0 | +0.0070 | +0.0086 | +0.0111 | +0.0145 | +0.0081 | +0.0022 |
+| M1 | −0.0017 | −0.0003 | +0.0021 | +0.0056 | +0.0037 | +0.0020 |
+| M2 | −0.0068 | −0.0053 | −0.0027 | +0.0010 | +0.0015 | +0.0019 |
+
+Todos por debajo del umbral declarado `|ρ₁| < 0.05`, así que **ningún modelo queda descalificado
+por residuo estructurado**. Nótese que M2 no deja residuo pese a `D = 11.5`.
+
+### ⚠ §5.3 — `ω_G`: el estadístico salió NEGATIVO, y eso no es un resultado
+
+Primera ejecución del contraste sobre `captura_v33`:
+
+```
+2*dLL observado = -149.078     nulo p95 = 1.159     p simulado = 0.6250
+```
+
+**M2-osc contiene a M2, así que `2·ΔLL` no puede ser negativo.** Y el 37.5 % de los sorteos del
+nulo caían aún más abajo. Eso no es evidencia de nada: es que M2 y M2-osc arrancaban del **mismo
+punto fijo** y aterrizaban en cuencas distintas, con Nelder-Mead sobre 5 parámetros.
+
+Leído sin mirar el signo, el `p = 0.6250` decía «`ω_G = 0`, el propagador es monótono» y la
+consecuencia declarada del §5.3 es borrar `ω_m,max` y `γ_ω` de `constantes_micelio.py`. **Se
+habría borrado sobre un fallo del optimizador.**
+
+**Corrección numérica, no de la regla:** el modelo grande se **siembra en la solución del
+anidado** (`migracion_v32.contraste_omega_G`). No cambia la definición del estadístico; hace que
+sea el que dice ser. Con eso:
+
+```
+2*dLL observado = +134.009     nulo p95 = 5.336     p simulado = 0.0000
+anidamiento: obs >= 0 y nulo >= 0 en los 40 sorteos
+```
+
+⚠ **Pero el rechazo NO sostiene «oscilador forzado», y la guarda de banda lo dice.**
+
+| | valor |
+|---|---|
+| `ω_G` ajustado | **+0.000009 rad/tick** |
+| período implícito | **737 227 ticks = 42 151 s ≈ 11.7 h** a ν = 17.49 |
+| `K` (rango ajustado) | 4 466 ticks |
+| razón período/`K` | **165.1×** |
+
+Dentro de `[0, K]` el coseno recorre el **0.606 % de un ciclo**: no oscila. Para `ω·K ≪ 1`,
+`cos(ωτ+φ) ≈ cos φ − ωτ·sin φ`, o sea que el término está actuando como una **inclinación lenta
+del núcleo**, no como un ciclo. Es la misma situación que la guarda de banda de la v2.1 §2 cazó
+para `ω_m`, y por eso se implementó aquí la equivalente.
+
+**`ω_G` queda SIN DECIDIR como frecuencia. No se borra ni se resucita nada en
+`constantes_micelio.py`** — la consecuencia del §5.3 estaba condicionada a `ω_G = 0`, y eso no es
+lo que salió; y el rechazo tampoco apoya un ciclo.
+
+**Control nuevo, el 19, y lleva su propio negativo.** `migracion_v32.py` pasa a **20 controles**.
+Y hay una lección en por qué los 18 anteriores no lo vieron: **el fallo sólo aparece con núcleo
+CRECIENTE** (`β < 0`, `τ₀` pegada a su cota), que es justo el régimen donde cayó el mercado real y
+que ningún control sintético anterior visitaba. Medido en el test:
+
+```
+2*dLL sin sembrar = -866.363      sembrado = +0.417      -> el control DISCRIMINA
+```
+
+Con `β = +0.5` los dos caminos coinciden y el test sería vacuo — por eso el control comprueba las
+dos ramas y no sólo la buena.
+
+### TABLA DE MEDICIONES — v3.2
+
+**Compuerta (§1), salida literal de `--resumen`**
+
+| magnitud | valor |
+|---|---|
+| transacciones | 1 031 155 en 16.38 h → **ν = 17.49 tx/s** |
+| **tramo continuo más largo** | **1 031 155 ticks**, uno solo (corte a 300 s) |
+| hueco máximo | 8.8 s |
+| snapshots de libro | 8 097 860 (137.4 msg/s guardados) |
+| OFI-L1 | 8 097 859 valores, mediana \|e\| = 0.1290, 100 % no nulos |
+| `updateId` | **0 retrocesos, 0 repetidos** |
+| `tr_maker`, `q`, cantidades de `bookTicker` | los tres persistidos |
+| criterio en rojo | **sólo la vitalidad** (suspensión de la máquina), no la calidad del dato |
+
+**Muestra y partición**
+
+| magnitud | valor |
+|---|---|
+| observaciones tras alinear | 1 031 154 |
+| precio | 64 794.4 – 65 482.7 USD |
+| spread mediano | **0.1000 USD = 1 tick exacto** (p90 igual) |
+| `y_mid` nulos | **96.67 %** |
+| `y_tr` nulos | 72.61 % |
+| `s_eff` de Roll (limpio) | 1.1280 USD/BTC (ρ₁ = −0.4260) |
+| `c(u)` maker+maker | **26.0306 USD/BTC** ⚠ tarifas ASUMIDAS VIP 0 |
+| embargo / `K` | **2233 / 4466** ticks |
+| partición 60/20/20 | 618 692 / 203 998 / 203 998 (embargo verificado por test) |
+| bloques de bootstrap en prueba | **19** en el diseño, **18** efectivos en el paso 2 (> 15) |
+| `γ̂` de signos (entrenamiento) | **+0.7981** |
+
+**Ajuste M2 elegido (δ = 0, punto medio, entrenamiento)**
+
+```
+G0 = +0.003541    tau0 pegada al limite    beta = -0.1596    f_inf = 0    sigma = 0.2583
+```
+
+`β` y `τ₀` **no están identificados individualmente** (§5.2): `τ₀` se pega a su cota inferior y
+lo que los datos determinan es la curva `G(τ)` sobre `[0, K]`, que aquí es una potencia creciente
+sin escala.
+
+**LL/N fuera de muestra (conjunto de prueba, N = 203 998, abierto una sola vez)**
+
+| modelo | LL/N |
+|---|---|
+| M0 | −0.09905503 |
+| M1 | −0.09857358 |
+| **M2** | **−0.09150251** |
+
+`ΔLL/N`(M2 − M0) = **+7.553e-03**, IC95 bootstrap por bloques móviles
+**[+6.857e-03, +8.084e-03]**, 18 bloques efectivos.
+
+### Limitaciones de esta ejecución, declaradas
+
+1. **La verosimilitud gaussiana está mal especificada en la marginal**: `y_mid` es **96.7 % ceros
+   exactos**. Los `ΔLL/N` son comparables **entre modelos** (misma familia, misma muestra) pero su
+   nivel no es interpretable como bondad de ajuste. El preregistro no anticipó esto.
+2. **`c(u)` usa tarifas asumidas VIP 0**, criterio del §8 **no cumplido** (endpoint firmado, Modo
+   LECTURA sin credenciales). Igual que en la v3.1.
+3. **El nulo de `D` se regeneró con 24 sorteos** y el contraste de `ω_G` con 40; no más, por coste.
+4. **Un solo tramo, 16.38 h, un solo régimen de ν.** La comparación con la sesión (e) ya muestra
+   que la firma de volatilidad no es estable entre capturas.
+5. **El §7 (Test C, en qué reloj vive el propagador) NO se ejecuta**: su §7.1 exige la captura
+   completa y prohíbe expresamente correrlo con un tramo parcial.
+6. **Nada de esto dice nada sobre la hipótesis (B)** —escala de decenas de minutos—, que sigue sin
+   decidir desde la v2.2. El §11.1 lo deja escrito: el abandono estaba acotado a segundos y ni
+   siquiera se activa.
+7. **Se volvió al conjunto de prueba una segunda vez** para añadir descriptivos de `|μ̂|` (q50,
+   q99, máx y el `c(u)` equivalente). **Ningún modelo, umbral ni regla cambió**, y ninguna decisión
+   depende de esas cifras; se declara por la regla del §2.1.
+
+### Qué queda decidido y qué no
+
+**Decidido:**
+- La regla de decisión se para en el **paso 3**, y así se reporta.
+- El **piso de embargo de 1 950 se retira**: `H*_ticks` medido es 2233 y ata él.
+- **`δ = 0`**: el volumen no aporta al forzamiento; informa el signo.
+- El impacto transitorio de la v3.1 §2 **era rebote bid-ask**; sobre el punto medio no está.
+- Este tramo es **super-difusivo** con control barajado limpio.
+
+**No decidido, y por qué:**
+- **Permanente contra transitorio sigue sin resolverse.** No por falta de datos: porque el
+  estimador de `D` no tiene potencia a `γ̂ = 0.798`. Hace falta un estadístico cuyo nulo no se
+  ensanche con la memoria del flujo — que es la misma lección de la sesión (e) por cuarta vez.
+- **`ω_G` sin decidir.** El contraste corregido rechaza `ω_G = 0`, pero el `ω_G` ajustado tiene
+  un período **165×** mayor que el rango ajustado: es una inclinación del núcleo, no un ciclo.
+  **`ω_m,max` y `γ_ω` NO se borran de `constantes_micelio.py`, y tampoco se resucitan.**
+- **La forma del núcleo** (creciente contra permanente contra transitorio) queda como medición
+  puntual sin contraste con potencia detrás.
+- **El §7**, por diseño del propio preregistro.
+
+## Sesión 2026-08-10 (b) — v3.3 §6, §1, §2 y §3. La compuerta de tick grande CIERRA el marco
+
+Ejecuta `ORDEN_TRABAJO_TICK_GRANDE_3_3.md` en su orden de prioridad. **Ningún estadístico nuevo**,
+como manda su §7. `Micelio.py` sin cambios. Módulo nuevo: `tick_grande.py`, **19 controles**.
+
+### ⚠ LO PRIMERO: `γ` significaba dos cosas, y la orden mezcló las dos
+
+La tabla del §1 escribe `γ̂ = 0.798` y lo etiqueta «autocorrelación de signos». Ese número es el
+que midió la v3.2 y es **`C(1) = corr(ε_t, ε_{t+1})`**, la autocorrelación **a rezago 1**.
+
+Pero `H = (2−γ)/2 − β` viene del marco del propagador (Bouchaud, Gefen, Potters & Wyart 2004),
+donde `γ` es el **exponente de decaimiento** de `C(ℓ) ~ ℓ^(−γ)`. Son dos cantidades distintas y no
+hay razón para que coincidan. Medidas las dos sobre el mismo tramo:
+
+| | valor |
+|---|---|
+| `C(1)` — lo que la v3.2 llamó `γ̂` | **+0.7981** |
+| **exponente `γ` de `C(ℓ) ~ ℓ^(−γ)`** | **+0.5217** |
+
+`C(ℓ)`: 0.798 (ℓ=1) · 0.762 (2) · 0.666 (10) · 0.586 (25) · 0.061 (2000). Ajuste log-log sobre
+rezagos [10, 2000], 42 puntos, R² = 0.939.
+
+**Con el `γ` correcto la predicción del §1 no se cumple.** La orden anticipaba
+`β implícita ≈ +0.010`, «impacto esencialmente permanente». Sale:
+
+| | valor |
+|---|---|
+| `H_p` (firma en ticks, n ∈ [256, 16384]) | 0.5907 |
+| **`β` implícita = (2−γ)/2 − H** | **+0.1484** |
+| `β` de difusividad = (1−γ)/2 | +0.2392 |
+
+`β` implícita no es 0 (permanencia) ni 0.239 (difusividad): **cae en medio**, al 62 % del camino.
+La conclusión que la orden esperaba —«no se puede rechazar impacto permanente»— **venía del `γ`
+equivocado**.
+
+### ⚠ Y el bootstrap por bloques NO SIRVE para estos estimadores. Se exhibe el fallo
+
+Con bloque `= N^(1/2) = 1015`, que es lo que el §6 de la orden pide:
+
+```
+gamma  0.5217  ->  IC de bootstrap [0.7551, 0.9900]
+H      0.5907  ->  IC de bootstrap [0.0904, 0.1826]
+```
+
+**Los intervalos no contienen el punto estimado.** No es ruido: remuestrear bloques de longitud
+`b` produce una serie cuya dependencia **muere en `b`**, y los dos estimadores ajustan sobre
+rezagos **mayores** que `b` (hasta 2 000 y 16 384). Miden la longitud del bloque, no el mercado.
+
+Sustituto correcto: **submuestreo contiguo**, que conserva la estructura temporal de cada réplica.
+8 sub-series de 77 336 ticks:
+
+| sub-serie | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+|---|---|---|---|---|---|---|---|---|
+| `γ` | 0.384 | 0.508 | 0.624 | 0.616 | 0.438 | 0.560 | 0.724 | 0.585 |
+| `H` | 0.665 | 0.725 | 0.689 | 0.542 | 0.432 | 0.601 | 0.639 | 0.627 |
+| **`β`** | +0.143 | +0.021 | **−0.000** | +0.150 | **+0.349** | +0.119 | **−0.001** | +0.081 |
+
+```
+beta media +0.1076   sd 0.1152   intervalo t OPTIMISTA [+0.0135, +0.2017]
+```
+
+**Tres sub-series dan `β ≈ 0` exacto (permanencia) y una da +0.349 (más allá de difusividad).**
+El intervalo excluye tanto 0 como 0.239, pero **por muy poco y con un intervalo que es cota
+inferior de la incertidumbre** (supone sub-series independientes, y con memoria larga no lo son).
+
+**Lectura honesta: el §1 tampoco cierra la pregunta.** Da un `β` central positivo y pequeño, con
+una heterogeneidad entre tramos que abarca desde permanencia hasta pasada la difusividad. Es la
+misma inestabilidad que la v3.0 encontró en `k` y que la propia orden anota (`β` cambiando de signo
+entre tramos). Sólo que ahora está cuantificada y con el `γ` correcto. Sólo 8 réplicas:
+**subpotenciado**, declarado.
+
+**Los tres `β` juntos, sin elegir** (§1.1 punto 4):
+
+```
+implicita por H y gamma       +0.1484
+ajuste M2 sobre punto medio   -0.1600
+ajuste M2 sobre precio trans. +4.6900
+```
+
+La discrepancia es el resultado.
+
+### ⚠ §2 — `η̂ = 0.62 ≥ 1/2`: el marco de tick grande NO APLICA. §4 y §5 no se ejecutan
+
+La compuerta que la orden puso para poder rechazar barato ha hecho justo eso.
+
+| variante | `η̂` | `N_c` | `N_a` |
+|---|---|---|---|
+| **sólo saltos de 1 tick** (la del artículo) | **0.6200** | 98 718 | 79 616 |
+| todos los saltos (control del modo de fallo 3) | 1.1614 | 197 468 | 85 011 |
+
+El control del modo de fallo 3 funciona: contar saltos de más de un tick casi **duplica** `η̂`. Con
+la definición correcta sale 0.62, por encima de 1/2.
+
+**Consecuencia declarada por la propia orden: `§4` (propagador sobre el precio eficiente `X_t`) y
+`§5` (la predicción falsable del agotamiento de cola) NO se ejecutan.** Y ese `§5` era «el apartado
+con más valor de información del documento». Se cierra sin gastarlo, que es exactamente para lo que
+sirve una compuerta barata.
+
+⚠ **Y la reserva del §2 sobre el tick relativo queda confirmada por el número:**
+
+```
+alpha/P = 0.10 / 65 076 = 1.54e-6 = 0.0154 pb por tick
+```
+
+En renta variable «tick grande» significa `α/P` de 1e−4 a 1e−3: **dos o tres órdenes de magnitud
+mayor**. BTCUSDT tiene la horquilla clavada en 1 tick **y** un tick relativo diminuto, y esa
+combinación no está en los artículos. Con `η̂ = 0.62` la cuestión es académica aquí, pero se anota.
+
+27.4 % de los ticks mueven el precio de transacción (282 480 de 1 031 153).
+
+### §6 — `N_eff` medido, y el paso 2 de la v3.2 SOBREVIVE
+
+El §6 propone `N_eff = N^γ` con la `γ` de los signos. **Se mide en vez de suponerse**, y sobre la
+serie que toca — la de `ΔLL`, no la de signos, que no tienen por qué compartir exponente. Método:
+ajustar `Var(media de bloque)` contra el tamaño de bloque y evaluar en `b = N`.
+
+| serie | `γ_eff` | R² | `N` | `N_eff` | pérdida | inflación del error estándar |
+|---|---|---|---|---|---|---|
+| **`ΔLL` de prueba** | **0.7421** | 0.993 | 199 532 | **8 574** | **23.3×** | **3.15×** |
+| signos `ε` | 0.3539 | 0.927 | 618 692 | **112** | **5 518×** | 115.4× |
+| incrementos de precio | 0.8630 | 0.981 | 618 691 | 99 510 | 6.2× | 0.71× |
+
+**Recálculo del IC del paso 2:**
+
+```
+publicado en la v3.2 (bloques de 5*embargo) : [+6.857e-03, +8.084e-03]
+corregido por memoria larga                 : [+6.649e-03, +8.456e-03]
+```
+
+**El paso 2 sigue pasando.** El error estándar se ensancha 3.15× pero la media está a ~15 errores
+estándar de cero, así que el intervalo sigue excluyendo 0 con holgura. La preocupación del §6 era
+legítima y el resultado es que no muerde **en este IC**.
+
+⚠ **Donde sí muerde es en los estimadores basados en signos: `N_eff = 112` sobre 618 692 ticks,
+pérdida de 5 518×.** Eso explica mejor que cualquier defecto de diseño por qué han muerto cuatro
+estadísticos: todos dependían de la relación entre signo y precio, y ahí el tamaño muestral
+efectivo es de tres cifras. **No se arregla capturando más** — con `γ_eff = 0.354`, multiplicar
+`N` por 10 sólo multiplica `N_eff` por 2.3.
+
+⚠ **Nota de procedimiento:** este recálculo toca el conjunto de prueba. El §7 prohíbe **reabrirlo
+para un veredicto nuevo**; el §6 **ordena** recalcular un IC ya publicado. Se recomputó el mismo
+estadístico sobre los mismos modelos, sin ajustar ni elegir nada, y no se deriva ninguna decisión
+nueva de él.
+
+### §3 — La sospecha del precio NO se cumple, y la aritmética en pb
+
+La orden sospecha que el tramo pudiera haber corrido cerca de 96 000, con lo que `c(u)` serían 38.4
+y el factor pasaría de 3.46 a 5.1. **Medido: el tramo va de 64 794.4 a 65 482.7, mediana 65 076.4.**
+`c(u) = 26.03 USD/BTC` es correcta para este tramo y **el factor 3.46 se mantiene**.
+
+| magnitud | USD/BTC | pb | ticks |
+|---|---|---|---|
+| 1 tick | 0.100 | **0.0154** | 1.0 |
+| comisión ida y vuelta maker | 26.031 | **4.0000** | 260.3 |
+| `\|μ̂\|` q90 medida (v3.2) | 11.297 | 1.7360 | 113.0 |
+| **umbral `1.5·c(u)`** | **39.046** | **6.0000** | **390.5** |
+
+**Hay que predecir 390 ticks de movimiento para pagar la ida y vuelta. Un agotamiento de cola da
+1 tick.** La capa de microestructura opera **390× por debajo** del umbral de rentabilidad. Y en pb
+la tabla ya no envejece con el precio: la comisión son 4 pb sea cual sea el nivel de BTC.
+
+### Un control que falló y lo que enseñó
+
+El control 2 de `tick_grande.py` —¿recupera el estimador un `γ` conocido?— falló al primer intento
+con **R² = 0.87**, por debajo del umbral de 0.95 que yo mismo había puesto. **El fallo era del
+generador, no del estimador**: una suma finita de seis AR(1) es ley de potencias sólo a trozos, con
+ondulaciones entre las `τ`. Bajar el umbral para que pasara habría sido ajustar el control al
+resultado. Se sustituyó por **ruido gaussiano fraccionario**, cuyo exponente sí es verdad conocida
+(`C(ℓ) ~ ℓ^(2H−2)`, o sea `γ = 2−2H`).
+
+Y así apareció algo que cambia cómo hay que leer el R² sobre dato real:
+
+| `H` verdadera | `γ` verdadera | `γ` medida | **R²** | `C(1)` |
+|---|---|---|---|---|
+| 0.75 | 0.50 | 0.5436 | **0.977** | 0.243 |
+| 0.65 | 0.70 | 0.6647 | **0.660** | 0.129 |
+
+**Con memoria débil el R² se desploma mientras `γ` sigue bien recuperada**, porque `C(ℓ)` es más
+pequeña y el ruido muestral domina el logaritmo. Yo había escrito una compuerta «R² < 0.90 → la
+relación no aplica»: **habría descartado un caso donde el estimador funciona perfectamente.** El R²
+pasa a reportarse como diagnóstico, nunca como compuerta.
+
+### Qué queda de la v3.3
+
+**Cerrado:**
+- **§2**: `η̂ = 0.62` → el marco de tick grande no aplica. **§4 y §5 quedan cancelados por la
+  compuerta**, no pendientes.
+- **§3**: precio del tramo verificado, `c(u)` correcta, factor 3.46 confirmado, tabla en pb.
+- **§6**: `N_eff` medido en tres series; el paso 2 de la v3.2 sobrevive al IC corregido.
+
+**Ejecutado pero sin cerrar:**
+- **§1**: la relación se verificó en sus dos límites y `γ` se midió bien, pero `β` implícita sale
+  +0.148 con sub-series entre −0.001 y +0.349. **No separa permanencia de difusividad**, y el
+  intervalo disponible es una cota inferior de la incertidumbre con sólo 8 réplicas.
+
+**Lo que esto añade a la lectura de fondo:** las tres rutas de la v3.3 no rescatan la economía —el
+§3 de la orden ya lo decía— y la que podía cerrar la ciencia (§1) tropieza con la misma
+heterogeneidad entre tramos que viene apareciendo desde la v3.0. El `N_eff = 112` de los signos es
+la explicación cuantitativa de por qué.
+
+## Sesión 2026-08-10 (c) — v4.1 §2 y §1. Las dos curvas NO se cruzan donde hay potencia
+
+Ejecuta `ORDEN_TRABAJO_HORIZONTE_4_1.md` en su orden de prioridad: §11 (compuerta de
+infraestructura) → §2 (`H_p`) → §1 (las dos curvas). `Micelio.py` sin cambios. Módulo nuevo:
+`horizonte.py`, **14 controles**.
+
+### ⚠ §11 PRIMERO: la captura estacional muere por BATERÍA, no por suspensión por inactividad
+
+`captura_estacional` es «el único activo del proyecto que puede dar potencia al §1 por encima de
+30 min», y lleva **dos apagones sólo hoy**. Los dos capturadores tienen **exactamente los mismos
+huecos**, así que es la máquina y no los procesos:
+
+```
+Evento 524  10:52:05  "Critical desencadenador de bateria cumplido"
+Evento 42   10:52:05  "El sistema esta entrando en suspension"
+Bateria: estado 1 = DESCARGANDO      nivel critico configurado: 2 %
+```
+
+**El portátil está con batería, no enchufado.** `STANDBYIDLE = 0` —que sí está configurado
+correctamente, verificado— **no protege de esto**: la suspensión por batería crítica pasa por
+encima de todo, y `impedir_suspension()` (`SetThreadExecutionState`) tampoco la evita. Es una causa
+**distinta** de la que se corrigió el 2026-08-09.
+
+Cobertura acumulada del estacional: **1 080 min = 0.75 días equivalentes**, 147 casillas vacías de
+168, mínimo por casilla 0 contra los ≥ 30 que pide su compuerta. Apagones de hoy: 01:00–06:00 y
+10:52–16:47 local.
+
+⚠ **Con 21 días continuos, `H = 1 h` da ~500 ventanas y `H = 4 h` da ~126. Cada apagón parte el
+tramo continuo, y es el tramo continuo el que fija `H_max ≈ T_continuo/30`.** Sin resolver la
+alimentación, el §1 no puede pasar de piloto en la banda que importa.
+
+### ⚠ §2 — `H_p = 0.591` NO sobrevive, y la compuerta resuelve por BANDA
+
+Firma de volatilidad sobre las **cuatro** capturas, **reloj de pared** (que es donde vive la curva
+requerida: comisión y financiación se pagan en tiempo de calendario), con **control barajado en
+todas**, ajuste en `H ∈ [60, 600] s`:
+
+| captura | `ν` | `H_p` real | barajado | **corregido** | \|sesgo\| | efecto | fiable |
+|---|---|---|---|---|---|---|---|
+| `captura_larga` | 38.97 | 0.407 | 0.401 | 0.506 | 0.099 | 0.093 | **NO** |
+| `captura_v31b` | 5.76 | 0.414 | 0.543 | **0.371** | 0.043 | 0.086 | sí |
+| `captura_v32` | 10.13 | 0.527 | 0.520 | **0.508** | 0.020 | 0.027 | sí |
+| `captura_v33` | 17.49 | 0.548 | 0.496 | **0.552** | 0.004 | 0.048 | sí |
+
+**El 0.591 de la v3.3 era del reloj de TICKS.** En reloj de pared, sobre la misma captura y con su
+control, `captura_v33` da **0.552**. Y entre capturas la banda es **[0.371, 0.552]**, que **cruza
+0.5**: la superdifusión no es una propiedad estable.
+
+⚠ **Dos cosas que hay que declarar sobre cómo se llegó a esa tabla.**
+
+1. **La rejilla de horizontes se densificó a mitad de camino**, y no es cosmético. Con la rejilla
+   original el ajuste de `[60, 600]` tenía **4 puntos** y el propio control barajado —que debe dar
+   0.5 exacto— salía entre **0.254 y 0.528**. Ahí la corrección mueve más ruido que señal. Con 11
+   puntos los controles quedan en 0.401–0.543.
+2. **El criterio de fiabilidad se escribió DESPUÉS de ver la primera corrida**, y la fila que
+   descarta es justo la que rompe la monotonía con `ν`. Eso es selección post-hoc y se reporta con
+   las dos correlaciones, sin elegir:
+
+```
+corr(log nu, H_p)  con las 4 filas : +0.6821   (n = 4)
+corr(log nu, H_p)  solo fiables    : +0.9616   (n = 3)
+```
+
+**Con `n ≤ 4` una correlación no es evidencia**: para `n = 3` hace falta `|r| > 0.997` para
+`p < 0.05`. La rama de correlación del §2.2 **no se puede invocar**, y se aplica la **tercera**:
+la curva requerida va como **banda `[0.371, 0.552]`** y el §1 se lee contra la banda entera.
+
+`σ₁` reexpresada en pb (§2.1 punto 3), recalculada por cada `H_p` sobre la firma de `captura_v33`:
+
+| `H_p` | 0.371 | 0.500 | 0.552 |
+|---|---|---|---|
+| `σ₁` [pb·s^(−H_p)] | 0.7356 | 0.4061 | 0.3196 |
+
+### ⚠ §1 — LAS DOS CURVAS NO SE CRUZAN, y donde podrían cruzarse no hay potencia
+
+Predictor deliberadamente tonto (§1.3): regresión de `r_{t→t+H}` del punto medio sobre flujo
+firmado acumulado en `{H/4, H/2, H, 2H}`. Sin `G(τ)`, sin `τ₀`, sin `β`. Ventanas **no solapadas**
+(verificado por test). Entrenado en el 60 % de entrenamiento, medido en validación. **El conjunto
+de prueba de la v3.2 NO se abrió.**
+
+| `H` | `n_vent` | **`R²_medido`** | `R²_barajado` | `R²_req` (0.371) | (0.500) | (0.552) | |
+|---|---|---|---|---|---|---|---|
+| 60 s | 112 | **−0.0008** | −0.0070 | 68.72 % | 78.40 % | 82.67 % | |
+| 120 s | 56 | **+0.0019** | **+0.0146** | 41.09 % | 39.20 % | 38.46 % | |
+| 300 s | 23 | −0.0264 | −0.0051 | 20.82 % | 15.68 % | 13.99 % | piloto |
+| 600 s | 11 | −0.0554 | −0.0195 | 12.45 % | 7.84 % | 6.51 % | piloto |
+| 900 s | 8 | −0.0763 | +0.0062 | 9.21 % | 5.23 % | 4.16 % | piloto · extrapola |
+| 1800 s | 4 | −0.0461 | **+0.1292** | 5.51 % | 2.61 % | 1.93 % | piloto · extrapola |
+| 3600 s | 2 | insuficiente | | | | | |
+
+**Aplicando el §1.4 literalmente, el desenlace es doble:**
+
+1. **Donde hay potencia (60 y 120 s, `n ≥ 30`): fallo categórico.** `R²_medido ≈ 0` contra un
+   requerido de **38–83 %**. No es una brecha que un predictor mejor cierre: aunque un predictor
+   perfecto alcanzara `R² = 0.5`, seguiría sin pagar a 60 s. Y en las dos filas el barajado es
+   comparable o **mayor** que el real, que por el §1.4 se lee como «la medición no tiene potencia
+   a esa `H`» — o, dicho de otro modo, no hay nada que medir.
+2. **Donde el requerido se vuelve plausible (≥ 15 min, 1.9–5.5 %): sólo 4–8 ventanas.** Por el
+   §1.4 eso es **NO DECIDIBLE**, no un fallo — y la única acción admisible es esperar a
+   `captura_estacional`. Que es justo lo que el §11 está bloqueando.
+
+⚠ **Y una reconciliación que hay que escribir para que las dos cifras no se lean como
+contradicción.** La v3.2 reportó `R² = 0.014` a 128 s y aquí sale ~0. **No es la misma cantidad.**
+El `R²` de la v3.2 predice `Δp_t` con un núcleo que incluye `h(0)·x_t`, o sea **el signo de la
+transacción que está ocurriendo**: es ajuste contemporáneo, y no es operable. El `R²` de aquí
+predice el retorno **futuro** a `H` desde flujo **pasado**, que es lo único que se puede negociar.
+Que uno sea 1.4 % y el otro 0 no es inconsistencia: es la diferencia entre explicar y predecir.
+(El `μ̂` del paso 3 de la v3.2 ya usaba sólo rezagos ≥ 1, así que aquella parte estaba bien.)
+
+### Dos controles míos que fallaron, y lo que enseñaron
+
+**El control de la curva requerida pasa a la primera** y reproduce la tabla del §11.1 del
+`PREREGISTRO_3_2.md` con tres decimales: 41.77 % contra 41.8 a 103 s, 7.17 contra 7.2 a 10 min,
+1.20 contra 1.2 a 1 h. La forma está verificada contra lo ya publicado.
+
+⚠ **El control de superdifusión estaba mal planteado y era mío.** Fabricaba superdifusión con una
+**tendencia lineal**, y una tendencia constante **no aparece en la firma de volatilidad**: añade la
+misma constante a todos los incrementos y `std(x + c) = std(x)`. Superdifusión es incrementos
+**positivamente autocorrelacionados**, no deriva. Sustituido por movimiento browniano fraccionario,
+cuyo `H` es verdad conocida:
+
+| fBm | real | barajado | corregido |
+|---|---|---|---|
+| `H = 0.65` | 0.6833 | 0.5372 | **0.6461** |
+| `H = 0.35` | 0.3977 | 0.5224 | **0.3754** |
+
+Recupera la verdad por los dos lados y el barajado vuelve a 0.5 en los dos, que es lo que hace del
+control un discriminador y no un adorno.
+
+### Qué queda de la v4.1
+
+**Hecho:**
+- **§11**: causa de los apagones identificada (**batería**, no inactividad) y cuantificada.
+- **§2**: `H_p` sobre las cuatro capturas, dos relojes, control en todas, `σ₁` en pb. Resuelve por
+  **banda [0.371, 0.552]**. `H_p = 0.591` retirado.
+- **§1**: las dos curvas, con control barajado y ventanas no solapadas. **No se cruzan donde hay
+  potencia; donde podrían, no hay potencia.**
+
+**Pendiente, en el orden del §10:**
+- **§3** (correcciones a la v3.3): tercer estimador de `γ` por Whittle/GPH, `β` implícita como
+  curva contra la ventana de ajuste, tabla de `N_eff` con la definición coherente, la identidad
+  `β = 0 ⟺ γ = 2−2H`, y reclasificar `D = 11.53`.
+- **§6** (micro-precio): sólo la fracción de ceros contra el 96.67 %.
+- **§5** (`C_respaldo`) y **§4** (`η̂` con barrido de colapso), en ese orden.
+
+## Sesión 2026-08-12 — v4.1 §3. No hay «la» `γ`, y `β` implícita no mide nada
+
+Ejecuta el §3 completo de `ORDEN_TRABAJO_HORIZONTE_4_1.md`. **Ningún quinto estadístico**, como
+manda su §7; el §3.4 **degrada** una afirmación en vez de intentar mejorarla. `Micelio.py` sin
+cambios. Módulos: `tick_grande.py` pasa a **28 controles**, ejecutor nuevo `correcciones_v41.py`.
+
+Todo se corre sobre **dos series**, que es lo que la v3.3 no pudo hacer:
+
+| serie | `N` | `ν` | duración |
+|---|---|---|---|
+| `captura_v33` entrenamiento — la que la v3.3 midió | 618 692 | 17.49 tx/s | — |
+| **`captura_estacional`, tramo continuo más largo** — réplica independiente | **1 829 242** | 21.78 tx/s | **23.33 h** |
+
+### ⚠ LO PRIMERO: la orden esperaba que el §3 fuera cosmético. No lo es
+
+El §3 se escribió como «correcciones baratas, ninguna cambia un veredicto». Dos de las cuatro
+**retiran una cantidad del vocabulario del proyecto**, y las dos replican en la captura nueva.
+
+### §3.1 — El tercer estimador no arbitra entre los dos primeros: los explica
+
+`gph()` y `whittle_local()` en `tick_grande.py`, con la traducción `γ = 1 − 2d` escrita en
+`PREDICCION_SESGO_GAMMA_4_1.md` (commit `f1fd84f`, **congelado antes de calcular ninguna cifra**).
+
+| método | dominio | `γ` en `captura_v33` | `γ` en `estacional` |
+|---|---|---|---|
+| A — regresión log-log de `C(ℓ)`, `[10, 2000]` | tiempo | +0.5217 | +0.6336 |
+| B — escalado de `Var(media de bloque)` | tiempo | +0.3539 | +0.4201 |
+| **C1 — GPH**, `m = N^0.5` | frecuencia | **+0.4187** ±0.046 | **+0.6263** ±0.035 |
+| **C2 — Whittle local**, `m = N^0.5` | frecuencia | **+0.4216** ±0.036 | **+0.6482** ±0.027 |
+| `C(1)` (lo que la v3.2 llamó `γ̂`) | — | +0.7981 | +0.8093 |
+
+**Las cuatro predicciones congeladas, y cómo salieron:**
+
+| | predicción | `captura_v33` | `estacional` |
+|---|---|---|---|
+| **P1** | `γ_espectral < γ_A` (sesgo por centrado con la media muestral) | **se cumple** | **REFUTADA** (LW 0.6482 > 0.6336) |
+| **P2** | `γ_espectral ∈ [0.28, 0.46]`, o sea más cerca de B | **se cumple** | **REFUTADA** (0.63 y 0.65) |
+| **P3** | `γ̂` **crece** con la banda `m` | **REFUTADA** | **REFUTADA** |
+| **P4** | los dos recuperan `d` conocida sobre fGn con error < 0.05 | **se cumple** (peor 0.0117) | ídem |
+
+**P1 y P2 no replican.** Sobre la captura nueva los dos estimadores espectrales caen **encima de
+A**, no de B. La hipótesis de la orden —«0.5217 es el sesgado y 0.3539 el más cercano»— **no
+recibe apoyo**: se cumple en un tramo y falla en el otro.
+
+⚠ **P3 falló, y mi mecanismo declarado estaba al revés.** Escribí que la estructura de corto
+alcance «aplana el espectro lejos del origen», lo que reduciría `d̂` y subiría `γ̂`. Es falso para
+autocorrelación **positiva**: un proceso con `C(1) = 0.80` tiene espectro que **decae** al alejarse
+del origen, así que ampliar la banda **empina** la pendiente, sube `d̂` y **baja** `γ̂`. Eso es lo
+que se midió, en las dos series y en los dos estimadores.
+
+### ⚠ Y la consecuencia de P3 es el hallazgo de la sesión: **no existe «la» `γ`**
+
+| `α` (`m = N^α`) | `m` | GPH v33 | LW v33 | GPH estacional | LW estacional |
+|---|---|---|---|---|---|
+| 0.4 | 207 / 319 | +0.5116 | +0.5440 | +0.6513 | +0.6917 |
+| 0.5 | 786 / 1 352 | +0.4187 | +0.4216 | +0.6263 | +0.6482 |
+| 0.6 | 2 984 / 5 719 | +0.0484 | −0.0258 | +0.2646 | +0.2240 |
+| 0.7 | 11 324 / 24 187 | **−0.1796** | **−0.2441** | **−0.1653** | **−0.2577** |
+
+`γ̂` recorre **0.69 a 0.95** según la banda, sobre una disputa cuyo rango entero es 0.17. Y `γ < 0`
+significa `d > 0.5`, o sea **fuera del rango de estacionariedad** que los propios estimadores
+suponen.
+
+**El control que decide cómo se lee esto**, y sin él el resultado sería ambiguo: el **mismo
+barrido sobre fGn de `γ` conocida (0.50) y la misma longitud**:
+
+| | salto máximo entre bandas |
+|---|---|
+| fGn, verdad conocida (v33 / estacional) | **0.1274 / 0.0578** |
+| **dato real** | **0.4474 / 0.4817** |
+| razón | **3.5× / 8.3×** |
+
+Sobre verdad conocida el barrido es **plano** (0.44–0.56 en las cuatro bandas); sobre el dato se
+derrumba. **El fallo es de la serie, no del estimador: el flujo de órdenes de este mercado no
+tiene un régimen de escala único.** La discrepancia del §3.1 nunca fue un problema de estimador.
+
+### §3.2 — `N_eff` coherente, y las tres consecuencias
+
+`inflación = √(N/N_eff)` debe satisfacerse; `N^γ_eff` descarta la constante del escalado y no la
+satisface en ninguna fila. Corregido en `ic_memoria_larga`, que ahora devuelve las dos.
+
+| serie | `N` | inflación | **`N_eff` = `N`/infl²** | `N^γ` (v3.3) |
+|---|---|---|---|---|
+| `ΔLL` de prueba (v3.3, aritmética) | 199 532 | 3.15 | **20 109** | 8 574 |
+| **signos `ε`** v33 | 618 692 | 115.40 | **46.5** | 112 |
+| **signos `ε`** estacional | 1 829 242 | 115.99 | **136.0** | 427 |
+| incrementos de precio v33 | 618 691 | **0.71** | **1 238 283** | 99 510 |
+| incrementos de precio estacional | 1 829 241 | 1.14 | 1 415 781 | 167 153 |
+
+1. **Signos: `N_eff = 46.5`, no 112.** El diagnóstico de la v3.3 sobre por qué murieron cuatro
+   estadísticos es **más fuerte** de lo que se reportó, no más débil. Y la **inflación es
+   notablemente estable entre capturas** (115.40 contra 115.99) pese a triplicarse `N`.
+2. ⚠ **La antipersistencia NO replica.** En v33 `infl = 0.71 < 1` y `N_eff > N`, que es la firma
+   del rebote bid-ask (`ρ₁(retornos) = −0.216`, v3.0) y que la tabla de la v3.3 escondía tras una
+   columna de «pérdida». En el tramo estacional `infl = 1.14 > 1`: pérdida de 1.3×, **no**
+   antipersistencia. Es otra cantidad que cambia entre tramos.
+3. **La fila de `ΔLL` no se recalculó**: sale por aritmética sobre la inflación 3.15 ya publicada.
+   El §7 prohíbe reabrir el conjunto de prueba y aquí no hace falta. El paso 2 sigue pasando.
+
+⚠ **Regla del proyecto, escrita:** `Var(media) ∝ N^(−γ)` es el resultado de Beran **para la media
+muestral**. No se transporta a estimadores de exponentes, a pendientes de regresión ni a razones
+de verosimilitud. **`N_eff` se mide por estadístico, midiendo el escalado de ese estadístico. No
+se importa de la serie de signos.**
+
+### ⚠ §3.3 — `β` implícita se mueve más que la distancia entre las hipótesis. En las dos series
+
+La identidad que el §3.1 obliga a escribir, y que cambia cómo se lee todo el §1 de la v3.3:
+
+```
+beta_implicita = (2 - gamma)/2 - H = 0   <=>   gamma = 2 - 2H
+```
+
+que es exactamente la relación entre exponente de ACF y exponente de Hurst del **ruido gaussiano
+fraccionario**. **`β` implícita no mide el núcleo**: mide cuánto se desvía el par (signos, precio)
+de la relación fGn. Si los dos comparten proceso de memoria larga, sale 0 **mecánicamente**. El
+control 7 de `tick_grande.py` lo demuestra sobre fGn puro —donde no hay propagador ninguno— y da
+`β = −0.039`.
+
+`γ` y `H` **ajustadas en la misma ventana de escala** (la v3.3 las tomó de ventanas con menos de
+una década de solapamiento):
+
+| ventana [ticks] | `γ` v33 | `H` v33 | **`β` v33** | `γ` est. | `H` est. | **`β` est.** |
+|---|---|---|---|---|---|---|
+| [16, 128] | +0.263 | 0.498 | **+0.370** | +0.322 | 0.603 | **+0.236** |
+| [32, 256] | +0.433 | 0.584 | +0.200 | +0.512 | 0.679 | +0.065 |
+| [64, 512] | +0.644 | 0.656 | +0.022 | +0.789 | 0.714 | −0.108 |
+| [128, 1024] | +0.789 | 0.639 | −0.033 | +1.067 | 0.665 | **−0.198** |
+| **[256, 2000]** común | +0.726 | 0.606 | **+0.031** | +0.839 | 0.588 | **−0.007** |
+| [512, 4096] | +0.653 | 0.591 | +0.083 | +0.776 | 0.558 | +0.054 |
+| [1024, 8192] | +0.536 | 0.576 | +0.156 | +0.485 | 0.528 | +0.229 |
+| [2048, 16384] | +0.570 | 0.623 | +0.092 | +0.487 | 0.467 | **+0.290** |
+| *mezcla de la v3.3* | +0.522 | 0.598 | *+0.142* | +0.634 | 0.537 | *+0.146* |
+
+```
+                       captura_v33        estacional
+recorrido de beta        0.4030             0.4881
+distancia entre hipotesis 0.2050            0.1583      (0 contra beta_dif medio)
+```
+
+**En las dos series el recorrido dobla o triplica la distancia entre las hipótesis.** La regla de
+lectura del §3.3, escrita antes: *«si `β` implícita se mueve más que la distancia entre las dos
+hipótesis al variar la ventana, el §1 de la v3.3 no está midiendo nada y así se reporta.»*
+
+**Se reporta: el §1 de la v3.3 no está midiendo nada.** La `β` implícita de +0.148 que aquella
+sesión publicó es un punto arbitrario de una curva que cruza el cero y llega a ±0.29 sin salir
+del rango de escalas del propio experimento.
+
+Nótese además que en la ventana común `β` sale ≈ 0 en las dos series (+0.031 y −0.007) — que es
+justo lo que la identidad fGn predice **sin que haya propagador**, así que ni siquiera eso apoya
+la permanencia.
+
+### §3.4 — `D = 11.53` reclasificado en los tres documentos donde se citaba
+
+`β = −0.160` con `τ₀` pegada a su cota es firma de **mala especificación del estimador**: `β` se
+reporta en la literatura en `(0, 1)`, y un núcleo que crece sin cota sobre `[0, K]` implica
+impacto de mercado creciente indefinidamente, económicamente imposible (arbitraje ilimitado). El
+propio §5.2 de la v3.2 ya decía que `β` y `τ₀` no están identificados por separado.
+
+`D = 11.53` deja de citarse como «núcleo creciente medido» y pasa a **«ajuste no identificado en
+el régimen `τ₀` en cota»**. Aplicado en `CLAUDE.md` (retractaciones, tabla de la v3.2, apartado
+`D > 1`, y la frase de la firma de volatilidad que lo usaba como corroboración) y en
+`TRASPASO_SESION_2026-08-10.md`. **No se abre un quinto estadístico.**
+
+### Controles nuevos (`python tick_grande.py --autotest` → 28/28)
+
+| # | control | resultado |
+|---|---|---|
+| 6 | GPH y LW recuperan `d` conocida sobre fGn (`H` = 0.85…0.55) | peor error **0.0117** |
+| 6b | sin memoria, `d = 0` dentro de 2 errores estándar | GPH −0.0003, LW −0.0064 |
+| 7 | `β = 0 ⟺ γ = 2−2H`, y sobre fGn puro `β ≈ 0` sin propagador | **−0.0392** |
+| 8 | `N_eff` coherente satisface `infl = √(N/N_eff)`; serie antipersistente marcada | exacto a 1e−9 |
+
+⚠ **Un control mío falló y el fallo era del umbral.** Puse `|d| < 0.06` sobre ruido blanco sin
+calcular el error estándar; con `N = 2^16` y `m = 256` el error estándar de GPH es **0.0401**, así
+que un sorteo suelto en 0.0684 está a 1.7 σ de cero. **Un umbral por debajo del propio error del
+estimador rechaza estimadores correctos.** Sustituido por media de 8 sorteos contra `2·se/√k`,
+que es **más exigente** que el original: si el estimador estuviera sesgado, promediar lo dejaría
+lejos de cero mientras el umbral se estrecha. Es el tercer umbral de este proyecto puesto «a ojo»
+que hubo que medir (los anteriores: `UMBRAL_TAYLOR_JACOBIANO` en la v2.1 y la compuerta de `R²`
+en la v3.3).
+
+### Qué queda de la v4.1 tras el §3
+
+**Hecho:** §11, §2, §1 (sesión anterior) y **§3 completo**, con los cinco criterios de aceptación
+del §9 cubiertos y replicado en una segunda captura.
+
+**Lo que el §3 retira del vocabulario:**
+- **`γ` no es un número de este mercado.** Depende de la banda por 0.7–0.95. Cualquier fórmula que
+  la use —incluida `H = (2−γ)/2 − β`— hereda esa indeterminación.
+- **`β` implícita no es una medición del núcleo.** Es un contraste de coherencia con fGn, y en el
+  rango de escalas del experimento no discrimina.
+- **`D = 11.53` no describe la forma del núcleo.**
+
+**Pendiente, en el orden del §10:** §6 (micro-precio, sólo la fracción de ceros es barato), §5
+(`C_respaldo`, después de que el §1 diga a qué horizonte), §4 (`η̂` con barrido de umbral de
+colapso — deuda de reporte, no decisión).
+
+⚠ **Y lo que de verdad desatasca el proyecto:** el tramo de **23.33 h continuas** da **93
+ventanas a 15 min, 46 a 30 min y 23 a 1 h**, contra las 8/4/2 con las que el §1 se declaró NO
+DECIDIBLE. La banda donde el `R²` requerido baja a 1.9–5.5 % ya tiene potencia. **Rehacer el §1
+sobre ese tramo es lo siguiente.**
+
+## Sesión 2026-08-27 — Adenda C: el §1 medido por covarianza. Módulo `identidad.py`
+
+Ejecuta `ADENDA_C_REFORMULACION_S1_4_1.md`. **No es una enmienda al criterio**: el §1.4 se
+mantiene palabra por palabra y lo que se sustituye es el **instrumento**. `Micelio.py` sin
+cambios. El conjunto de prueba de la v3.2 no se abre.
+
+### ⚠ LO PRIMERO, porque es lo que el operador preguntó: `σ` con `ν` SIGUE EN PIE
+
+La adenda argumenta que un `R²` fuera de muestra tiene suelo de ruido `≈ k/n` y que ninguna
+fila se lee si la cantidad a medir no supera **3× `q95(|R²_nulo|)`**. Aplicada la misma regla,
+con **200 sorteos**, al hallazgo de predecir volatilidad con actividad:
+
+| | `R²` medido | `q95(\|R²_nulo\|)` | razón | ¿se lee? |
+|---|---|---|---|---|
+| `σ(t)` desde 3 rezagos de (`ν`, `σ`) | **+0.6153** | 0.0798 | **7.7×** | **sí** |
+| **`ν(t)` → `σ(t+1)`** | **+0.5464** | 0.0508 | **11×** | **sí** |
+
+El nulo es **rotación circular** (conserva la memoria de la serie), que da un suelo **14× más
+ancho** que el barajado (0.0798 contra 0.0058). Aun contra ese, pasa con holgura. La crítica de
+la adenda apunta al régimen de `n` pequeño del método de trocear en ventanas; el trabajo de
+`σ`/`ν` tiene `n = 3 081` con `k = 7` y está dos órdenes por encima del suelo. **No hay nada
+que retractar ahí.**
+
+### La identidad, y sus controles con verdad conocida (6/6)
+
+```
+R2(H) = Corr(eps_t, p_{t+H} - p_t)^2 = R_cum(H)^2 / (Var(eps) * sigma_r(H)^2)
+```
+
+Reproduce el §C.3.3 sobre serie sintética con señal inyectada de magnitud conocida
+(`N = 400 000`):
+
+| señal inyectada | **identidad** | ventanas no solapadas, con ajuste fuera de muestra |
+|---|---|---|
+| 0.00 (nulo) | 2.6e-07 | **−0.1941** |
+| 0.20 | 3.0e-06 | −0.1661 |
+| 0.50 | 2.4e-05 | −0.1319 |
+| 1.00 | **6.9e-05** | −0.1018 |
+
+La identidad es **monótona por encima de su propio suelo** y separa señal de nulo por **263×**.
+Las ventanas quedan **dominadas por el sesgo `−k/n`**: las cuatro salen negativas y su recorrido
+(0.092) es menor que el desplazamiento (0.194). Es la tesis de la adenda, medida.
+
+### ⚠ Desviación declarada sobre el nulo del §C.4.1
+
+El §C.4.1 pide «barajados de `ε` preservando el precio». Un barajado destruye también la
+**memoria larga de `ε`**, que es real (`N_eff` de los signos = 46.5) y que infla la varianza del
+estimador por el solapamiento de las parejas — **el modo de fallo 8 de la propia adenda**. Se usa
+**rotación circular**, que conserva toda la autocorrelación de `ε` y rompe sólo el
+emparejamiento, y se reportan los dos. Sobre el control sintético con `ε` de memoria, la rotación
+da un suelo **48× más ancho** (0.000432 contra 0.000009): la diferencia no es cosmética.
+
+### ⚠ Tres defectos propios, los tres de familias que este proyecto ya conoce
+
+1. **Alineación de rezagos, en mi propio control.** Inyecté la señal como `a·cumsum(ε)`, pero
+   `cumsum[j] − cumsum[i] = Σ_{s=i+1..j} ε_s`, que **excluye `ε_i`**: la «señal» era predecible
+   desde el futuro, no desde el presente, y la identidad devolvía 0 **correctamente**. Misma
+   familia que el `mode="same"` de la v3.1 §3 y el `h(1) = 0` del núcleo.
+2. **Dos aserciones mal formuladas.** Exigía monotonía incluso donde la señal inyectada cae por
+   debajo del suelo de muestreo, y afirmaba que las ventanas «no son monótonas» — medido, **sí**
+   lo son, pero eso no las salva: lo cierto es peor, el sesgo las domina.
+3. **Memoria.** Cargar los cinco fragmentos a la vez son ~1.1 GB con ~1 GB libre, y el proceso
+   murió. Convertido en generador. **Tercera vez que la RAM de este portátil decide la
+   arquitectura del análisis.**
+
+### Orden codificado, no confiado a la memoria
+
+`--etapa=medir` **se niega a correr** si no existe el archivo de suelo congelado. El §C.4.1 exige
+producir la tabla de resolución antes de calcular un solo `R²` real, y un orden que depende de
+que alguien se acuerde no es un orden.
+
+---
+
+## Sesion 2026-08-23 -- v4.1 §1 rehecho, y RETRACTADO el mismo dia por estacionalidad
+
+⚠⚠ **EL VEREDICTO DE ESTA SESION NO SE SOSTIENE. NO CITARLO.** Lo que sigue se conserva entero
+porque los datos y los controles valen; **la lectura no**. Objecion del operador, verificada con
+medicion el mismo dia:
+
+1. **Los tramos estan definidos por cuando se cayo la conexion, no por calendario**, y el
+   confundido es severo: el tramo 1 es **100 % dias habiles**, el tramo 2 es **100 % fin de
+   semana**, el 0 mezcla ambos. Etiquetarlos por `ν` y llamar a eso «regimen medido» es
+   incorrecto: buena parte de esa `ν` es dia de la semana.
+2. **`σ₁` se estimo agrupando las 24 horas**, y `R²_req ∝ (lastre/σ)²`. Medido sobre las cuatro
+   muestras (16 340 ventanas de 60 s):
+
+   | | `σ₆₀` [pb] | **`R²_req(300 s)`** |
+   |---|---|---|
+   | agrupando todas las horas (lo publicado) | 5.301 | **5.52 %** |
+   | **mejor hora, UTC 15 (mediodia EE.UU.)** | **9.536** | **1.71 %** |
+   | peor hora, UTC 23 | 3.289 | 14.34 % |
+   | habil (lun-vie) | 5.937 | 4.40 % |
+   | fin de semana | 3.418 | 13.28 % |
+
+   **El requisito varia 8.4× segun la hora.** El maximo de `σ` cae en UTC 15, que es el mediodia
+   de EE.UU.: es estructura diurna, no ruido.
+3. **`ν` entra en el predictor como ESCALAR.** `rasgos_flujo` construye las ventanas
+   retrospectivas como `f·H·ν` **ticks** con la `ν` media del tramo. Medida por hora, `ν` recorre
+   **0.55× a 2.17×** de su media (factor **3.96**, max UTC 15, min UTC 4): en la hora punta la
+   ventana cubre el **46 %** de los `H` segundos que dice cubrir. No es solo una descripcion
+   pobre de `ν` -- esta dentro del estimador.
+
+**Por que esto no es un matiz.** Los dos lados de la desigualdad se mueven al condicionar por
+hora, y solo se ha medido que se mueve uno. Si la relacion predictiva es ella misma estacional,
+agrupar la **atenua hacia cero**: una senal viva en una fracción de las horas aparece diluida por
+su cuota de varianza. El `+0.0076` medido a 60 s con 1 341 ventanas y controles limpios es
+compatible con un `R²` de un dígito alto concentrado en las horas activas -- y el requisito en
+esas horas baja a **1.71 %**. **La medicion agrupada no puede descartar el cruce**, que es
+justo lo que el veredicto afirmaba.
+
+**Lo que SI sobrevive de la sesion:** el alineado libro-transaccion (100 % en los cuatro tramos,
+spread de 1 tick, `E[y_mid·ε] > 0` en los cuatro), el control positivo de potencia y su
+maquinaria, y la banda de `H_p` **ajustada en ventanas cortas** (`[10,100]`, `[30,300]`,
+`[60,600]` s), donde el ciclo diurno de 24 h no alcanza a inclinar la pendiente. Los ajustes en
+`[60, 3600]` y `[300, 14400]` **si** estan contaminados por el ciclo y no se leen.
+
+**Lo que hay que rehacer, y en este orden:** (a) ventanas retrospectivas definidas en
+**segundos**, no en ticks via `ν` escalar; (b) `σ₁` y por tanto `R²_req` **por casilla horaria**;
+(c) el `R²` medido **estratificado** por la misma casilla, con su control barajado y su control
+de potencia dentro de cada estrato; (d) recomponer el veredicto por estrato, no agrupando.
+
+
+### Medicion de la estacionalidad (mismo dia) -- modulo `estacionalidad.py`, 8/8 controles
+
+Modelo pedido por el operador: armonicos de 24 h + aperturas de sesion como **pulsos** con
+respuesta exponencial + fin de semana con **amplitud y fase propias**. Ajuste lineal (un par
+cos/sin con coeficientes libres YA es amplitud y fase libres, asi que no hay minimos locales --
+que es lo que hundio el estadistico de `omega_G` en la v3.2). Unico parametro no lineal: `tau`,
+barrido en rejilla y reportado como curva.
+
+⚠ **Esto NO resucita `omega_m`.** Aquella era una frecuencia **endogena** sin ancla y sin nulo
+(la EMD devolvia 118 s sobre un paseo aleatorio y el periodo escalaba con la ventana). Aqui el
+periodo **no se estima**: es 24 h y 168 h, conocido a priori, con causa exogena verificable. Se
+estiman amplitud y fase, con nulo propio (barajar hora y finde) y validacion **por dias enteros**.
+
+**Perfil descriptivo** (3 199 casillas de 5 min, 13 dias UTC):
+
+| | pico | valle | razon |
+|---|---|---|---|
+| habil | **UTC 13-15** (apertura NY): `ν` 61.8 tx/s, `σ` 3.92 pb/30 s | UTC 4: 15.9, 1.43 | `ν` 3.9× · `σ` 2.7× |
+| finde | **UTC 21-22**: `ν` 20.4, `σ` 1.95 | UTC 3: 8.2, 0.45 | — |
+
+habil/finde: `ν` **2.13×**, `σ` **1.98×**. El pico de fin de semana llega **~7 h mas tarde**.
+
+⚠ **Fuera de muestra por dias enteros, el modelo sobre el NIVEL es peor que una constante**
+(`log σ`: M1 −0.013, M3 −0.179; `log ν`: M1 +0.008 contra nulo −0.008). Con 13 dias, el **nivel
+del dia** domina y no se predice desde la hora. Hay que separar nivel y forma:
+
+| | var entre dias | var dentro del dia | recorrido del nivel diario |
+|---|---|---|---|
+| `log σ` | 46 % | 54 % | **13.75×** |
+| `log ν` | 51 % | 49 % | **20.78×** |
+
+**Forma diurna con el nivel del dia retirado a ambos lados, `R²` fuera de muestra:**
+
+| modelo | `log σ` | `log ν` |
+|---|---|---|
+| M1 armonicos 24 h | +0.0294 | +0.1205 |
+| M3 + amplitud y **fase** de finde | +0.0073 | **+0.1359** |
+| M4 + **pulsos**, `tau` = 2 h | −0.0033 | **+0.1394** |
+| NULO (hora y finde barajados) | −0.0110 | −0.0103 |
+
+**Conclusiones, y una corrige una cifra mia de esta misma sesion:**
+
+1. **`ν` escalar queda refutado con dato.** Su forma diurna replica fuera de muestra a **13× el
+   nulo**, y el modelo completo del operador —pulsos con decaimiento + desfase de finde— es el
+   mejor de la escalera. `rasgos_flujo` debe definir sus ventanas en **segundos**, no en
+   `f·H·ν` ticks.
+2. ⚠ **El «el requisito varia 8.4× segun la hora» que se midio antes esta INFLADO.** Salia de
+   medias horarias agrupadas, con ~13 observaciones por hora y dias desbalanceados entre horas.
+   La amplitud diurna de `σ` que replica fuera de muestra corresponde a **~1.13×**, no a 2.7×.
+   Anadir finde y pulsos a `σ` **empeora** el ajuste: con ~4 dias de fin de semana, sobreajusta.
+3. **La palanca grande no es la hora, es el DIA.** El nivel diario de `σ` recorre **13.75×** y
+   `R²_req ∝ σ⁻²`, o sea **~190×** de recorrido en el requisito entre dias. Y a diferencia de
+   `omega_m`, la volatilidad diaria es persistente y pronosticable por vias establecidas
+   (HAR, GARCH), asi que **esa** es la estratificacion con contenido.
+4. **13 dias son pocos** para el perfil semanal, y la propia captura lo avisa en su informe de
+   cobertura: «con 14 dias hay 2 observaciones por casilla hora x dia; el perfil semanal es
+   EXPLORATORIO hasta >= 4 semanas». Sigue corriendo hasta el 2026-09-02.
+
+⚠ **Un control mio fallo, y era un SIGNO — la cuarta vez en este proyecto** (tras el 2π de la
+v1.3, el factor 125 y la convencion de `ε` del propagador). Con `cos(2π(h−φ)/24)` la fase es
+`atan2(c_sin, c_cos)` y estaba escrito `atan2(−c_sin, c_cos)`, que devuelve `24 − φ`. Ademas lo
+contrastaba contra una verdad que mezclaba habil, finde y pulso. Corregido: recupera **15.00 h y
+20.00 h exactas** sobre verdad conocida.
+
+---
+
+### H1 y H2 (2026-08-23) -- `hipotesis_liquidez.py`, 7/7 controles
+
+Predicciones **congeladas en el docstring del modulo antes de calcular nada** (P1-P6).
+
+#### ⚠ H2 CONFIRMADA, y con una desviacion cuantitativa que importa
+
+`ν` = numero de perturbaciones, `σ` = respuesta. Sobre 3 199 casillas de 5 min, 13 dias:
+
+| relacion `log σ` contra `log ν` | pendiente | corr |
+|---|---|---|
+| todo | +0.8557 | +0.8775 |
+| **entre dias** | **+0.8830** | **+0.9741** |
+| dentro del dia | +0.8045 | +0.7866 |
+
+**P4 REFUTADA en su forma literal: la pendiente NO es 0.5, es ~0.8.** Y no es artefacto de
+discretizacion — barriendo el paso de submuestreo, con el tamano tipico del movimiento pasando de
+0.68 a 2.55 ticks, la pendiente va de 0.881 a **0.786** y ahi converge:
+
+| paso [s] | 10 | 30 | 60 | 120 | 300 |
+|---|---|---|---|---|---|
+| ticks por paso | 0.68 | 1.21 | 1.67 | 2.13 | 2.55 |
+| pendiente | 0.881 | 0.856 | 0.839 | 0.801 | **0.786** |
+
+Pendiente > 0.5 significa que **las perturbaciones NO son independientes**: se agrupan y se
+refuerzan. Coherente con la memoria larga del flujo de ordenes que este proyecto ya midio.
+
+⚠ **NO CONFUNDIR ESE 0.8 CON `H_p`.** Es un exponente **transversal** entre ventanas
+(`σ` de una ventana contra `ν` de esa ventana), no el exponente de escala temporal de la firma de
+volatilidad, que sigue en la banda `[0.372, 0.554]`. Es exactamente la confusion que costo el §1
+de la v3.3, donde `γ` significaba dos cosas.
+
+**P5 CONFIRMADA:** normalizar por `ν` reduce la varianza de `log(varianza)` un **63.7 %**, y
+**entre dias un 77 %** (1.8895 -> 0.4340). `ν` contiene la mayor parte de `σ`, sobre todo su nivel
+diario. No la contiene entera: queda un 36 % sin explicar, casi todo dentro del dia.
+
+**P6 CONFIRMADA:** tras quitar `log ν`, al residuo no le queda estructura diurna (`R²` fuera de
+muestra del modelo diurno: −0.039, contra −0.179 sobre `log σ` crudo).
+
+**Y lo que decide en la practica** -- `R²` fuera de muestra por dias enteros, prediciendo la `σ`
+de la casilla **siguiente**:
+
+| predictor | `R²` fuera de muestra |
+|---|---|
+| constante | +0.0000 |
+| **`log ν(t)`** | **+0.5433** |
+| `log σ(t)` | +0.5101 |
+| `log ν(t)` + `log σ(t)` | +0.5575 |
+| `log ν(t)` barajado dentro del dia (NULO) | +0.1611 |
+
+**`ν` predice la volatilidad futura MEJOR que la propia volatilidad presente.** Ese es el
+contenido operativo de H2: da un estado observable, adelantado y pronosticable.
+
+⚠ **Esto tiene nombre y se declaro antes de medirlo:** subordinacion del precio al reloj de
+transacciones, Clark (1973); Hipotesis de Mezcla de Distribuciones, Tauchen & Pitts (1983). El
+proyecto ya tropezo con la version de 1994 al medir `q̄`. **Confirmarla valida la tuberia y da
+un modelo con el que trabajar; no es un descubrimiento.**
+
+#### H1 -- la profundidad de nivel 1 NO aporta sobre el flujo
+
+| | `b` (`log ν`) | `c` (`log D`) | parcial(`σ`, `D` \| `ν`) | nulo IC95 |
+|---|---|---|---|---|
+| **dentro del dia** (n = 1 622) | +0.8209 | **+0.0649** | **+0.0425** | [−0.0438, +0.0418] |
+| entre dias (n = 13) | +0.8337 | −0.1358 | −0.3000 | \|r\| critico 0.632 |
+
+**Dentro del dia gana P2 (la intuicion del operador, `c > 0`) y no P1 (Kyle, `c < 0`)** — pero por
+un pelo: +0.0425 contra un techo de nulo de +0.0418, o sea **0.18 % de la varianza residual**.
+Entre dias el signo se invierte y con 13 dias no hay potencia para nada.
+
+**P3 CONFIRMADA y es la lectura principal: `|c|` es despreciable frente a `b`.** Sabiendo el flujo,
+la cola del mejor precio no anade practicamente nada.
+
+Dato colateral que si es solido: **`corr(log D, log ν) = −0.485`** (−0.255 dentro del dia, −0.658
+entre dias). **El libro esta MAS FINO cuando hay mas actividad**, no mas saturado.
+
+Perfil de profundidad: en dias habiles es plano (22–31 BTC); en fin de semana **se desploma a
+12–15 BTC entre las 12 y las 20 UTC** contra 22–27 el resto. Con 4 dias de fin de semana, es
+exploratorio.
+
+⚠ **Limitacion que no se arregla con estos datos:** `@bookTicker` da solo el **nivel 1**. La
+«saturacion del libro» con ordenes en reposo a varios niveles **no es observable aqui**. Para
+contrastar H1 de verdad haria falta capturar `@depth`.
+
+⚠ **Un nulo mio estaba mal especificado y lo delato el signo.** La primera version barajaba la
+profundidad dentro del dia sobre las series SIN desmediar, y su IC95 salia
+`[−0.1065, −0.0554]`: descentrado, y con el valor real (−0.0456) **fuera del nulo por el lado
+contrario**. La causa: barajar dentro del dia **conserva intacto el termino entre dias**, asi que
+el nulo no destruia lo que yo creia. Desmediando por dia, el nulo queda centrado en **+0.0004**.
+Es la misma leccion que el control de potencia del §1 de esta misma sesion, y la tercera vez en
+el dia: **hay que separar nivel diario y forma intradia antes de construir cualquier nulo.**
+
+---
+
+### Retroalimentacion `σ`-`ν` y prediccion por etapas (2026-08-23) -- `retroalimentacion.py`, 8/8
+
+#### A -- El VAR: la retroalimentacion es ASIMETRICA
+
+`x_t = [log ν_t, log σ_t]`, 3 rezagos de 5 min, 3 081 observaciones contiguas, 13 dias.
+
+```
+log ν(t)      <-  +0.6053 * log ν(t-1)   -0.0543 * log σ(t-1)
+log σ(t)      <-  +0.2428 * log ν(t-1)   +0.2025 * log σ(t-1)
+
+autovalores 0.5693 y 0.2384   ->  vida media 1.23 casillas = 6.2 min
+```
+
+**`ν` empuja a `σ` (+0.243); `σ` casi no empuja a `ν` (−0.054), y encima con signo
+negativo** — mas volatilidad ahora va con algo MENOS actividad despues. `ν` es ademas
+mucho mas persistente (0.605 contra 0.203): la actividad tiene memoria, la volatilidad
+casi no.
+
+**Direccion, fuera de muestra por dias enteros** (que es lo que decide, no un test F
+dentro de muestra):
+
+| objetivo | solo rezagos de `ν` | solo rezagos de `σ` | ambos |
+|---|---|---|---|
+| `log ν(t)` | **+0.7719** | +0.6488 | +0.7721 |
+| `log σ(t)` | +0.5864 | +0.6039 | **+0.6153** |
+
+**Anadir `σ` a la prediccion de `ν` aporta +0.0002: nada.** Anadir `ν` a la de `σ` aporta
++0.011, y `σ` aporta +0.029 sobre `ν` sola. O sea: **no es un lazo simetrico, es un motor
+(`ν`) y una respuesta (`σ`)** — pero para PREDECIR `σ` conviene llevar las dos, porque son
+~95 % redundantes y el 5 % restante es real.
+
+⚠ Matiz frente al hallazgo de H2: con UN rezago `ν(t)` batia a `σ(t)` (0.543 contra 0.510);
+con TRES, la historia propia de `σ` adelanta a la de `ν` (0.604 contra 0.586). No es
+contradiccion: los rezagos de `σ` acaban conteniendo la informacion de `ν` de forma
+indirecta.
+
+**Respuesta al impulso** (choque unitario propagado con `A_1`; es una aproximacion, el
+modelo tiene 3 rezagos):
+
+| pasos (5 min c/u) | 1 | 2 | 3 | 4 | 6 | 8 | 12 |
+|---|---|---|---|---|---|---|---|
+| choque en `ν` → `σ` | **+0.243** | +0.196 | +0.125 | +0.075 | +0.025 | +0.008 | +0.001 |
+| choque en `σ` → `ν` | −0.054 | −0.044 | −0.028 | −0.017 | −0.006 | −0.002 | −0.000 |
+
+Un choque de actividad se agota en `σ` en **~1 hora**.
+
+#### B -- Prediccion por etapas: la barra de error VIVA
+
+⚠ **Precision sobre la propuesta, porque sin ella el test es vacuo.** "Predecir `σ_t` desde
+`t−1`" y "predecir `σ_{t+1}` desde `t`" son **la misma operacion desplazada un paso**: bajo
+estacionariedad sus errores coinciden por construccion. Medido: RMSE 0.5446 contra 0.5631,
+**razon 1.034**, y errores consecutivos con correlacion **+0.0018** (o sea, el error de un
+paso es blanco: no queda estructura que exprimir en el nivel). Eso **no es un hallazgo**.
+
+Lo que si tiene contenido es la version util de la misma idea, y ahi funciona:
+
+**(1) El error reciente PREDICE el error siguiente, y mejor cuanto mas larga la ventana:**
+
+| ventana | 15 min | 30 min | 60 min | 120 min |
+|---|---|---|---|---|
+| n | 1 005 | 492 | 234 | 106 |
+| corr(log RMS pasado, log RMS futuro) | +0.2029 | +0.3219 | +0.3961 | **+0.5940** |
+| `R²` fuera de muestra | +0.033 | +0.088 | +0.117 | **+0.292** |
+
+**Hay barra de error viva y autocalibrada a escala de 1-2 h.** Es exactamente lo que el
+operador buscaba con las dos etapas, formulado de modo que no sea tautologico.
+
+**(2) NIS -- ?es honesta la incertidumbre declarada?**
+
+```
+var(z) con sd CONSTANTE  = 1.0000   (por construccion; no informa)
+var(z) con sd PREDICHA   = 1.3089   (1.0 = honesta)
+curtosis: 12.71 con sd constante  ->  8.77 con sd predicha
+fraccion |z| > 3 : 1.266 %  ->  1.915 %   (normal: 0.270 %)
+```
+
+La barra viva **acerca la varianza a 1 y reduce la curtosis**, pero **empeora la cola
+lejana**: en los tramos tranquilos la `sd` predicha es demasiado pequena y una sorpresa da
+un `z` enorme. Sigue siendo sobreconfiada, igual que el NIS del EAKF en la Fase 1.
+
+**(3) `ν` predice el TAMANO del error, debilmente:** `R²` fuera de muestra sobre
+`log|error|` = +0.0140 con `log ν(t−1)` y +0.0272 con los rezagos completos.
+
+⚠ **Defecto propio corregido, y sin corregirlo el veredicto del (2) era otro.** La `sd`
+predicha se estima modelando `log|e|`, y hay que deshacer el sesgo de Jensen: para
+`e ~ N(0,s)`, `E[log|e|] = log s − 0.63518`, asi que `s = exp(E[log|e|] + 0.63518)`. Yo usaba
+`exp(E[log|e|])·√(π/2)` — que es la conversion valida para `E|e|`, **no** para
+`exp(E[log|e|])`. El error era de **1.506× en `s`, o sea 2.27× en `var(z)`**: daba 2.97 y
+habria declarado deshonesta una barra que esta en 1.31.
+
+#### Lo que esto entrega para el §1
+
+`σ` a un paso se predice con `R²` fuera de muestra **+0.6153** y **error relativo mediano
+del 30 %**. Como `R²_req ∝ σ⁻²`, un 30 % en `σ` son **~60 % en el requisito**: suficiente
+para una **compuerta gruesa** de operar / no operar, insuficiente para dimensionar posicion
+con ella. Y con la barra viva del punto (1), esa compuerta puede llevar su propia confianza
+adjunta en vez de un umbral fijo.
+
+---
+
+### Registro de lo ejecutado (lectura retractada, cifras validas)
+
+
+Rehace el §1 de `ORDEN_TRABAJO_HORIZONTE_4_1.md` sobre `captura_estacional`, que el 2026-08-22
+pasó su compuerta. `Micelio.py` sin cambios. Módulo nuevo: `curvas_estacional.py`.
+Acta completa en `telemetria/acta_v41_sec1_estacional.txt`.
+
+### ⚠ VEREDICTO: segundo desenlace del §1.4 — NO HAY BANDA VIABLE
+
+```
+filas con n_val >= 30 (decidibles)              : 15 de 26
+filas decidibles que CRUZAN con control limpio  :  0
+mejor razon R2_medido / R2_req                  : 0.0758   (tramo 2, H = 300 s)
+```
+
+El §1.1 declaró este desenlace admisible **antes de medir**: «este documento no busca rescatar el
+proyecto; busca decidirlo».
+
+### Cuatro tramos, y el régimen pasa a ser una variable medida
+
+| tramo | horas | ticks | `ν` | precio | recorrido | `σ₁` difusivo [pb·s^−½] |
+|---|---|---|---|---|---|---|
+| 0 | 131.83 | 8 898 311 | 18.75 | 62 484 – 64 601 | 3.4 % | 0.3827 |
+| **1** | **82.47** | **19 985 140** | **67.31** | **63 979 – 79 555** | **24.3 %** | **1.0622** |
+| 2 | 34.72 | 4 099 830 | 32.80 | 75 588 – 78 058 | 3.3 % | 0.6333 |
+| 3 | 23.33 | 1 829 242 | 21.78 | 63 212 – 64 470 | 2.0 % | 0.3862 |
+
+Alineado libro-transacción **100 % en los cuatro**, spread mediano **1 tick exacto** en los cuatro,
+y `E[y_mid·ε] > 0` en los cuatro — la convención `m = True → ε = −1` se sostiene en cada réplica.
+
+### §2 — La banda de `H_p` REPLICA, y la superdifusión no
+
+24 ajustes (4 tramos × 6 ventanas de escala), reloj de pared, control barajado en todos:
+
+```
+banda medida ahora : [0.3719, 0.5535]   mediana 0.4932   |sesgo| del control <= 0.0438
+banda publicada    : [0.371 , 0.552 ]
+```
+
+Reproduce la banda del 2026-08-10 con tres decimales, y la **mediana es 0.493: difusivo**. El
+control barajado vuelve a 0.50 en las 24 filas, así que el estimador está limpio a estas
+longitudes. **`H_p = 0.591` de la v3.3 queda fuera de la banda entera** — la retractación se
+confirma con 24 ajustes en vez de 4, y **la superdifusión no replica en ningún tramo**.
+
+### §1 — Las dos curvas. Tabla por tramo
+
+Predictor tonto del §1.3 (flujo firmado acumulado en `{H/4, H/2, H, 2H}`, sin `G(τ)`), ventanas
+no solapadas, partición 60/20/20 **en tiempo** con embargo de 4 h, y el último 20 % de cada tramo
+**sin abrir**. El conjunto de prueba de la v3.2 tampoco se abrió.
+
+| tramo | `H` | n_ent | n_val | **R²_medido** | bar_global | bar_ventana | **R²_req mín** | potencia |
+|---|---|---|---|---|---|---|---|---|
+| 0 | 60 s | 4 745 | 1 341 | **+0.0076** | −0.0052 | −0.0100 | 77.38 % | 0.99 |
+| 0 | 120 s | 2 372 | 670 | +0.0041 | −0.0484 | −0.0179 | 43.31 % | 0.99 |
+| 0 | 300 s | 949 | 267 | −0.0227 | +0.0132 | −0.0470 | 15.75 % | 0.98 |
+| 0 | 600 s | 474 | 133 | −0.0777 | −0.0226 | −0.0914 | 7.33 % | 0.58 |
+| **1** | **60 s** | 2 969 | **748** | **−0.0032** | −0.0021 | −0.0009 | **10.05 %** | 0.92 |
+| **1** | **120 s** | 1 484 | **374** | **−0.0058** | −0.0028 | +0.0038 | **5.62 %** | 0.81 |
+| **1** | **300 s** | 593 | **149** | **−0.0001** | +0.0014 | +0.0073 | **2.04 %** | **1.18** |
+| 2 | 60 s | 1 249 | 176 | −0.0046 | −0.0029 | −0.0099 | 28.26 % | 0.63 |
+| 2 | 120 s | 624 | 88 | −0.0079 | −0.0160 | −0.0085 | 15.82 % | 0.73 |
+| 2 | 300 s | 249 | 35 | +0.0044 | −0.0203 | −0.0195 | **5.75 %** | 0.91 |
+| 3 | 60 s | 840 | 39 | −0.0187 | −0.0098 | +0.0091 | 76.00 % | 0.86 |
+
+**La fila que decide es `tramo 1, H = 300 s`**, y hay que leerla entera: es el régimen **más
+favorable** de los cuatro —24 % de recorrido de precio, `σ₁` 2.8× la del tramo 3, así que el
+requisito se desploma al **2.04 %**—, tiene **149 ventanas** no solapadas, el control positivo
+demuestra que una señal del 2 % **se recupera** ahí (devuelve 2.4 %), y el `R²` medido fuera de
+muestra es **−0.0001**. Cero exacto donde el peaje era más barato que nunca.
+
+### ⚠ El control positivo de potencia — sin él «R² = 0» no habría sido un resultado
+
+La cuarta fila del §1.4 manda no leer una `H` donde el barajado es comparable al real. Aquí **los
+dos salen ≈ 0**, así que la regla no discrimina entre «no hay señal» y «no hay potencia» — y sólo
+una de las dos decide el proyecto. Se inyecta en el objetivo una señal del tamaño **exactamente
+igual al `R²` requerido** y se mide con el mismo procedimiento:
+
+| n_val | ≥ 267 | 133–176 | 88 | ≤ 49 |
+|---|---|---|---|---|
+| razón recuperado/inyectado | **0.98–1.18** | 0.58–0.63 | 0.73 | negativa |
+
+**11 de las 15 filas decidibles tienen potencia demostrada**, y son las que sostienen el veredicto.
+Las 4 que no (H ≥ 600 s en los tramos 0 y 1) se marcan y **no se leen**, aunque su `R²` medido sea
+negativo y «favorezca» la conclusión.
+
+⚠ **Tres versiones del control fueron mías y estaban mal**, y el patrón es el mismo de siempre:
+
+1. Normalizando con estadísticos de **entrenamiento**, la señal inyectada llegaba encogida a
+   validación —los rasgos de flujo no son estacionarios en escala— y el control declaraba «sin
+   potencia» con 1 249 puntos de ajuste.
+2. Normalizando **globalmente**, seguía contaminado: la varianza del retorno real cambia hasta
+   **4.6×** entre bloques (columna `sd(y)val/ent`: 0.38 en el tramo 0, 1.85 en el 2), así que el
+   control medía agrupamiento de volatilidad y no tamaño muestral.
+3. Con **una sola dirección** de señal el resultado saltaba de 0.32 a 1.6 entre celdas vecinas: los
+   cuatro rasgos son sumas acumuladas anidadas y hay direcciones casi degeneradas. Se promedia
+   sobre **25 sorteos** y la razón pasa a ser monótona en `n`, que es lo que debe ser.
+
+La versión correcta normaliza **dentro de cada bloque** —la pregunta es si una fracción `R²_req`
+de la varianza *de validación* sería visible— y promedia sobre direcciones.
+
+### Lo que esto cierra, y lo que deja abierto
+
+**Cierra.** La hipótesis del horizonte era, según el §1.1, **la única palanca con el orden de
+magnitud correcto** para el factor 3.46 que dejó parada la v3.2. Medida en cuatro regímenes de `ν`
+que van de 18.8 a 67.3 tx/s, con hasta 1 341 ventanas y con potencia acreditada, **no cruza en
+ninguno**. El mejor margen es **0.076**, o sea un factor **13** de defecto, y el §1.2 dice que
+refinar el predictor sólo tiene sentido «si la curva cruza con el predictor tonto o queda cerca».
+No queda cerca.
+
+**No cierra:**
+- El `+0.0076` del tramo 0 a 60 s (1 341 ventanas, controles en −0.005 y −0.010) es **señal real y
+  fuera de muestra**. Es el mismo cuadro que el paso 2 de la v3.2: **hay estructura medible y es
+  ~100× menor que el peaje**. Lo que se refuta no es que exista señal, es que pague.
+- El §1 se midió con el predictor que el propio documento impone. Un predictor mejor no está
+  descartado *en principio*; está descartado *por el criterio del documento*, que es distinto y hay
+  que decirlo así.
+- Nada de esto toca `H > 4 h`: a 4 h el tramo más largo da 5 ventanas de validación. La banda de
+  decenas de minutos sí queda cubierta, y es la que importaba.
+
+### Reservas declaradas
+
+1. **`c(u)` sigue usando tarifas asumidas VIP 0.** Mismo criterio no cumplido que en la v3.1 y la
+   v3.2: `/fapi/v1/commissionRate` es firmado y el Modo LECTURA no tiene credenciales.
+2. **La partición es 60/20/20 en tiempo**, así que entrenamiento y validación son tramos
+   *distintos* de mercado. Con la volatilidad cambiando hasta 4.6× entre bloques, eso penaliza al
+   `R²` fuera de muestra — y es deliberado: es la situación real de operar.
+3. **Cuatro tramos no son cuatro muestras independientes** del mercado: son cuatro trozos de doce
+   días consecutivos de BTCUSDT.
+4. `curvas_estacional.py` **no tiene suite propia**; importa las funciones de `horizonte.py`, que
+   sigue en **14/14**, así que la aritmética de las dos curvas es la ya verificada. Lo nuevo y no
+   cubierto por controles es la carga por tramos, que sí se verificó por sus invariantes
+   (cobertura 100 %, spread de 1 tick, `G(0) > 0` en los cuatro).
+
+---
+
+### `c(u)` real (2026-08-23) -- `coste.py`, 13/13 controles
+
+**`c(u)` es el COSTE DE TRANSACCION de ida y vuelta por unidad, en pb**, y la `u` esta ahi
+porque depende de la accion (maker o taker). **No** es el coeficiente difusivo de Loeper
+-- ese es `sigma^2`, la misma `sigma` que ahora se pronostica -- ni `c2_vol = k*omega_m*nu`.
+Tres `c` distintas, y `coste.py` pasa a ser la fuente unica.
+
+**Descomposicion, con procedencia por componente:**
+
+| componente | procedencia | valor |
+|---|---|---|
+| comision | endpoint **FIRMADO** | ⛔ **ASUMIDA** VIP 0. **81.8 %** de `c(u)` |
+| cruce de spread | la captura, 34.8 M ticks | ✅ **MEDIDO: 0.0146 pb** |
+| seleccion adversa | v4.0 §5 | ✅ medida: 0.888 pb |
+| financiacion | endpoint **PUBLICO** | ✅ **LEIDA: 0.4261 pb / 8 h** |
+
+**Lo que se cerro hoy:**
+
+1. **La financiacion se LEE**, ya no se asume. 500 periodos, 2026-03-10 → 08-24:
+   `|tasa|` mediana **0.4261 pb/8 h** (p90 0.8928, ultimos 30 dias 0.6147), media con signo
+   **+0.2333** — y con signo importa, porque **es una transferencia, no un coste: un corto
+   la COBRA**. La constante asumida era 0.9681 pb/8 h, o sea **2.27x demasiado alta**. El
+   efecto sobre el §1 es nulo por debajo de 1 h y < 2.5 % a 2 h, asi que no cambia ningun
+   veredicto — pero deja de ser un numero inventado.
+2. ⚠ **Defecto corregido en `horizonte.py`**: alli la financiacion es
+   `max(H_s − 3600, 0)/(8·3600)`, o sea **cero por debajo de una hora**, sin justificacion.
+   Una tenencia de `H` cruza una marca de financiacion con probabilidad `H/(8 h)`, asi que
+   su coste esperado es **lineal en `H` desde 0**. Numericamente irrelevante (0.0044 pb a
+   300 s contra 4 pb de comision) pero corregido en `coste.py`.
+3. **El spread es despreciable, y por mucho mas de lo que se creia.** Mediana **0.0146 pb**
+   sobre 34.8 M de ticks alineados, contra 4.00 pb de comision maker ida y vuelta: **274x**.
+   Y la diferencia taker−maker (6 pb) es **411x** el spread. **Cruzar el spread no es lo que
+   cuesta; cuesta el escalon de comision.**
+4. ⚠ **Inconsistencia del repo, encontrada al unificar.** `propagador.py` y `cola.py` usan
+   taker = `0.0005` (correcto para futuros USD-M VIP 0); `horizonte.py` **ignora la taker por
+   completo** y su `LASTRE_IDA_VUELTA_PB` sólo lleva maker.
+
+**Y eso ultimo importa mas que todo lo demas de este apartado:**
+
+| esquema | `c(u)` a H = 300 s | `R²_req` × | tramo 1 a 300 s |
+|---|---|---|---|
+| **maker + maker** (lo que el §1 uso) | 4.8926 pb | ×1.00 | 2.04 % |
+| maker + taker | 7.4558 pb | ×2.32 | 4.74 % |
+| **taker + taker** | **10.0190 pb** | **×4.19** | **8.55 %** |
+
+**Todo el §1 se midio suponiendo llenado maker perfecto en las dos patas — el mejor caso
+posible.** Con ejecucion taker el requisito se multiplica por 4.2.
+
+**Lo que NO se puede cerrar, y por que:**
+
+- ⛔ **El criterio del §8 sigue incumplido.** `/fapi/v1/commissionRate` es firmado y el
+  **81.8 %** de `c(u)` descansa en ese numero. `coste.py` trae el lector firmado listo
+  (`leer_comision_firmado`) y una bandera `COMISIONES_LEIDAS` que **no se puede poner a
+  cierto sin pasar tarifas explicitas**, con test que lo comprueba.
+- ⚠ **NO valen las credenciales de Testnet.** El escalon es propiedad de la CUENTA (nivel
+  VIP, descuento BNB, referido) y la de Testnet no es la de Mainnet. La v1.3 ya midio que el
+  `stepSize` de Testnet es 10x mas fino y dejo escrito que calibrar contra el entorno
+  equivocado produce un sistema que funciona en pruebas y se degrada en produccion.
+- **Basta una clave de MAINNET de SOLO LECTURA.** Este endpoint no necesita permiso de
+  trading ni de retiro, y pedir mas permisos de los necesarios es el riesgo que no hay que
+  correr.
+- ⚠ **La tercera pata: `c(u)` no es constante.** Con llenado maker incierto,
+  `c_efectivo = p·c_maker + (1−p)·C_respaldo`. `cola.py` ya tiene la estructura; `p` y
+  `C_respaldo` son el §5 de la v4.1, pendiente y a su vez a la espera de que el §1 diga a
+  que horizonte.
+
+#### Lectura firmada de TESTNET (2026-08-23) -- verifica el codigo, NO cierra el criterio
+
+El operador paso las credenciales de la cuenta **demo**. Se advirtio antes de usarlas que
+Testnet no cierra el §8 y se uso igual, con la procedencia marcada. **Las claves no se
+escriben en ningun archivo del repo ni se imprimen**; el lector las toma en memoria.
+
+| endpoint firmado | resultado [TESTNET] | contra lo asumido |
+|---|---|---|
+| `/fapi/v1/commissionRate` maker | **0.000200** | **COINCIDE exacto** |
+| `/fapi/v1/commissionRate` taker | **0.000400** | ⚠ **el repo asume 0.000500: 25 % mas alta** |
+| `/fapi/v2/account` | `feeTier = 0` | confirma VIP 0 |
+| `/fapi/v1/leverageBracket` tramo 1 | **mmr = 0.0040** (nocional ≤ 50 000) | **COINCIDE exacto** |
+
+**Tres cosas que esto si establece:**
+
+1. **El codigo de firma funciona de punta a punta.** `leer_comision_firmado` esta verificado
+   contra un servidor real; cuando haya credenciales de Mainnet es correr y ya.
+2. ⚠ **La comision taker del repo esta desactualizada en 4 modulos.** `propagador.py`,
+   `cola.py`, `tick_grande.py` y `coste.py` asumen `0.0005`; la lectura da `0.0004`
+   -- Binance bajo la taker de futuros de 0.0500 % a 0.0400 % en algun momento y el proyecto
+   no se entero. **Se conserva 0.0005 por omision porque es la CONSERVADORA** (mas coste =
+   requisito mas duro = conclusion negativa mas robusta) y se expone la leida al lado. Con la
+   leida, `c(u)` taker+taker baja de 10.02 a **8.02 pb** y `R²_req` se multiplica por **0.64**.
+3. ✅ **El hueco de `mmr` de la v1.3 queda cerrado.** Aquella sesion dejo escrito que
+   `leverageBracket` es firmado, que `mercado.leer_mmr` devuelve el valor asumido **inflado
+   por un factor de seguridad de 2x** y que la guarda queda conservadora ante la duda. La
+   lectura confirma `mmr = 0.0040` para el primer tramo, **exactamente el valor asumido**: el
+   factor 2x era conservadurismo, no ignorancia.
+
+⚠ **Lo que NO establece, y por que se mantiene el criterio como incumplido:** el escalon es
+propiedad de la **cuenta de Mainnet**. Una cuenta de Testnet nace en `feeTier = 0` por
+construccion y no sabe nada del descuento BNB (−10 %), del nivel VIP real ni de un referido.
+`COMISIONES_LEIDAS` sigue en `False` y hay test que lo comprueba. **Basta una clave de
+Mainnet de SOLO LECTURA** -- este endpoint no necesita permiso de trading ni de retiro.
+
+#### Lectura de MAINNET (2026-08-23): el criterio del §8 pasa a PARCIAL
+
+El operador paso tambien las credenciales de Mainnet. **Las claves no se escriben en ningun
+archivo del repo ni se imprimen**, y se verifico con `git grep` que no quedan en el arbol ni
+en el indice -- el `origin` es publico.
+
+⚠ **`/fapi/*` devolvio `-2015` desde la IP 191.104.7.185.** El diagnostico por
+`/sapi/v1/account/apiRestrictions` lo separa sin ambiguedad:
+
+```
+enableReading    True      <- la clave es valida y llega
+enableFutures    False     <- ESTE es el bloqueo
+ipRestrict       False
+enableWithdrawals / trading / margin ...  todos False
+```
+
+La clave es exactamente la de solo lectura que se pidio, pero **los endpoints de futuros
+exigen `enableFutures` aparte**, y Binance solo deja activarlo sobre una clave con
+**lista blanca de IP**.
+
+**Lo que si se leyo, y cambia el estado del criterio:** `/api/v3/account` devolvio
+`commissionRates` de spot = **0.00100000** maker y taker, que es exactamente el escalon
+**VIP 0** de spot. El nivel VIP de Binance es **unificado** entre spot y futuros -- lo fija
+el volumen a 30 dias y la tenencia de BNB, no el producto -- asi que **la cuenta esta en
+VIP 0 tambien en futuros**, y de ahi salen `maker 0.0200 %` y `taker 0.0400 %`.
+
+| pieza | procedencia |
+|---|---|
+| nivel VIP = 0 | ✅ **LEIDO de la cuenta de Mainnet** |
+| tarifas de futuros para VIP 0 | tabla publica |
+| descuento BNB en futuros | ⛔ **sin leer** (`/fapi/v1/feeBurn` necesita `enableFutures`) |
+
+**El §8 pasa de INCUMPLIDO a PARCIAL.** Y lo que falta solo puede mover la comision hacia
+ABAJO (−10 % si el BNB burn esta activo: `c(u)` maker de 4.8926 a 4.4926 pb, `R²_req` ×0.84).
+
+⚠ **Eso importa para leer el §1, y en la direccion buena:** la cifra actual es una **cota
+superior** del coste. Para una conclusion **negativa** como la del §1 es justo lo que se
+quiere -- si no cruza con el coste maximo, tampoco cruzaria con el real. Solo morderia si la
+conclusion fuera positiva.
+
+⚠ **Y la taker se CORRIGE de 0.000500 a 0.000400**, por dos vias independientes que coinciden:
+la lectura de Testnet y la derivacion del VIP 0 leido de Mainnet. El `0.0005` que arrastraban
+`propagador.py`, `cola.py` y `tick_grande.py` es una tarifa **vieja**. Consecuencia:
+`c(u)` taker+taker baja de 10.02 a **8.02 pb** y `R²_req` ×0.64. **Atencion al sentido: es un
+cambio que AFLOJA un criterio**, y esos hay que mirarlos dos veces; aqui no toca ningun
+veredicto porque todo el §1 se midio con maker+maker, que no cambia.
+
+⚠ **Un control propio fallo al hacer el cambio, y estuvo bien que fallara.** El test tenia
+clavado `taker+taker = 10.00 pb` y detecto que la constante se habia movido. Es exactamente
+lo que impide que una tarifa cambie en silencio -- que es como el `0.0005` viejo sobrevivio
+en cuatro modulos sin que nadie lo notara.
+
+**Para cerrar el §8 del todo** hace falta, sobre la clave de Mainnet: activar
+*«Restringir el acceso solo a IP de confianza»*, anadir la IP de la maquina de captura, y
+entonces marcar **«Habilitar Futuros»** (Binance no lo ofrece sin lista blanca). Sin permisos
+de trading ni de retiro. Con eso, `coste.py --leer` lee `commissionRate` y `feeBurn` reales.
+
+---
+
+## HOJA DE RUTA tras la sesión 2026-08-23 — qué falta, y el dimensionamiento de posición
+
+Escrita a partir de lo medido el 2026-08-23, no de lo planeado antes. Todo lo que se
+afirma aquí tiene su número en las secciones de esa sesión.
+
+### 0. El estado en una frase
+
+**Hay un modelo del RÉGIMEN y no hay una señal.** `ν` y `σ` están medidas, tienen ciclo con
+período conocido, se pronostican a un paso (`R²` = 0.615) y traen barra de error viva. Lo
+que no existe es `α`: el §1 midió `R² ≈ 0` con el predictor que su propio documento impone,
+y su veredicto está **retractado** por estacionalidad, no confirmado. Sin `α` no hay nada
+que dimensionar. **El dimensionamiento es aguas abajo de una señal que todavía no existe**,
+y por eso lo de abajo se escribe como maquinaria condicional, no como plan de ejecución.
+
+---
+
+### 1. El dimensionamiento de posición
+
+#### 1.1 La fórmula, y de dónde sale cada término
+
+Con el coste **lineal** de la decisión de diseño 2 (2026-08-09) y penalización cuadrática
+de riesgo, el objetivo por ciclo es
+
+```
+J(u) = -alpha*u + c*|u| + (1/2)*R*u^2
+```
+
+cuyo óptimo es una **banda muerta** seguida de una rampa:
+
+```
+|alpha| <= c        ->  u* = 0                       <- el bot se abstiene
+|alpha| >  c        ->  u* = sign(alpha) * (|alpha| - c) / R
+```
+
+y con `R = gamma * sigma_H^2` (varianza al horizonte de tenencia `H`):
+
+```
+u* = sign(alpha) * (|alpha| - c) / (gamma * sigma_H^2)
+u_final = sign(u*) * min( |u*|, techo_de_riesgo )        <- decisión de diseño 3: `min`, NO derivación
+```
+
+| término | qué es | estado hoy |
+|---|---|---|
+| `alpha` | ventaja esperada por unidad, en pb | ⛔ **NO EXISTE.** §1 retractado; el mejor `R²` con potencia fue ≈ 0 |
+| `c` | coste ida y vuelta, en pb | ⚠ **4.00 pb con tarifas ASUMIDAS VIP 0**. Criterio incumplido desde la v3.1 |
+| `sigma_H` | volatilidad al horizonte de tenencia | ✅ **pronosticable**, `R²` = 0.615 a un paso de 5 min |
+| `gamma` | aversión al riesgo | decisión de política. **No se deriva del techo** (cancela `alpha`) |
+| techo | `I_max`, `nocional_max_posicion` | ✅ vivo en la capa de riesgo de la v1.3 |
+
+#### 1.2 Lo que la sesión de hoy cambia, y es lo más importante del apartado
+
+**Un tamaño fijo está mal por dos órdenes de magnitud.** El nivel diario de `sigma` recorre
+**13.75×**, así que `sigma^2` recorre **~190×**. Como `u* ∝ 1/sigma^2`, un tamaño constante
+estaría mal dimensionado por ese factor entre el día más tranquilo y el más agitado. **El
+dimensionamiento TIENE que ser condicional al pronóstico de `sigma`**, y hoy por primera
+vez ese pronóstico existe.
+
+#### 1.3 ⚠ Y el pronóstico puntual NO se puede enchufar tal cual: sobredimensiona 1.9×
+
+El error de pronóstico de `log sigma` tiene `sd = 0.5676` y es aproximadamente normal en
+logaritmos. Entonces, con `sigma_real = sigma_hat * exp(e)` y `e ~ N(0, 0.5676^2)`:
+
+```
+E[ 1/sigma_real^2 ]  =  (1/sigma_hat^2) * exp(2 * 0.5676^2)  =  1.905 / sigma_hat^2
+```
+
+**Enchufar `sigma_hat` en `1/sigma^2` sobredimensiona por un factor 1.9.** Es la misma
+desigualdad de Jensen que ya mordió hoy en el NIS de la barra de error, y por tercera vez
+en el proyecto (tras `q̄`/`G_0` y el propio NIS). No es un matiz: es casi el doble de
+posición.
+
+**Y la dispersión del pronóstico es mayor que su sesgo.** El error relativo mediano en
+`sigma` es del **30 %**, que en `sigma^2` son **~69 %**; y el cuantil 90 del pronóstico está
+en `2.07 * sigma_hat`, o sea **4.29× en `u`** entre dimensionar con la mediana y dimensionar
+con el decil superior.
+
+**Regla que sale de esto, y se escribe como decisión:** dimensionar con un **cuantil
+superior** de la distribución predictiva de `sigma`, no con su mediana. Cuál cuantil es una
+elección de política —el decil superior cuesta 4.3× de tamaño frente a la mediana— pero
+usar la mediana **no** es una opción neutral: es una elección que sobredimensiona.
+
+#### 1.4 La barra de error es viva, así que el cuantil también debe serlo
+
+El error de pronóstico reciente predice el siguiente (corr **+0.594** a 2 h, `R²` fuera de
+muestra **+0.292**). O sea que la anchura de la distribución predictiva **no es constante** y
+se puede estimar en línea. Consecuencia operativa: en tramos donde el error reciente es
+grande, el cuantil superior se aleja más y el tamaño baja **solo**, sin umbral fijo.
+
+⚠ Con la reserva medida: la barra viva lleva `var(z) = 1.31` contra el 1.0 honesto, y
+**empeora la cola lejana** (`|z| > 3` pasa del 1.27 % al 1.92 %). Es sobreconfiada justo en
+los tramos tranquilos, que son donde un salto sorprende más. Cualquier dimensionamiento que
+cuelgue de ella necesita **suelo** además de cuantil.
+
+#### 1.5 El horizonte de tenencia entra al cuadrado, y su exponente es una banda
+
+`sigma_H = sigma_1 * H^H_p` con `H_p` en **[0.372, 0.554]** (24 ajustes, 4 tramos). Anclando
+en `H_ref = 100 s`, la banda contribuye a `sigma_H^2`:
+
+| `H` | factor de incertidumbre en `sigma_H^2` por la banda de `H_p` |
+|---|---|
+| 300 s | **1.49×** |
+| 1 h | 3.69× |
+| 4 h | **6.10×** |
+
+**Por debajo de ~10 min la banda de `H_p` no es la restricción vinculante** (manda el error
+de pronóstico de `sigma`, 69 % en `sigma^2`); **por encima de una hora sí lo es**. Eso
+importa porque el §1, si alguna vez cruza, cruzará en la banda de decenas de minutos.
+
+#### 1.6 La granularidad convierte la rampa en escalera
+
+`minQty = 0.001 BTC ≈ 96 USD` (decisión de diseño 4) es el paso mínimo expresable. Cerca de
+la banda muerta, `u*` redondea a cero — lo cual es **correcto** (es abstenerse), pero
+significa que **la banda muerta efectiva es más ancha que `c`** y hay que medirla, no
+suponerla. Con `I_max = 0.5 BTC` quedan 500 pasos de resolución sobre el rango completo.
+
+---
+
+### 2. Lo que falta por hacer, en orden
+
+#### 2.1 BLOQUEANTE — rehacer el §1 con lo aprendido
+
+Sin esto no hay `alpha` y todo lo demás es maquinaria sin motor. Cuatro cambios, los cuatro
+justificados por medición de hoy:
+
+1. **Ventanas retrospectivas en SEGUNDOS**, no en `f*H*nu` ticks con `nu` escalar. `nu`
+   recorre 0.55×–2.17× de su media, así que en la hora punta la ventana cubre el **46 %** de
+   los segundos que dice cubrir.
+2. **`sigma_1` y por tanto `R2_req` condicionales al PRONÓSTICO de `sigma`**, no a la hora de
+   reloj. Es donde está el recorrido de 190×, contra el ~8× de la hora — y ese 8× además
+   salió inflado por medias horarias confundidas con el nivel del día.
+3. **Estratos declarados antes de mirar el `R²`.** Recomendación: terciles del `sigma`
+   pronosticado, que es conocido *ex ante* y captura la palanca grande.
+4. **Control positivo de potencia dentro de cada estrato.** Ya existe y está probado; hoy
+   acreditó 11 de 15 filas y descartó las otras 4.
+
+**Criterio de lectura, sin cambios:** el §1.4 se aplica literalmente y «no hay banda viable»
+sigue siendo un desenlace admisible.
+
+#### 2.2 `c(u)` REAL — criterio incumplido desde la v3.1
+
+`/fapi/v1/commissionRate` es firmado. Con tarifas asumidas, todo el criterio económico
+descansa en un número que nadie ha leído de la cuenta. Es barato de arreglar y lleva tres
+versiones pendiente.
+
+#### 2.3 Extender el pronóstico de `sigma` al horizonte de tenencia
+
+Hoy `sigma` se pronostica a **un paso de 5 min**. El dimensionamiento necesita `sigma_H`
+con `H` = el horizonte que el §1 señale. Hay que medir directamente a esa escala en vez de
+extrapolar con `H_p`, precisamente porque `H_p` es una banda y su contribución crece con `H`
+(§1.5).
+
+#### 2.4 Cerrar la v4.1
+
+- **§6** (micro-precio de Stoikov): sólo la fracción de ceros es barata. Hoy se midió que
+  `y_mid` es nulo el **95–97 %** de las veces en los cuatro tramos, así que el margen que
+  §6 persigue sigue ahí.
+- **§5** (`C_respaldo`) — después de que el §1 diga a qué horizonte.
+- **§4** (`η̂` con barrido de colapso) — deuda de reporte, no decisión.
+
+#### 2.5 Datos
+
+- La captura corre hasta el **2026-09-02**. Con **≥ 4 semanas** el perfil semanal deja de ser
+  exploratorio por su propio criterio; hoy son 13 días y ~4 de fin de semana, y eso ya
+  bastó para que los bloques de finde sobreajustaran en `sigma`.
+- **`@depth` no se está capturando.** H1 (presión del libro) sólo se pudo contrastar con
+  nivel 1 y salió que no aporta; para contrastarla de verdad haría falta profundidad a
+  varios niveles. Es una decisión de captura, no de análisis.
+
+#### 2.6 Lo que NO hay que hacer
+
+- **No tocar `Micelio.py`** hasta que el §1 decida. Su auditoría de 2026-08-09 sigue vigente:
+  el código está sano y su modelo no.
+- **No refinar el predictor del §1** antes de rehacerlo bien. El §1.2 lo condiciona a que la
+  curva «cruce o quede cerca», y con el predictor tonto el mejor margen fue **0.076**.
+- **No derivar `gamma` del techo de riesgo** (decisión 3): cancela `alpha` y el tamaño deja
+  de responder a la señal.
+- **No construir ningún nulo sin separar antes nivel diario y forma intradía.** Tres nulos
+  propios fallaron hoy por exactamente eso.
+
+---
+
+## AUDITORÍA DE `Micelio.py` (2026-08-09) — qué pasaría si se arrancara hoy
+
+`Micelio.py` no se toca desde la v2.2. Desde entonces se han refutado varias de las cantidades
+que lo gobiernan, y **el código no lo sabe**. Esta sección dice qué sigue en pie, qué está muerto
+y qué haría el bot si alguien lo arrancara. **No es una lista de tareas** — no se toca nada hasta
+que la v3.2 decida.
+
+### ⚠ Lo que más importa: el objetivo de posición NO CONTIENE NINGUNA SEÑAL
+
+La condición terminal de Loeper es `U = ½γ₀(S − S_ref)²` con `γ₀ = I_max/(S·ΔS_max)`. La
+cobertura objetivo denominada en BTC sale de ahí por derivación directa:
+
+```
+S·∂U/∂S  =  S·γ₀·(S − S_ref)  =  I_max · (S − S_ref) / ΔS_max
+```
+
+**El inventario objetivo es una función lineal del desplazamiento respecto del nodo de fase,
+escalada por el techo de riesgo. No hay `α` en ninguna parte.** El bot no compra porque espere
+que el precio suba: compra porque el precio se ha alejado de `S_ref`, y compra exactamente
+`I_max` cuando se aleja `ΔS_max`.
+
+Eso es la decisión 3 de abajo llevada al límite: no es que `γ` derivado del techo de riesgo
+*cancele* `α` — es que **`α` nunca entró en la formulación**. Y el ancla `S_ref` es un nodo de
+fase de la EMD, que es justo lo que la v2.2, la v3.0 y la v3.2 refutaron.
+
+### ⚠ Segundo: el bot no puede abstenerse
+
+El coste del NMPC es **puramente cuadrático** (línea 1104):
+
+```
+J = Σ [ q_Δ·e_k² + q_inv(Ω)·I_k² + R_eff,k·(u_c,k² + u_v,k²) ]  +  p_Δ·e_N² + p_inv·I_N²
+```
+
+Sin término lineal en `|u|` **no hay banda muerta**: el óptimo de una cuadrática con objetivo no
+nulo es siempre `u ≠ 0`. El bot opera *siempre* que haya desviación, por pequeña que sea, y solo
+lo frenan las restricciones de caja y el freno de singularidad. Es exactamente lo que la decisión
+2 corrige, y es la razón de que esa decisión sea v3.4 y no un detalle.
+
+### Qué está muerto pero conectado, y qué lo salva
+
+| cantidad | estado empírico | qué hace hoy en el código |
+|---|---|---|
+| `ω_m`, `ω_ang` | **sin sustento** (v2.2, v3.0, v3.2) | alimenta `A_arm` y `c²_vol = k·ω_m·ν` |
+| `A_arm` / rama armónica | el oscilador **no existe** (`k = 0`, raíces reales) | se conmuta por `C` con histéresis |
+| `C` (concentración espectral) | inflada por la escalera de ventana | decide la rama de `A` |
+| nodos de fase → `S_ref` | son armónicos de la ventana (`T = 2L/k`) | **compuerta de todo el lazo** y ancla del objetivo |
+| `Ω`, `Φ`, `Ψ` | **sin sustento** | `q_inv(Ω)` y `R_eff = R_base + κΩ²` |
+
+**Lo que lo salva de hacer daño, y es un accidente afortunado:** la guarda de banda de la v2.1
+declara `omega_valida` cierta solo el **12.5 %** de las ventanas. Cuando es falsa, `ω_ang` va a
+NaN, `Ω` se congela y degrada a 0 pasados 120 s, y la rama de `A` cae a velocidad constante. O
+sea que **el 87.5 % del tiempo el acoplamiento endógeno está efectivamente desconectado** y el
+filtro corre como un EAKF de velocidad constante en reloj de ticks — que es justo lo que la v3.0
+§6.2 lista como superviviente.
+
+Dicho de otro modo: **el sistema funciona hoy porque su parte refutada casi nunca se activa.**
+
+Y hay una compuerta más, en la línea 2486: `if is_burnt_in and dropout == 0 and nu > 0.0 and
+S_ref > 0.0`. Sin un nodo de fase detectado **el bot no opera en absoluto**. La cadena entera
+cuelga de un detector cuya base empírica cayó.
+
+### Lo que sí sobrevive intacto
+
+Coincide con la lista del §6.2 de la v3.0, y la auditoría lo confirma leyendo el código:
+
+- **Reloj de transacciones** (Δn = 1), ingesta por lotes, deduplicación por `aggTradeId`,
+  detección de huecos, `Q(Δt)` acumulada correctamente.
+- **Capa de riesgo entera** (v1.3): 7 guardas con `causa_halt` distinguible, ruta de cierre que
+  no reporta éxito sin posición plana confirmada, máquina de episodios con `DETENIDO` terminal.
+- **EAKF** con corrección una vez por paquete, actualización multi-tasa, NIS y burn-in.
+- **Loeper backward** y su condición CFL — el esquema es correcto; lo discutible es su
+  condición terminal, no su integración.
+- **Infraestructura**: instancia única por latido, seqlock, ring buffer SPSC con detección de
+  sobrepaso, telemetría con `ỹ_k`, recuperación de memoria compartida huérfana en Windows.
+
+### Defectos de código encontrados en esta pasada
+
+Ninguno nuevo de corrección. Los que había siguen documentados en las secciones históricas.
+
+⚠ **Lo que sí hay que anotar como riesgo latente:** `apply_filters` valida contra `minNotional`
+y el orden de trabajo v4.0 (decisión 4) establece que **el filtro que ata es `minQty` = 0.001 BTC
+≈ 96 USD**, no los 50 USDT del nocional. A precios actuales `minQty` es el doble de restrictivo.
+No es un error de la v1.3 —entonces se midieron los dos— pero sí una cifra que envejeció.
+
+### Conclusión de la auditoría
+
+**El código está sano; su modelo no.** Lo que hay que cambiar cuando la v3.2 decida no son bugs:
+son tres decisiones de diseño —el objetivo de posición sin señal, el coste sin término lineal, y
+el ancla en un nodo de fase refutado— y las tres están ya identificadas y fuera del alcance de
+esta tanda.
+
+## Decisiones de diseño tomadas fuera de sesión (2026-08-09)
+
+Acordadas en conversación entre el operador y Claude. **No son tareas**: son decisiones que
+cierran discusiones abiertas y que hay que conocer antes de tocar lo que afectan.
+
+**1. El problema de la secretaria queda RECHAZADO.** No se cumple ninguna de sus cinco premisas
+—elección única, irrevocable, sin recuerdo, solo rango ordinal, objetivo «el mejor»— y el mercado
+no es ninguna de esas cosas. La regla de **cuándo operar** es la banda muerta `|α| > c_efectivo`.
+Donde sí hay un problema de parada óptima genuino es en **`τ*`: cuándo cancelar la orden maker y
+cruzar**, que es el sucesor natural del §5 de la v4.0 en lazo cerrado.
+
+**2. El coste del NMPC es LINEAL, no cuadrático.**
+
+```
+J = −α·u + c·(u⁺ + u⁻) + ½R(u⁺ − u⁻)²      con  u⁺, u⁻ ≥ 0
+```
+
+La complementariedad `u⁺·u⁻ = 0` sale **gratis** porque `c > 0`. **Sin el término lineal no hay
+banda muerta y el bot nunca se abstiene** — opera siempre, aunque `α` sea ruido. Es **v3.4**:
+toca `Micelio.py` y va **después** de que `c(u, estado)` exista.
+
+⚠ Esto reabre la contradicción #1 del PDF por el otro lado. La Sec. 6.1 descartaba la norma L1
+por no diferenciable en SQP; la formulación de arriba la recupera **sin** perder
+diferenciabilidad, separando `u` en parte positiva y negativa. La Sec. 4.5 tenía razón en pedir
+L1 y la 6.1 en rechazar la formulación ingenua.
+
+**3. `γ` NO se deriva del techo de riesgo.** Hacerlo **cancela `α` algebraicamente** y el tamaño
+deja de responder a la señal: el bot operaría el mismo tamaño con señal fuerte y con señal
+nula. Son **dos términos separados con un `min`**, no uno derivado del otro.
+
+**4. El filtro que manda es `minQty = 0.001 BTC ≈ 96 USD, no el `minNotional` de 50 USDT.** La
+v1.3 §A midió los dos y se quedó con el análisis del nocional; a los precios actuales el que ata
+es `minQty`. Se consulta `/fapi/v1/exchangeInfo` **al arrancar y sin cachear** — el propio
+proyecto ya documentó que Testnet es 10× más fino que Mainnet y que calibrar contra el entorno
+equivocado produce un sistema que funciona en pruebas y se degrada en producción.
+
+**5. `PLAN_CAPITAL_5_0.md` es CONDICIONAL** y no se ejecuta hasta que pase el **paso 3** de la
+regla de decisión de la v3.2 — el criterio económico, el único con dinero detrás.
+
+### ⚠ v4.1 §6.2 CERRADO — M0/M1/M2 reajustados sobre el micro-precio. **El observable no era el problema**
+
+`micro_v42.py`, 5/5. Habilitado por el §7.3 (×7.2 en observaciones informativas). Ajuste en
+**entrenamiento**, evaluación en **validación**. **El conjunto de prueba de la v3.2 NO se abre.**
+
+| observable | % ceros | `ΔLL/N` M2−M0 | **`q90(\|μ̂\|)`** [USD/BTC] | `q90 / 1.5·c(u)` |
+|---|---|---|---|---|
+| punto medio | 96.67 % | 7.763e-03 | **12.5397** | 0.321 |
+| **MICRO-PRECIO** | **76.16 %** | 6.175e-03 | **12.3815** | 0.317 |
+| precio de transacción | 72.61 % | 6.158e-03 | 0.2173 | 0.006 |
+
+**El micro-price NO mejora `μ̂`.** `q90` pasa de 12.54 a **12.38** — igual dentro del ruido, y
+si acaso **más bajo**. La hipótesis de que la discretización del punto medio estuviera
+**atenuando** `μ̂` queda **refutada**: multiplicar por 7.2 las observaciones informativas no se
+traduce en señal económica.
+
+**El paso 3 sigue fallando, y ahora contra números medidos en vez de asumidos:**
+
+```
+q90(|mu|) = 12.38   contra  1.5*c(u) = 39.05 USD/BTC  ->  falta 3.2x
+q90(|mu|) = 12.38   contra  1.5*L    = 60.91 USD/BTC  ->  falta 4.9x
+```
+
+⚠ **Con el lastre COMPLETO el déficit crece de 3.2× a 4.9×.** La v3.2 comparaba contra `c(u)`
+sola (comisión); el lastre real medido en el §2 de la v4.2 —que incluye selección adversa y el
+respaldo ponderado por la tasa de llenado— es 6.24 pb a 15 min, no 4.00.
+
+**Detalles que confirman que el ajuste es el mismo, no otro:**
+
+- El punto medio da `ΔLL/N = 7.763e-03` en **validación**, contra el `+7.553e-03` que la v3.2
+  publicó en **prueba**: consistente para bloques distintos, y sirve de comprobación de que el
+  reajuste no cambió nada más que el observable.
+- `β` del M2: **−0.1596** sobre el punto medio y **−0.1576** sobre el micro-precio. El régimen
+  de `τ₀` en cota **no depende del observable** — coherente con la reclasificación del §3.4 de
+  la v4.1, que ya lo había degradado a «ajuste no identificado».
+- Residuo de M2 **blanco** en los dos (`ρ₁` = −0.0068 y −0.0066), y **estructurado** en el precio
+  de transacción (`ρ₁` = **−0.281**), que es el rebote bid-ask de siempre.
+
+**Con esto el §6 de la v4.1 queda cerrado del todo**: el punto 1 dijo que el micro-precio sí
+mejora como observable (×7.2), y el punto 2 dice que esa mejora **no llega al criterio
+económico**. Las dos mitades, y no se contradicen: más resolución de medida no es más señal.
+
+⚠ **Un defecto propio, y del tipo silencioso.** `M.particionar` devuelve **índices**, no máscaras
+booleanas. Al cruzarlos con la máscara de calentamiento el proceso reventó — pero antes de
+reventar imprimió `ent.sum()` como si fuera un recuento: **«entrenamiento 191 389 586 086»**, la
+suma de los índices. Un número absurdo por seis órdenes de magnitud que el formato no delataba.
+Si el cruce no hubiera fallado, ese recuento habría entrado en el acta.
+
+---
+
+### ⚠⚠ `η̂` RETIRADO — NO ES MEDIBLE SOBRE ESTE INSTRUMENTO (2026-08-28)
+
+**Se retira la compuerta.** Ni el `η̂ = 0.62` de la v3.3 §2 ni el `η̂ ≈ 0.006` colapsado son
+mediciones: **los dos son artefactos, por causas distintas**, y **ninguna conclusión del proyecto
+puede volver a apoyarse en `η̂`**.
+
+#### 1. El valor colapsado es un estimador sesgado a la baja, y el propio mecanismo lo prueba
+
+Colapsar «no reetiqueta continuaciones: **las saca del recuento**» — convierte el barrido en un
+salto de `k > 1` ticks que el filtro de 1 tick elimina. Lo que queda es el rebote bid-ask, que
+**alterna por construcción**. `N_c → 999` no mide pocas continuaciones: **elimina la población
+que las contenía**. La versión colapsada no estima `η`; estima el `η` del subproceso de rebote
+puro, cuyo valor poblacional es ≈ 0 por definición.
+
+#### 2. Comprobación de Dayri–Rosenbaum, que descarta el valor colapsado
+
+Horquilla implícita = `2·η·α`, contra la horquilla observada **clavada en 1 tick**:
+
+| | `η̂` | horquilla implícita |
+|---|---|---|
+| sin colapsar | 0.6200 | **1.24 ticks** — coherente |
+| marca de tiempo idéntica | 0.0239 | 0.048 ticks |
+| colapso 10 ms | 0.0061 | **0.012 ticks** — dos órdenes por debajo |
+
+⚠ **Esta comprobación pasa a ser obligatoria en toda tabla de `η̂` futura.** Un estimador que
+devuelve una horquilla implícita dos órdenes de magnitud por debajo de la observada está **mal
+especificado**, no está midiendo algo pequeño.
+
+#### 3. La premisa del modelo, verificada en fuente primaria
+
+Robert & Rosenbaum (2011), *JFEC* 9(2) 344–366. Abstract del editor, literal: «*we provide a
+model which accommodates the assumption of a **continuous efficient price** with the inherent
+properties of ultra-high-frequency transaction data*». La derivación de `η = N_c/(2N_a)` es
+parada óptima sobre un martingala **continuo** que cruza barreras **de una en una**.
+
+⚠ Lo que NO se pudo verificar: el texto completo (HAL devuelve «Access Denied» por protección
+anti-bot), así que si el estimador admite explícitamente saltos multi-tick queda **sin verificar
+en fuente primaria**. No hace falta: un precio eficiente continuo no puede producir lo de abajo.
+
+#### 4. ⚠ El diagnóstico decisivo, sin parámetro libre: `|Δp|` condicionada a `Δp ≠ 0`
+
+| observable | 1 tick | **más de 1 tick** | media | p99 | máx |
+|---|---|---|---|---|---|
+| **punto medio**, captura_v33 | 20.8 % | **79.2 %** | 8.8 ticks | 52 | 255 |
+| **punto medio**, estacional_0 | 19.9 % | **80.1 %** | 9.1 ticks | 52 | 1 219 |
+| precio de transacción, captura_v33 | 74.0 % | 26.0 % | 2.4 ticks | 11 | 638 |
+| precio de transacción, estacional_0 | 79.2 % | 20.8 % | 1.8 ticks | 7 | 1 134 |
+
+**Cuatro de cada cinco cambios del punto medio son saltos multi-tick.** El estimador sólo cuenta
+pares donde **ambos** cambios son de exactamente 1 tick, o sea que vive en el **~4 %** de los
+pares consecutivos del observable primario. El punto 3 queda **cerrado empíricamente**: el
+proceso está dominado por saltos y el modelo de barreras cruzadas de una en una no lo describe,
+**con colapso o sin él**.
+
+`σ` por transacción **medida** (no extrapolada): **2.66 ticks** en el punto medio (curtosis 878)
+y **8.64 ticks** en el precio de transacción (curtosis 2 639). *(La estimación de 6.3 ticks vía
+`σ₁·ν^(−1/2)` extrapola la firma de reloj de pared dos órdenes por debajo de su rango de ajuste
+[60, 600] s; las medidas directas la flanquean y la conclusión no cambia.)*
+
+#### 5. ⚠ Corrección factual a una pregunta mía: `aggTradeId` NO sirve para esto
+
+Propuse agrupar por `aggTradeId` como agregación canónica de un barrido. **Es falso.** Binance
+define la operación agregada como llenados de la misma orden agresiva **al mismo tiempo Y AL
+MISMO PRECIO**: un barrido de tres niveles produce **tres** `aggTrade`. Agruparía llenados
+repetidos en un mismo nivel, que tienen `Δp = 0` y **ya estaban excluidos** del estimador. **No
+reconstruir `aggTradeId` vía REST para este fin**; ese esfuerzo sigue justificado sólo como
+detector de huecos por continuidad de id (v2.0 §3.4).
+
+#### 6. Consecuencia sobre los apartados que la v3.3 canceló
+
+- **§4 de la v3.3 (propagador sobre el precio eficiente `X_t`) — SIGUE CANCELADO.** Reconstruye
+  `X_t` a partir de `η̂` explícitamente, y un parámetro que se mueve 80× no reconstruye nada. La
+  propia orden advertía además que esa reconstrucción **mete el modelo dentro del dato**.
+- ✅ **§5 de la v3.3 (predicción falsable: cola viva contra cola agotada) — SE REHABILITA.** Su
+  enunciado necesita `cola.py` y `G(τ)`, y **no usa `η̂` en ningún punto**: fue cancelado por una
+  compuerta de la que no depende. Es el único apartado del marco de tick grande que arriesga una
+  **predicción refutable**, y por eso se recupera.
+
+**Prioridad del §5 rehabilitado: BAJA, y explícitamente después** de la superficie `R(H, θ)` y de
+sus compuertas. El §3 de la v3.3 ya estableció que el marco de tick grande **arregla la ciencia y
+no la economía** —horquilla cruzada = 0.26 % del coste total—, así que **ningún desenlace del §5
+mueve la decisión del proyecto**. Es deuda científica de alto valor y prioridad baja. **No
+adelantarlo.**
+
+---
+
+### v4.2 §7.3 y §7.4 — las dos últimas deudas. `deudas_v42.py`, 9/9
+
+#### ✅ §7.3 — El micro-precio SÍ mejora, y por 7.2×
+
+`micro = (P_a·q_b + P_b·q_a)/(q_a+q_b)` (Stoikov), sobre las 1 031 154 observaciones alineadas
+de `captura_v33`:
+
+| observable | % de ceros | cambios por 1000 pasos |
+|---|---|---|
+| punto medio | 96.67 % | 33.3 |
+| **MICRO-PRECIO** | **76.16 %** | **238.4** |
+| precio de transacción | 72.61 % | 273.9 |
+
+⚠ **Mi compuerta estaba puesta sobre la cantidad equivocada, y hay que decirlo.** La escribí como
+«la *fracción* de ceros debe bajar a menos de la mitad». De 96.67 % a 76.16 % son «sólo» 20
+puntos porcentuales — y con ese criterio el veredicto salía «no sustancial». Pero lo que alimenta
+a un estimador es el **número de observaciones que se mueven**, y ése pasa de 33.3 a 238.4 por
+mil: **×7.2**. **Cuarto umbral de este proyecto puesto a ojo que hubo que corregir midiendo**
+(tras `UMBRAL_TAYLOR_JACOBIANO`, la compuerta de `R²` de la v3.3, y el `|d| < 0.06` del §3).
+
+**Con el criterio correcto: el punto 2 del §6 de la v4.1 —reajustar M0/M1/M2 sobre el
+micro-precio— queda JUSTIFICADO y pasa a la lista.**
+
+#### ⚠ §7.4 — `η̂` NO ES ROBUSTO. El veredicto de la v3.3 §2 se queda sin base
+
+| `Δ` de colapso | n tras colapsar | `η̂` | `N_c` | `N_a` |
+|---|---|---|---|---|
+| **0 ms** (lo que midió la v3.3) | 1 031 154 | **0.6200** | 98 718 | 79 616 |
+| 10 ms | 182 860 | **0.0076** | 999 | 65 990 |
+| 50 ms | 143 979 | 0.0058 | 624 | 54 179 |
+| 200 ms | 84 118 | 0.0051 | 311 | 30 581 |
+
+Réplica en `estacional_0` (8.9 M transacciones): **0.5916 → 0.0061** con el mismo colapso de
+10 ms.
+
+⚠ **La lectura NO es «tick grande aplica».** `η̂` se mueve por un **factor 80** con una sola
+elección de preprocesado. Un estadístico así **no puede sostener un veredicto estructural en
+ninguna de las dos direcciones**. Lo que queda establecido es más incómodo:
+
+> **El `η̂ = 0.62` de la v3.3 §2 dependía enteramente de contar cada transacción de una ráfaga
+> como un evento separado.** Y sobre ese número se **cancelaron sus §4 y §5** — este último
+> descrito por la propia orden como «el apartado con más valor de información del documento».
+
+**Reabrirlos exigiría PREREGISTRAR la ventana de colapso antes de mirar.** Elegirla ahora,
+sabiendo que 10 ms invierte el veredicto, sería elegir el resultado. Queda anotado como deuda con
+su condición, no como resultado.
+
+⚠ **Y un control mío falló primero, por juguete degenerado.** El caso de prueba del colapso tenía
+8 puntos: tras fundir las ráfagas quedaban 4, el filtro `solo_un_tick` los descartaba todos y
+`η` salía infinita. Al rehacerlo con 400 eventos apareció **el mecanismo**, que conviene tener
+escrito: colapsar una ráfaga de 3 niveles **no** la convierte en un movimiento de 1 tick, la
+convierte en uno de **3 ticks** — que `solo_un_tick` entonces **excluye**. El efecto no es
+reetiquetar continuaciones: es **sacarlas del recuento** (`N_c` 239 → 0 en el control).
+
+---
+
+### ⚠⚠ CORRECCIÓN DEL TECHO, Y EL ACTA CAMBIA DE FRASE (2026-08-29)
+
+El «techo estructural `R² ≈ 1/H`» que publiqué el 2026-08-28 **estaba mal por dos razones**, y
+el propio dato lo delataba: **tres de las cuatro filas decisivas lo superaban**. Un techo que el
+dato supera está mal especificado.
+
+1. **Suponía `ε` iid**, y este proyecto ha medido que no lo es (`N_eff` de los signos = **46.5**,
+   `γ` en [0.354, 0.522]). El control sintético que lo «verificó» generaba los signos con
+   `np.where(rng.random(n) < 0.5, -1, 1)` — **independientes por construcción**. Verificaba el
+   techo iid, que es justo el que no aplica.
+2. **Error de unidades encima:** usaba `H` en **segundos** cuando los incrementos son **ticks**.
+   A `H` = 3 600 s con `ν` = 18.75 son ~67 500 ticks, techo iid **1.5e-5**, contra un `R²` medido
+   de **2.0e-3**: superado por **133×**.
+
+#### El techo correcto: medido, sin parámetros libres
+
+```
+R2_max(H) = Corr( eps_t , SUMA_{s=1..H} eps_{t+s} )^2
+```
+
+Con núcleo perfecto y sin ruido, lo más que un solo signo puede explicar del retorno futuro es lo
+que explica del **flujo firmado futuro**. Depende sólo de la autocorrelación de signos y **se
+calcula sobre la serie** — no se estima `γ` ni se sustituye en una forma cerrada. Medido sobre
+`estacional_0` a `H` = 3 600 s: **0.006895**, o sea **465× por encima del techo iid**. La memoria
+larga del flujo eleva el techo enormemente, que es exactamente lo que la corrección anticipaba.
+
+#### El veredicto por fila, y lo que hace con la regla de parada
+
+| condición | lectura |
+|---|---|
+| `R²_max ≥ 3·R²_req` | fila **falsable**; su margen cuenta para la regla de parada |
+| `R²_max < R²_req` | fila **NO FALSABLE**; se marca y **no cuenta**, aunque su margen sea grande |
+
+**Las diez filas del estrato ALTO que antes sostenían el cierre son NO FALSABLES:**
+
+| fragmento | `H` | `R²_max` medido | `R²_req` | margen (no cuenta) |
+|---|---|---|---|---|
+| estacional_0 | 3 600 s | 0.006895 | 0.018627 | ~~9.3×~~ |
+| estacional_3 | 1 800 s | 0.012103 | 0.041513 | ~~10.2×~~ |
+| captura_v33 | 1 800 s | 0.006443 | 0.029440 | ~~12.8×~~ |
+| estacional_1 | 900 s | 0.000955 | 0.005623 | ~~14.0×~~ |
+| *(y seis más)* | | | | |
+
+**El margen de 9.3× era un margen sobre un techo inalcanzable. No es evidencia.**
+
+#### ⚠ La frase del acta cambia, y esa frase ES el resultado publicable
+
+- ~~«No hay señal explotable a estos horizontes.»~~
+- ✅ **«NO MEDIBLE con predictor univariante a estos horizontes.»**
+
+Y con ello: **la versión multivariante del §C.3.5 de la Adenda C —cuyo techo es superior por
+construcción— queda SIN CONTRASTAR, no refutada.**
+
+**La línea de microestructura se cierra igual**, y por las otras dos vías que sí son
+concluyentes:
+
+- el **§4 de la v4.2**: superficie de rentabilidad con coste real, **78 de 79 celdas negativas**,
+  y el único positivo (+0.13 % anual) aislado entre vecinas negativas → sobreajuste;
+- la **Adenda C sin estratificar**, donde el instrumento sí resolvía a 60–3 600 s y el déficit
+  iba de 577× a 43×.
+
+Lo que **no** puede seguir apoyando el cierre es el `R²` estratificado univariante: ahí no hay
+medición, hay un techo por debajo del requisito.
+
+---
+
+### ⚠⚠ §1 ESTRATIFICADO POR σ PRONOSTICADA — REGLA DE PARADA APLICADA: LÍNEA CERRADA
+
+`estratos.py`, 6/6. La tarea marcada BLOQUEANTE desde el 2026-08-23, ejecutada con las tres
+correcciones acumuladas: **`L(H)` real** (6.2–7.6 pb), **`κ = 2.0627`** (dos direcciones, no
+1.755) y **control de potencia por estrato**.
+
+**Estratificación declarada antes de medir:** `σ` pronosticada = `σ` realizada en `[t−H, t]`.
+Persistencia pura, sin parámetros, conocida en `t`. Cortes de tercil fijados en entrenamiento.
+
+**Regla de parada, acordada con el operador ANTES de ejecutar:** *si en el estrato superior,
+donde el instrumento resuelve, el margen no baja de 3×, resultado negativo y se cierra la línea
+de microestructura.*
+
+```
+filas del estrato ALTO donde el instrumento RESUELVE : 10 de 23
+margen MINIMO en el estrato ALTO                     : 9.3x
+```
+
+| fragmento | `H` | n | `R²` medido | `R²_req` | margen |
+|---|---|---|---|---|---|
+| **estacional_0** | 3 600 s | 2 328 | 0.001997 | 1.863 % | **9.3×** |
+| estacional_3 | 1 800 s | 462 | 0.004074 | 4.151 % | 10.2× |
+| captura_v33 | 1 800 s | 477 | 0.002306 | 2.944 % | 12.8× |
+| estacional_1 | 900 s | 2 313 | 0.000401 | 0.562 % | 14.0× |
+
+**El margen no baja de 3× en ninguna fila resoluble. Por la regla acordada: RESULTADO NEGATIVO
+y SE CIERRA LA LÍNEA DE MICROESTRUCTURA.**
+
+#### ⚠ Y la trampa declarada antes de medir se cumple exactamente
+
+Estaba escrito: *«si `R²_medido` también escala con `ν`, la razón no mejora y el
+condicionamiento no compra nada»*. Medido:
+
+| estrato | `R²_req` mediano | `R²` medido mediano | margen mediano |
+|---|---|---|---|
+| bajo | 2.727 % | 0.000772 | 21.4× |
+| medio | 2.112 % | 0.000840 | 81.2× |
+| **ALTO** | **1.518 %** | **0.000376** | **14.0×** |
+
+**Condicionar SÍ baja el requisito** —de 2.73 % a 1.52 %, un factor 1.8— **pero el `R²` medido
+baja también**, de 7.7e-4 a 3.8e-4. **El margen no mejora.** Condicionar por volatilidad
+pronosticada no compra nada, y quedaba dicho antes de mirarlo.
+
+#### ⚠ Dos defectos propios, y uno era la diferencia entre resultado y no-resultado
+
+1. **Medía sólo en validación.** La identidad es un **momento sin parámetros ajustados**:
+   `Corr(ε, r)²` no se estima en un bloque y se evalúa en otro. Lo único con riesgo de fuga son
+   los cortes de tercil, y ésos sí vienen de entrenamiento. Restringir a validación tiraba el
+   **80 %** de los orígenes y multiplicaba el suelo por ~√5, con lo que **0 de 21 filas
+   resolvían**: el «no resuelve» era **mío**, no del mercado. Con todos los orígenes, 10 de 23
+   resuelven y la regla se puede aplicar.
+2. **Alineación de rezagos, por segunda vez en un control mío** (la primera fue en
+   `identidad.py`). El retorno arranca en `mid[i+1]` para ser predictivo, así que una señal
+   sintética inyectada con **un solo** paso de retardo deja `ε_i` fuera de la ventana y el
+   estimador hace bien en devolver ~0. Corregido a dos pasos.
+
+#### ⚠ Un techo estructural — **CORREGIDO el 2026-08-29, ver el apartado anterior**
+
+⚠ **Lo que sigue es INCORRECTO y se conserva como registro.** El techo `1/H` supone
+`ε` iid y usa `H` en segundos en vez de ticks; el dato lo supera por 133×.
+
+
+Al reparar el control apareció algo que explica los `R²` diminutos de la Adenda C a `H` largo:
+**el `R²` de UN solo signo sobre una ventana de `H` pasos satura en ~`1/H`.** Un incremento de
+los `H` no puede explicar más que su parte. Con `H` = 900 el techo es **1.1e-3**; el `R²`
+medido en el estrato ALTO de `estacional_1` a 900 s es 4.0e-4, o sea **el 36 % de su propio
+techo teórico**. Subir la amplitud de la señal no mueve ese techo, porque la señal entra también
+en la varianza. Verificado en el control: con `H` = 60, techo 1/60 = 1.67e-2 y medido 1.76e-2.
+
+**Consecuencia: la versión univariante de la identidad NO puede alcanzar requisitos del orden del
+1 % a horizontes de minutos, ni con señal perfecta.** El §C.3.4 de la Adenda C lo decía como cota
+inferior cualitativa; esto lo cuantifica.
+
+---
+
+### ⚠⚠ v4.2 §4 CORREGIDO (2026-08-28) — la deriva se colaba por una CUARTA puerta
+
+**Detectado por el operador con un argumento de coherencia, no midiendo:** *«la mediana del nulo
+es +8.48 % anual, y bajo un nulo honesto entras al azar y pagas comisiones — tendría que ser
+negativa, del orden del peaje»*. Tenía razón en el fondo. **Dos precisiones sobre la prueba:**
+
+1. El estadístico del nulo es el **máximo sobre ~48 celdas**, no una celda típica, y el máximo de
+   muchas celdas ruidosas **es positivo por construcción** aunque el nulo sea limpio. La prueba
+   correcta es la **celda individual**. Medida: mediana **−0.62** ✓.
+2. Pero la contaminación **existía**: quitar el intercepto y marcar las celdas de signo único no
+   bastaba. La celda ganadora tenía el **92.3 % de las posiciones en la misma dirección** y
+   `media(rv) = 105.21 pb` en el tramo del +24 %. Mi guarda excluía repartos por debajo del 5 %:
+   **un 92/8 pasaba**.
+
+#### La corrección definitiva: `cap` es una COVARIANZA
+
+```
+cap = E[signo · retorno]  −  E[signo] · E[retorno]     sobre el subconjunto SELECCIONADO
+```
+
+Mide **habilidad de selección** —«cuando voy largo gano más que cuando voy corto»— y **no**
+exposición direccional neta. Con signo constante da **0 exacto**, así que la guarda del 5 % se
+vuelve innecesaria y **se retira**. Es el mismo estimando que la identidad de la Adenda C.
+
+⚠ Retirar la media del **bloque** no bastaba: una celda 94/6 seguía midiendo la deriva del
+**subconjunto seleccionado**, que no es la del bloque.
+
+#### El nulo, ahora honesto
+
+| | antes (defecto 1 parcial) | tras retirar deriva de bloque | **con `cap` = covarianza** |
+|---|---|---|---|
+| mediana del **máximo** | **+8.48** | +1.13 | **−0.96** |
+| p95 del máximo | +9.70 | — | **−0.84** |
+| máximo de 200 sorteos | +10.20 | +2.57 | **−0.72** |
+| mediana de celda individual | — | — | **−0.62** |
+
+**Todos negativos.** Entrar al azar y pagar peaje da pérdida, como debe.
+
+#### La superficie corregida: 78 de 79 celdas negativas
+
+| fragmento | celdas | máximo |
+|---|---|---|
+| estacional_0 | 13 | negativo en todas |
+| estacional_1 | 28 | negativo en todas |
+| estacional_2 | 16 | negativo en todas |
+| estacional_3 | 10 | negativo en todas |
+| captura_v33 | 12 | **+0.13** (H = 1 h, q90) |
+
+**El `+7.24 %` que se publicó era mayormente haber estado largo en un tramo que subió el 24 %.**
+No se puede citar. El máximo real es **+0.13 % anual**, y sus vecinas de la misma fila son
+−0.64, −0.39, −0.21, −0.37, −0.30: **celda aislada**.
+
+⚠ **`P(max R_nulo ≥ R*) = 0.0000` y NO significa lo que parece.** Con `cap` de esperanza nula
+bajo el nulo, `R_nulo = d·(T/H)·(0 − L)/10⁴` es **estrictamente negativo**, así que cualquier
+valor positivo lo supera. **El `p` deja de discriminar**; lo que decide es la magnitud y el
+aislamiento. Por la fila 3 del §5: **SOBREAJUSTE. Se reporta y no se decide.**
+
+#### ⚠ Cinco defectos propios más en esta corrección
+
+1. La **cuarta puerta** de la deriva (celdas 92/8), arriba.
+2. El error estándar analítico del control **ignoraba el solapamiento**: orígenes cada 60 s con
+   `H` = 900 s son ~15 solapes, y `sd/√n` lo subestima por √15. El nulo por permutación no
+   tiene ese problema; un error analítico sí.
+3. Un umbral de razón fija (`< 0.1`) sustituido por uno **autocalibrado** contra el propio ruido
+   de muestreo. **Quinto umbral a ojo** de este proyecto.
+4. Una aserción de **monotonía de `cap` con el umbral** que no es propiedad garantizada del
+   estimador —el umbral se fija en entrenamiento y se aplica a validación— y que había tocado ya
+   dos veces. **Retirada con su motivo en vez de ajustada una tercera.**
+5. Una aserción que exigía `cap > 0` en todas las celdas y que fallaba **porque la definición
+   nueva funciona**: una celda de signo constante da cero exacto.
+
+---
+
+### ⚠ v4.2 §4 — LA SUPERFICIE `R(H, θ)`. **NO HAY ÓPTIMO**. `superficie.py`, 7/7
+
+Rejilla congelada con hash **antes** de tocar dato (§4.3 guarda 1):
+`sha256[:16] = a3273c269e5cb299`, 8 `H` × 6 `θ` = 48 celdas, orígenes uniformes en tiempo,
+partición 60/20/20 con **el conjunto de prueba de la v3.2 sin abrir**.
+
+#### El veredicto del §5, primera fila
+
+```
+R(H*, th*) real            = +7.2426 % anual   (estacional_1, H = 4 h, q50)
+max R_nulo: p50 +8.4813   p95 +9.7015   max +10.2030   (200 sorteos)
+*** P(max R_nulo >= R real) = 0.9850 ***
+```
+
+**El máximo de la superficie está POR DEBAJO de la mediana del nulo.** Una rejilla de 48 celdas
+produce por azar un máximo mayor que el medido en el 98.5 % de los sorteos. **No hay óptimo.**
+
+#### La superficie entera (§4.3 guarda 4), no el máximo
+
+| fragmento | celdas evaluables | min | mediana | max | % positivas |
+|---|---|---|---|---|---|
+| estacional_0 (131.8 h) | 13 | −5.08 | −0.79 | −0.26 | **0 %** |
+| estacional_1 (82.5 h) | 28 | −26.11 | −0.80 | **+7.24** | 39 % |
+| estacional_2 (34.7 h) | 16 | −18.24 | −3.73 | −0.13 | **0 %** |
+| estacional_3 (23.3 h) | 10 | −21.29 | −14.34 | −3.35 | **0 %** |
+| captura_v33 (16.4 h) | 12 | −20.53 | +4.52 | +6.89 | 67 % |
+
+**Tres de los cinco fragmentos no tienen ni una celda positiva.** El signo de la superficie no es
+estable entre fragmentos — la misma inestabilidad que mató a `β`, a `H_p` y a la
+antipersistencia. Sólo 79 de 240 celdas son evaluables.
+
+#### Contraste de las tres predicciones del §4.4, se cumplan o no
+
+| | predicción | resultado |
+|---|---|---|
+| **P1** | el óptimo cae entre 2 y 8 h | **posición compatible** (máximo a 4 h) pero **no significativo** (`p` = 0.985) |
+| **P2** | todo por debajo de 30 min sale negativo | ⚠ **REFUTADA**: 3 de 46 celdas positivas (captura_v33 a 15 min q90 = +6.89, q95 = +5.33; estacional_1 q99 = +1.02) |
+| **P3** | un dígito porcentual en el óptimo | **se cumple** (+7.24 %) |
+
+El §4.4 avisa: «si el resultado no cumple P1 y P2, sospechar del cálculo antes que celebrar».
+P2 falla en **3 celdas de 46, todas en los dos fragmentos más cortos** y ninguna sobrevive al
+nulo — es ruido de rejilla, que es justo lo que la guarda 2 existe para detectar.
+
+#### ⚠ `κ` empírico contra el gaussiano — el modo de fallo 5 SÍ dispara
+
+`κ` medido va de **1.42 a 4.63** según fragmento y `H`, contra el gaussiano. **Difiere más del
+20 % en varias celdas**, así que la curva requerida publicada está mal por ese factor **al
+cuadrado** donde eso ocurre. Con curtosis 1179.7, suponer normalidad no era gratis.
+
+⚠ **Y el propio `κ` gaussiano del proyecto estaba mal identificado.** `FACTOR_DECIL = 1.755` es
+`E[z | z > q90(z)]`, el decil superior de `μ` **con signo**: corresponde a operar **una sola
+dirección**. La banda muerta `|α| > c` y el §4 operan en **las dos**, y ahí el valor es
+`E[|z| | |z| > q90(|z|)] = 2·φ(1.6449)/0.10 = **2.0627**`. Son **17.5 %**, o **1.38×** en toda
+curva requerida publicada hasta hoy.
+
+#### ⚠ TRES DEFECTOS PROPIOS EN ESTE §4, y los tres eran la misma trampa
+
+La deriva del bloque de validación se coló por tres puertas distintas. **`estacional_1` es el
+tramo del +24 %**, así que cualquier estrategia que se quede larga «gana» — y eso no es señal, es
+haber elegido el fragmento que subió.
+
+1. **El intercepto en la señal de decisión.** A `H` largo la señal ajustada no cambiaba de signo,
+   `d` salía **1.000**, y `cap` se volvía la media del retorno del bloque: **+141.60 pb**. El
+   máximo de la superficie era **+22.99** y era pura tendencia. Y **el nulo no podía verlo**:
+   barajar signos de flujo no toca ni el intercepto ni los retornos, así que los 200 sorteos
+   devolvían el mismo número y `p` salía 1.0000 por la razón equivocada. Corregido: la decisión
+   se toma con la parte que viene de los rasgos, centrada en entrenamiento.
+2. **Al quitar el intercepto volvió a colarse.** A 8 h la señal seguía sin cambiar de signo,
+   `d = 1` otra vez, `cap = +255 pb`, y el nulo daba **5 valores distintos en 70 sorteos**. Una
+   celda donde el signo de la señal es constante **no es una estrategia condicionada a señal**:
+   es comprar y mantener. Se marcan **NO EVALUABLES** y no puntúan. Con eso el nulo pasa a **70
+   valores distintos de 70**.
+3. **El generador se resembraba al reanudar.** Al partir el nulo en tandas, se recreaba con la
+   misma semilla y se saltaban los sorteos ya hechos: los posteriores **repetían** los números de
+   los primeros. Distribución degenerada. Corregido sembrando por índice de sorteo.
+
+**La lección, y es la quinta vez en esta tanda:** un nulo sólo vale si puede destruir aquello que
+se está midiendo. Barajar el flujo no destruye la deriva, así que contra un estimador que captura
+deriva ese nulo es ciego — y devuelve un `p` que parece un resultado.
+
+---
+
+### ✅ v4.2 §1.1 — COMPUERTA ABIERTA (2026-08-28). El criterio del §8 queda CUMPLIDO
+
+Leído de `/fapi/v1/commissionRate` con clave firmada de Mainnet (`Enable Reading` + `Enable
+Futures`, IP restringida, **sin trading ni retiros** — verificado antes de usarla):
+
+```
+maker REAL = 0.000200 = 2.0000 pb por lado     ->  c(u) maker+maker = 4.0000 pb
+taker REAL = 0.000500 = 5.0000 pb por lado     ->  c(u) taker+taker = 10.0000 pb
+feeTier = 0        feeBurn (descuento BNB) = False        mmr tramo 1 = 0.0040 (hasta 300 000)
+```
+
+**El criterio «escalón de comisiones leído de la cuenta, no asumido», abierto desde la v3.1,
+queda CUMPLIDO.** `COMISIONES_LEIDAS = True`.
+
+⚠ **Y corrige una corrección mía del 2026-08-23, en la dirección mala.** Aquel día bajé la taker
+de `0.000500` a `0.000400` apoyándome en dos vías que «coincidían»: la lectura de **Testnet** y
+la tabla pública de futuros para VIP 0. **La cuenta real dice 0.000500.** Las dos vías
+coincidían porque **las dos eran indirectas** —Testnet no es la cuenta, y una tabla publicada no
+es un escalón leído—, y coincidir no es acertar. El `0.0005` que arrastraban `propagador.py`,
+`cola.py` y `tick_grande.py` era **el correcto desde el principio**; lo que lo salvó fue haberlo
+conservado como «conservador» en vez de borrarlo.
+
+⚠ **El descuento BNB está APAGADO.** El §4.4 de la v4.2 construye su tabla de expectativas con
+`lastre = 4.49 pb`, que es maker **con** descuento. No aplica.
+
+---
+
+### v4.2 §2 y §3 — `L(H)` medida con sus cinco términos. `curva_coste.py`, 7/7
+
+`L(H) = c(u) + A(H) + F(H) + (1−p(H))·C_respaldo(H)`, sobre los cinco fragmentos, con
+colocación en rejilla **uniforme en tiempo** y `NIVEL BARRIDO` contado como llenado.
+
+| `H` | `p(H)` | `A(H)` | `C_respaldo(H)` | `(1−p)·C_resp` | **`L` maker** | **`L` taker** |
+|---|---|---|---|---|---|---|
+| 15 min | 0.878 | 1.11 | 9.07 | 1.11 | **6.24** | 11.13 |
+| 30 min | 0.916 | 1.37 | 14.29 | 1.20 | **6.60** | 11.39 |
+| 1 h | 0.937 | 1.49 | 19.18 | 1.21 | **6.75** | 11.54 |
+| 2 h | 0.953 | 2.02 | 31.88 | 1.51 | **7.63** | 12.12 |
+| 4 h | 0.967 | 1.49 | 44.75 | 1.48 | **7.18** | 11.70 |
+| 8 h | 0.981 | 0.77 | 104.79 | 2.02 | **7.21** | 11.19 |
+| 24 h | 0.993 | 0.31 | 52.54 | 0.36 | **5.10** | 10.74 |
+
+*(todo en pb; medianas entre fragmentos de la mediana de cada uno; distribuciones completas por
+fragmento en el acta)*
+
+**Cuatro resultados:**
+
+1. ⚠ **El lastre real es 6.2–7.6 pb, no los 4.888 pb que se venían usando** — y desde luego no
+   los 4.49 del §4.4. Como `R²_req ∝ L²`, **toda curva requerida publicada hasta hoy está baja
+   por un factor 1.6–2.4.**
+2. ✅ **La nota de la v4.1 sobre `C_respaldo` estaba mal y el §3 lo anticipó.** Aquélla decía que
+   pierde peso al crecer `H` porque `p` sube. **`C_respaldo` CRECE fuerte con `H`** (9 → 105 pb),
+   y `p` también, así que el producto `(1−p)·C_respaldo` **no es monótono**: 1.11, 1.20, 1.21,
+   1.51, 1.48, **2.02**, 0.36. Había que medirlo, no razonarlo.
+3. **`p(H)` es alta: 0.88 a 15 min, 0.99 a 24 h.** Con la salvedad declarada: `NIVEL BARRIDO`
+   cuenta como llenado sin conocer la posición en cola, así que es una **cota superior**. Se
+   eligió así a propósito — una `p` optimista hace la conclusión económica más difícil de
+   rechazar, no más fácil.
+4. **`A(H)` es pequeña y casi plana** (mediana 0.3–2.0 pb) pero con dispersión enorme y
+   **casi simétrica** (p10 ≈ −p90: −95 y +96 pb a 24 h). La mediana es un centro débil aquí: la
+   selección adversa no es un coste sistemático grande, es una varianza grande.
+
+#### ⚠ `F(H)`: la financiación es una TRANSFERENCIA con signo, no un coste
+
+| `H` | p(cruce) | `E[F]` largo | `E[F]` corto | \|F\| mediana | \|F\| p90 |
+|---|---|---|---|---|---|
+| 15 min | 0.031 | +0.0073 | **−0.0073** | 0.0133 | 0.0279 |
+| 1 h | 0.125 | +0.0292 | **−0.0292** | 0.0533 | 0.1116 |
+| 8 h | 1.000 | +0.2333 | **−0.2333** | 0.4261 | 0.8928 |
+| 24 h | 3.000 | +0.6999 | **−0.6999** | 1.2783 | 2.6784 |
+
+Con la tasa media medida de **+0.2333 pb/8 h**, **un corto la COBRA**. Tratarla como coste sin
+signo destruye una fuente de ventaja — es el modo de fallo 4 del §8 de la orden. Y es discreta:
+a `H` < 8 h una posición paga sólo si cruza una liquidación, con probabilidad `H/28800`.
+
+Numéricamente es despreciable frente a los 6–7 pb del resto del lastre hasta bien pasadas las
+8 h, pero deja de serlo a 24 h y más.
+
+---
+
+### Deudas §7.2 y §7.5 saldadas (2026-08-27) — `actividad.py`, 5/5
+
+#### §7.2 — La curva en U se resuelve a favor de ACTIVIDAD
+
+`R²` fuera de muestra prediciendo `log σ(t+1)`, por bloques contiguos, con nulo por rotación:
+
+| fragmento | n | `σ(t)` | **`ν(t)`** | ambos | nulo q95 |
+|---|---|---|---|---|---|
+| estacional_0 | 1 516 | +0.4978 | **+0.4711** | +0.5119 | 0.1663 |
+| estacional_1 | 987 | +0.7029 | **+0.7540** | +0.7550 | 0.3286 |
+| estacional_2 | 415 | +0.1594 | **+0.2485** | +0.2456 | 0.0401 |
+| estacional_3 | 277 | +0.1395 | **+0.2322** | +0.2013 | 0.1297 |
+| captura_v33 | 189 | +0.4358 | **+0.4427** | +0.4363 | 0.3853 |
+
+**`ν` gana en 4 de 5 fragmentos.** La pregunta «curva en U: ¿volatilidad o actividad?» del §4.3
+del traspaso **se retira de la lista, resuelta a favor de actividad**. Marco: Clark (1973) y
+Tauchen & Pitts (1983) — **no es hallazgo**.
+
+⚠ Reserva de potencia: por fragmento el `n` es de 189 a 1 516 casillas y los márgenes contra el
+nulo van de **1.15×** (captura_v33) a 6.2× (estacional_2). El resultado fuerte es el **agrupado**
+(`n = 3 081`, `R² = 0.6153`, **7.7×** el suelo); por fragmento la comparación `σ` contra `ν` es
+pareada y sufre menos, pero los niveles absolutos de las dos últimas filas no se leen solos.
+
+#### ⚠ §7.5 — NO hay pico en `ν`. Y el pico que apareció primero era MI NULO
+
+Multitaper sobre el residuo de `log ν` tras retirar el ciclo diurno (que explica el 23.3 %),
+tramo contiguo de 82.33 h, **nulo de ruido rojo SIMULADO** — nunca tabla asintótica.
+
+**Primera corrida, con AR(1) como pedía el guion:** pico a **904 s**, exceso **×4.10**,
+`p global = 0.0000`, y dentro de la banda de la v2.1 §2. Es decir: **hallazgo**.
+
+**No lo era.** La firma no cuadraba: **63 de 494 frecuencias (12.8 %) sobre el q95 puntual**,
+cuando un ciclo genuino da un pico *estrecho*, no un exceso repartido por el 13 % del espectro.
+Barriendo el orden del nulo:
+
+| nulo | frecuencias sobre q95 | pico | `p` global |
+|---|---|---|---|
+| AR(1) | 12.3 % | ×4.63 | 0.000 |
+| AR(5) | 9.1 % | ×2.99 | 0.000 |
+| **AR(20)** (elegido por AIC) | **3.8 %** | **×1.48** | **0.335** |
+
+Y el exceso estaba concentrado en **600–900 s (26 % de esa banda sobre q95)**, que es donde un
+AR(1) desajusta más: **banda ancha, no pico**. Un AR(1) no puede imitar la persistencia real de
+`ν` (`ρ₁ = 0.8845`), y su desajuste se lee como señal.
+
+**Con el orden elegido por AIC: NO HAY PICO.** La expectativa declarada antes de correr se
+cumple, y la pregunta de ciclo endógeno abierta desde la v2.2 **queda cerrada sobre la serie de
+actividad**, que es donde nunca se había contrastado.
+
+⚠ **El patrón de la sesión, y conviene tenerlo escrito:** es la **cuarta vez en un día** que un
+nulo demasiado estrecho estuvo a punto de producir un hallazgo falso — el barajado de `ε` en la
+Adenda C (75–1538× demasiado estrecho), los tres nulos del 2026-08-23 que no separaban nivel
+diario de forma intradía, y ahora el AR(1) del espectro. **La regla que sale: el nulo tiene que
+reproducir la propiedad del dato que hace ancho al estadístico, y si no se sabe cuál es, se
+barre el parámetro que la controla y se mira si el veredicto se mueve.**
+
+---
+
+### ⚠ ADENDA C CERRADA (2026-08-27) — no hay banda viable donde el instrumento resuelve
+
+`identidad.py`, 7/7 controles. Suelo congelado (5 fragmentos × 9 horizontes) **antes** de
+calcular ningún `R²` real, como exige el §C.4.1. Acta en `telemetria/acta_adendaC_medir.txt`.
+
+#### El desenlace del §C.6, fila por fila
+
+| `H` | desenlace | fragmentos sobre su propio suelo | falta un factor |
+|---|---|---|---|
+| 60 s | **NO HAY BANDA VIABLE** | **5 de 5** | **577×** |
+| 120 s | NO HAY BANDA VIABLE | 2 de 5 | 359× |
+| 300 s | NO HAY BANDA VIABLE | 1 de 5 | 203× |
+| 600 s | NO HAY BANDA VIABLE | **0 de 5** | 127× |
+| 900 s | NO HAY BANDA VIABLE | 0 de 5 | 127× |
+| 1800 s | NO HAY BANDA VIABLE | 0 de 5 | 96× |
+| 3600 s | NO HAY BANDA VIABLE | 0 de 5 | 43× |
+| 7200 s | **el instrumento no resuelve** | — | *no se lee* |
+| 14400 s | **el instrumento no resuelve** | — | *no se lee* |
+
+**Tres lecturas, en orden de importancia:**
+
+1. **A 60 s la señal es REAL y está medida**: los 5 fragmentos superan su propio suelo, con
+   **signo positivo en los 5**. Coherente con el propagador de la v3.1 §2. **Y falta un factor
+   577.** No es que no haya señal: es que no paga.
+2. **El margen se cierra monótonamente con `H`** — 577 → 359 → 203 → 127 → 96 → **43** — y
+   **exactamente donde se cerraría (≥ 2 h) el instrumento deja de resolver.** Es un dato de
+   entrada directo para el §4 de la v4.2, cuyo óptimo previsto (P1) cae entre 2 y 8 h.
+3. **De 10 min a 1 h el `R²` medido no supera su propio suelo en ningún fragmento** (0 de 5).
+   En esa banda no hay medición, hay ruido — y el `R²` que se reporte ahí no significa nada.
+
+#### ⚠ La corrección que hizo falta: la identidad hay que ponderarla por TIEMPO, no por ticks
+
+**La compuerta de calibración del §C.4.3 lo cazó.** La identidad tal como el §C.3.2 la propone
+—cada tick como origen— no reproducía el método de ventanas: daba **0.026** contra **0.0076** a
+60 s, factor 3.4. Diagnóstico, con el mismo predictor y el mismo bloque de validación:
+
+| orígenes | `R²` a 60 s | `R²` a 120 s | n |
+|---|---|---|---|
+| **cada tick** (lo que propone la adenda) | 0.028261 | 0.016233 | 2 223 663 |
+| **uno por segundo de reloj** | **0.001634** | **0.000708** | 422 527 |
+| ídem, sólo validación | 0.004515 | 0.003221 | 76 644 |
+| método de ventanas (OOS, publicado) | 0.0076 | 0.0041 | 1 341 |
+
+**Factor 17 entre ponderar por ticks y por tiempo.** Usar cada tick importa una **ponderación
+por actividad**: los tramos con más transacciones aportan más parejas y son también los de más
+volatilidad. **La curva requerida vive en tiempo de calendario** —la comisión se paga por ida y
+vuelta, la volatilidad se acumula en segundos—, así que el estimando tiene que ser el ponderado
+por tiempo. Es la misma lección que la sesión 2026-08-08 (e), donde la firma solapada
+sobreponderaba los tramos activos y los dos estimadores discrepaban **en signo**.
+
+Con orígenes uniformes, la identidad **sí** reproduce: 0.0045 contra 0.0076, y el propio §C.1 da
+`q95 = 0.060` para las ventanas a 60 s, o sea que su 0.0076 está muy dentro de su propio ruido.
+**La compuerta pasa.**
+
+⚠ **Y la ventaja de resolución SOBREVIVE**: 422 527 orígenes uniformes contra 1 341 ventanas no
+solapadas, **315×**. El §C.3.2 se sostiene; lo que había que corregir era el estimando, no el
+método.
+
+#### Otras dos correcciones propias
+
+- ⚠ **`ε_t` no estaba en la multivariante**, así que el control «la multivariante no puede rendir
+  menos que la univariante» **no era un teorema**: los agregados más cortos promedian ~10³ ticks
+  y diluyen el signo suelto. Con `ε_t` como primera columna, la cota inferior del §C.3.4 se
+  cumple por construcción.
+- ⚠ **La regla del §C.6 exigía signo estable a magnitudes por debajo de su propio suelo.** El
+  signo de una covarianza dominada por ruido es aleatorio: pedirle consistencia convierte una
+  refutación limpia en «no decidible» y esconde el resultado. La estabilidad de signo **solo se
+  exige a un resultado positivo**. Corregido el orden; sin eso, cinco de los nueve horizontes se
+  habrían reportado como «no decidible» en vez de como refutación.
+
+#### El suelo, con el estimador correcto
+
+| fragmento | orígenes a 60 s | q95 a 60 s | q95 a 4 h |
+|---|---|---|---|
+| estacional_1 (20.0 M ticks) | 284 565 | **0.000049** | 0.000424 |
+| estacional_0 (8.9 M) | 422 587 | 0.000129 | 0.000530 |
+| estacional_2 (4.1 M) | 117 209 | 0.000222 | 0.002211 |
+| estacional_3 (1.8 M) | 79 098 | 0.000582 | 0.003872 |
+| captura_v33 (1.0 M) | 52 245 | 0.001352 | 0.007219 |
+
+Razón rotación/barajado: **4× a 81×, mediana 25×**. Sigue justificando la desviación declarada
+sobre el nulo del §C.4.1 — con el suelo de barajado, filas que no resuelven se leerían como si
+resolvieran.
+
+---
+
+### v4.2 `ORDEN_TRABAJO_FRECUENCIA_4_2` — arranque (2026-08-27)
+
+**El cambio de planteamiento:** de «¿existe señal a horizonte `H`?» a «¿existe un par
+(tenencia `H`, umbral `θ`) con rentabilidad neta por unidad de tiempo positiva?». La comisión es
+un **impuesto a la frecuencia**, y el óptimo es interior: existe aunque no sea rentable.
+
+#### ⚠ §1.1 — COMPUERTA NO PASA. Nada de la v4.2 es citable todavía
+
+```
+/fapi/v1/commissionRate  ->  HTTP 401  -2015
+permisos de la clave: enableReading=True   enableFutures=FALSE   ipRestrict=False
+```
+
+Lo que **sí** está leído de la cuenta de Mainnet (2026-08-23): **nivel VIP = 0**, vía
+`commissionRates` de spot = 0.001. De ahí, por tabla pública, futuros VIP 0 = maker 0.0200 % /
+taker 0.0400 %. Lo que **no** se puede leer: el **descuento BNB** (`/fapi/v1/feeBurn` también
+exige `enableFutures`), que valdría −10 %.
+
+⚠ **Nótese que el §4.4 de la orden construye su tabla de expectativas con `lastre = 4.49 pb`, que
+es maker CON descuento BNB** (3.60 + 0.888). Si el BNB no está activo, el lastre real es
+**4.89 pb** y toda esa tabla se desplaza en contra. Es exactamente el número que la compuerta
+existe para fijar.
+
+**Para abrir la compuerta**, sobre la clave de Mainnet: activar *«Restringir el acceso solo a IP
+de confianza»*, añadir la IP de la máquina de captura, y entonces marcar **«Habilitar Futuros»**
+— Binance no ofrece esa casilla sin lista blanca. Sin permisos de trading ni de retiro.
+
+**Decisión de ejecución, declarada:** se ejecutan §1.2, §2, §3 y las deudas del §7, que **no
+dependen** de `c(u)`. **NO se ejecuta el §4 (la superficie)** hasta que la compuerta pase: es la
+etapa que produce un titular citable y su curva de coste entera cuelga del número asumido. `c(u)`
+entra de forma **aditiva**, así que la superficie se recalcula en minutos cuando lleguen las
+tarifas.
+
+#### Estado de las deudas del §7 al arrancar
+
+| deuda | estado |
+|---|---|
+| **7.1** calibración contra Cont–Kukanov–Stoikov | ✅ **HECHA** el 2026-08-27, ver apartado propio. El OFI-L1 **no** está degradado |
+| **7.2** curva en U | implementada en `actividad.py`, pendiente de correr |
+| 7.3 micro-precio | pendiente |
+| 7.4 `η̂` con barrido de colapso | pendiente |
+| **7.5** nulo espectral sobre `ν` | implementado en `actividad.py` con nulo **simulado**, pendiente de correr |
+
+#### §1.2 — suelo de ruido de la Adenda C, medido sobre `estacional_0` (131.83 h)
+
+| `H` | 60 s | 120 s | 300 s | 600 s | 900 s | 1800 s | 3600 s | 7200 s | 14400 s |
+|---|---|---|---|---|---|---|---|---|---|
+| **q95 rotación** | 0.000182 | 0.000192 | 0.000283 | 0.000337 | 0.000317 | 0.000313 | 0.000501 | 0.000553 | **0.000648** |
+| q95 barajado | 0.000002 | 0.000003 | 0.000002 | 0.000002 | 0.000003 | 0.000002 | 0.000002 | 0.000002 | 0.000002 |
+| razón | 82× | 75× | 131× | 151× | 125× | 167× | 227× | 275× | **292×** |
+
+**Dos cosas quedan establecidas:**
+
+1. **El suelo crece 3.6× mientras `H` crece 240×.** El método de ventanas iba como `k/n_val`, que
+   en ese mismo rango empeora ~100×. **La tesis del §C.3.2 se sostiene sobre dato real**, y el
+   orden de magnitud coincide con lo que la adenda había simulado (1.6e-4 a 3.8e-4).
+2. ⚠ **Barajar `ε` subestima el suelo entre 75× y 292×.** El §C.4.1 pedía barajar; la desviación
+   a **rotación circular** —declarada por conservar la memoria larga de `ε`, que es el modo de
+   fallo 8 de la propia adenda— resultó **necesaria**: con el suelo de barajado, filas que **no**
+   resuelven se habrían leído como si resolvieran.
+
+⚠ **Decisión con consecuencia declarada: tope de 2 M de parejas**, con submuestreo **sistemático**
+(no aleatorio: el aleatorio rompería el solapamiento, que es lo que da anchura al nulo) y **el
+mismo conjunto para la estimación y para el suelo**. Se pierde resolución respecto a usar las
+20 M y se reporta como tal; siguen siendo ~10⁵ veces más parejas que ventanas tenía el método
+viejo.
+
+#### Infraestructura: el techo de RAM, resuelto
+
+Los cinco fragmentos pasan a `.npy` sueltos abiertos con `mmap_mode='r'` — **1.4 GB de disco**
+contra 7.7 GB de RAM con ~1 GB libre. Tres procesos habían muerto por eso. **Lección
+complementaria, que costó dos muertes más: un solo trabajo pesado a la vez** — el suelo y la
+Tarea 1 corriendo en paralelo se mataron entre ellos.
+
+---
+
+### Tarea 1 (2026-08-27) — Calibración contra Cont, Kukanov & Stoikov (2014). `cont2014.py`, 6/6
+
+⚠ **TODO ESTE APARTADO ES CONTEMPORÁNEO** (`Δmid_k` contra `OFI_k` del **mismo** intervalo de
+10 s). No es comparable con la Adenda C ni con el §1 de la v4.1, que son predictivos. Ver la
+convención de la Tarea 2.
+
+#### ⚠ EL RESULTADO INVIERTE LA EXPECTATIVA DECLARADA: el instrumento NO está degradado
+
+| serie | n_sub | OFI | OFI **sin** eventos que mueven el precio | transac. | ambos | cuadrát. | sig(TI) |
+|---|---|---|---|---|---|---|---|
+| **captura_v33** | 45 | **75.0 %** | **72.4 %** | 43.3 % | 84.3 % | 76.7 % | **91.1 %** |
+| **estacional_tramo3** | 46 | **75.1 %** | **72.6 %** | 43.0 % | 84.3 % | 76.8 % | **91.3 %** |
+| publicado (50 acciones NYSE) | 50 | 65.0 % | 35–60 % | 32.0 % | 67.0 % | 68.0 % | 31.0 % |
+
+La interpretación se declaró antes de correr: *«un `R²` sustancialmente por debajo de 35–65 % no
+es un hallazgo sobre BTCUSDT; es una medida de la degradación de nuestro OFI-L1 aproximado»*.
+**Sale al revés.** Nuestro OFI-L1 desde `bookTicker` **reproduce y supera** las cifras publicadas.
+
+**Consecuencias, y la primera es la que importa:**
+
+1. ⚠ **El déficit predictivo NO se puede achacar al instrumento.** El residuo de reconciliación
+   del 93.5 % (v3.2 §4.3) **no** se traduce en un OFI degradado. Explicar contemporáneamente
+   funciona al **75 %**; predecir da **≈ 0**. Es la distinción de la Tarea 2 con número puesto,
+   y **refuerza** la conclusión negativa del §1 en vez de debilitarla.
+2. **Replica a tres cifras entre dos capturas separadas por semanas** (75.0/75.1, 72.4/72.6,
+   84.3/84.3, 91.1/91.3). En un proyecto donde `H_p`, `β` y la antipersistencia **no**
+   replicaron, esta relación es la primera que sí. Es una propiedad estable del mercado.
+3. **La relación es LINEAL.** El término cuadrático `OFI·|OFI|` sube 75.0 → 76.8 %, en línea con
+   su 65 → 68 %. **No introducir no linealidad**, como manda el artículo.
+4. ⚠ **Dos diferencias reales con NYSE, no artefactos:**
+   - **El desequilibrio de transacciones pesa mucho más aquí**: significativo en el **91 %** de
+     submuestras contra su **31 %**, y por sí solo da 43 % contra su 32 %. En BTCUSDT el flujo
+     de transacciones lleva información propia que en renta variable no lleva.
+   - **Su control de tautología casi no muerde aquí**: 75.0 → 72.4 % contra su 65 → 35–60 %.
+     Hipótesis, y hay que tratarla como tal: con el **spread clavado en 1 tick** (medido: mediana
+     y p90 = 0.1000 USD en los cuatro tramos), el punto medio se mueve exactamente cuando una
+     cola se vacía, y el vaciado es visible como caída de cantidad **a precio fijo** antes de que
+     el precio salte. En NYSE, con spreads de varios ticks, ese canal es mucho más débil.
+
+#### `λ` de `β_i = c / AD_i^λ` — replica, pero NO es la misma regresión que la suya
+
+| serie | n | `λ̂` | `z` contra `λ = 1` | recorrido de `AD` (p10→p90) |
+|---|---|---|---|---|
+| captura_v33 | 45 | **+0.1180 ± 0.0519** | −16.98 | 1.92× |
+| estacional_tramo3 | 46 | **+0.1172 ± 0.0503** | −17.57 | 1.95× |
+| publicado | 50 acciones | ≈ 0.98 | no rechazable en 35/50 | órdenes de magnitud |
+
+⚠ **NO se concluye «λ ≠ 1, luego la profundidad más allá del primer nivel domina», y la razón es
+metodológica:** la suya es una regresión **TRANSVERSAL entre 50 activos distintos** con
+profundidades que difieren en órdenes de magnitud; la nuestra es **TEMPORAL dentro de un solo
+activo** sobre un recorrido de profundidad de **1.9×**. Es la misma forma funcional ajustada
+sobre un eje de variación distinto, y no tienen por qué compartir exponente — sobre todo cuando
+dentro del instrumento la profundidad y la actividad co-varían (`corr(log D, log ν) = −0.485`,
+medido el 2026-08-23).
+
+**Lo que sí queda establecido:** *dentro* de BTCUSDT e intradía, **el coeficiente de impacto es
+casi independiente de la profundidad de nivel 1** (`λ = 0.12`, replicado). Y eso coincide con
+H1, que por otra vía midió que la profundidad de L1 **no aporta nada** sobre el flujo (parcial
++0.0425 contra un techo de nulo de +0.0418). **Dos medidas independientes dicen que la liquidez
+que gobierna no está en L1.**
+
+**Eso sí es un argumento para ingerir `@depth`** — el primero que existe en el proyecto — pero
+formulado así, no como «λ ≠ 1». Y sigue siendo una decisión de captura, no de análisis.
+
+---
+
+## ⚠ CONVENCIÓN OBLIGATORIA — todo `R²` se cita como CONTEMPORÁNEO o PREDICTIVO
+
+**Ninguna cifra de `R²` de este proyecto se escribe sin una de esas dos etiquetas.** Son
+cantidades distintas y confundirlas ha estado a punto de costar una lectura equivocada más de
+una vez.
+
+| etiqueta | qué regresa | ejemplo del proyecto | ejemplo de la literatura |
+|---|---|---|---|
+| **CONTEMPORÁNEO** | `Δp_k` contra el flujo del **mismo** intervalo | el `R² = 0.014` de la v3.2 (núcleo con `h(0)·x_t` dentro) | **65 %** de Cont, Kukanov & Stoikov (2014) |
+| **PREDICTIVO** | `r_{t→t+H}` futuro contra flujo **pasado** | el `R² ≈ 0` del §1 de la v4.1; toda la Adenda C | — |
+
+**El 65 % de la literatura es CONTEMPORÁNEO y no es comparable con nada de la Adenda C.**
+Explicar el movimiento que ya ocurrió no es predecir el que viene, y sólo lo segundo se puede
+negociar. Es la misma reconciliación que la sesión 2026-08-10 (c) escribió para el `R² = 0.014`
+de la v3.2 contra el `R² ≈ 0` del §1, elevada aquí a regla.
+
+Corolario práctico: **un `R²` contemporáneo alto no rebaja el requisito del paso 3.** El peaje
+se paga por entrar y salir, y para eso hace falta saber antes.
+
+---
+
+## Decisión pendiente para Samuel — de dónde saldría el predictor de la banda abierta
+
+**No se implementa nada de esto sin orden de trabajo y preregistro nuevos.** Queda escrito para
+que la decisión exista cuando toque tomarla.
+
+**El problema de escalas.** El desequilibrio del libro es un predictor de **segundos**: el propio
+Cont-Kukanov-Stoikov reporta que sus autocorrelaciones se desvanecen hacia los 10 s. La banda de
+horizonte que la v4.1 dejó abierta es de **15 a 60 minutos**. Son escalas incompatibles por dos
+o tres órdenes de magnitud. La Adenda C lo va a confirmar o refutar con la curva `R²(H)` por
+identidad de covarianza — es exactamente lo que esa curva mide.
+
+**Si se confirma que la señal de libro no sobrevive más allá de unos minutos**, el predictor
+para la banda abierta tiene que venir de variables **exógenas** —tasa de financiación del
+perpetuo, base contra CME, DXY— y **no de microestructura**. Sería un cambio de familia de
+datos, no un refinamiento del estimador.
+
+### ⚠ El argumento estructural, que no requiere medición y conviene tener escrito
+
+**El nivel de equilibrio de la predictibilidad del flujo lo fija el coste del participante
+marginal, no el nuestro.**
+
+Un participante de VIP alto paga una comisión maker cercana a cero; nosotros pagamos **4 pb de
+ida y vuelta a VIP 0** — y ese VIP 0 está **leído de la cuenta** (2026-08-23). Mientras exista
+alguien capaz de operar rentablemente con un margen mucho menor que el nuestro, la
+predictibilidad se compite **hasta su suelo, no hasta el nuestro**: entre uno y dos órdenes de
+magnitud por debajo de nuestro umbral.
+
+**Consecuencia dura: mejorar el estimador no mueve ese suelo.** No es un problema de método.
+
+Y es coherente con las tres cosas que este proyecto ya midió por separado:
+
+- el **paso 3 de la v3.2**, que se paró por un factor 3.46 en comisiones;
+- **`max|μ̂| = 2.63 pb` contra 4 pb de comisión** — ni el máximo de la señal medida llega al
+  peaje;
+- el **§1 de la v4.1 a 60 y 120 s**, donde la medición sí resuelve y da `R² ≈ 0` contra un
+  requisito del 38–83 %.
+
+Tres mediciones independientes, con instrumentos distintos, apuntando al mismo sitio.
+
+---
+
+## Sesión 2026-08-29 (b) — Cribado de activos (v5.1), y una rama escrita sobre historia obsoleta
+
+Abre una línea nueva: **dejar de buscar el margen dentro de BTC y buscar un activo distinto.**
+Preregistro propio, commiteado antes de medir. `Micelio.py` sin cambios.
+
+### ⚠ LO PRIMERO: esta rama se escribió contra `d591256` y eso invalidó tres cosas
+
+La sesión remota clonó el repositorio cuando `master` estaba en `d591256` (v3.1 §2,
+2026-08-08). Todo el trabajo de 2026-08-10 a 2026-08-29 —`identidad.py`, `estratos.py`,
+`captura_estacional.py`, `cont2014.py`, las v3.2, v3.3, v4.0, v4.1, v4.2 y el
+`PLAN_CAPITAL_5_0`— **era invisible desde ahí**. Consecuencias, todas corregidas al fusionar:
+
+1. **Se escribió un `identidad_multivariante.py` que duplicaba `identidad.py`.** Retirado.
+   El §C.3.5 **ya estaba implementado y ejecutado** (`r2_identidad_multi`, autotest 6/6,
+   sesión 2026-08-27). Dos implementaciones de la misma identidad son un pasivo, no un
+   respaldo: divergen y nadie sabe cuál manda.
+2. **Se escribió un acta de cierre que cerraba el proyecto en la v3.1.** Retirada. El
+   proyecto siguió cinco versiones más. Un acta con la fecha de defunción equivocada es peor
+   que ninguna.
+3. **La numeración chocaba:** `v4.0` ya es `ORDEN_TRABAJO_EJECUCION_4_0`. Renumerado a
+   **v5.1**.
+
+⚠ **Y una corrección de fondo que vino de leer `identidad.py`.** Esta rama afirmaba que el
+techo multivariante es «superior por construcción» al univariante. `identidad.py` ya advierte
+que **eso NO ES UN TEOREMA**: sólo vale si los rasgos univariantes están **anidados** en los
+multivariantes. Con agregados de flujo `X_j = Σ ε_{t−i}` que no contienen `ε_t`, la
+multivariante **puede rendir menos**. El test que acompañaba a la afirmación pasaba sólo
+porque usaba el mismo conjunto de rasgos en ambos lados — anidamiento por construcción, no
+prueba del caso general. Retirado junto con el módulo.
+
+**La lección, que es de la misma familia que las ya registradas:** un clon obsoleto no
+produce un error ruidoso, produce trabajo coherente sobre premisas falsas. Antes de abrir
+línea nueva en una sesión remota, comprobar contra qué `master` se está trabajando.
+
+### La hipótesis, declarada antes de medir
+
+**Condicionar por volatilidad DENTRO de un activo no mejora el margen** (§1 estratificado:
+margen mínimo 9.3×, línea cerrada). **Elegir un activo permanentemente más volátil sí puede
+hacerlo**, porque el mecanismo es distinto: los tramos volátiles de BTC son tramos de
+**información**, donde la competencia es máxima; un activo de menor capitalización es
+**estructuralmente** más volátil y **menos competido**.
+
+**Predicción falsable:** en el cribado, `σ₁` y `R²` predictivo **NO** estarán negativamente
+correlacionados entre activos. Muere si `ρ_Spearman ≤ −0.30` con `p < 0.05`.
+
+### El criterio económico
 
 ```
 R2_req(H) = ( 2*c_lado / (kappa * sigma_1 * H**H_p) )**2 ,   kappa = sqrt(2/pi)
 ```
 
-Como la comisión USDⓈ-M es **idéntica en todos los pares**, la única variable libre
-es `σ₁`, y todo el cribado se ordena por ese número. Comprobación de consistencia,
-fijada como test: `σ₁ = 1.30 pb·s^(−0.5)` implica `R²_ref = 0.004131`, **dentro de la
-banda 0.002–0.008** declarada para el predictor direccional de BTC.
+La comisión USDⓈ-M es **idéntica en todos los pares**, así que la única variable libre es
+`σ₁`. Consistencia fijada como test: `σ₁ = 1.30 pb·s^(−0.5)` implica `R²_ref = 0.004131`,
+dentro de la banda 0.002–0.008 del predictor direccional.
 
-⚠ **Inconsistencia registrada y no resuelta** (§3.4 del preregistro): los tres
-factores dados (7.87× agregado, 3.4× `estacional_0`, 1.2× `estacional_1`) implican un
-`σ₁` agregado de 0.165 que queda **por debajo de los dos estratos** (0.382 y 1.083),
-cuando debería quedar entre ellos. Explicación más probable: el agregado usa el `R²`
-del predictor agrupado, menor que el de cada estrato. **No se usa ninguno de los tres
-como umbral**: C1.1 se apoya solo en `σ₁ ≥ 2.60`, que es absoluto.
+### Archivos
 
-### Archivos nuevos
-
-- `ACTA_CIERRE_MICELIO_1_0_A_3_1.md` — liquida el proyecto viejo.
-- `PREREGISTRO_CRIBADO_4_0.md` — **commiteado antes de medir** (`91dcf9b`).
-- `ORDEN_TRABAJO_CRIBADO_4_0.md` — cómo se ejecuta.
+- `PREREGISTRO_CRIBADO_5_1.md` — commiteado antes de medir (`91dcf9b`).
+- `ORDEN_TRABAJO_CRIBADO_5_1.md` — cómo se ejecuta.
 - `cribado_activos.py` — Etapa 1. `python cribado_activos.py`.
-- `identidad_multivariante.py` — la residual de BTC (§C.3.5).
-  `python identidad_multivariante.py --datos=<captura.npz|dir>`.
 
-### ⚠ DOS COSAS NO EJECUTADAS, y por qué
+### ⚠ NO EJECUTADO: el cribado no ha corrido contra mercado
 
-1. **El cribado no ha corrido contra mercado.** `fapi.binance.com`,
-   `api.binance.com` y `data-api.binance.vision` están **denegados por la política de
-   egreso** de la sesión remota (403 al CONNECT; GitHub sí resuelve, luego es política
-   y no red). La corrida real es local, en un comando.
-2. **La identidad multivariante no ha corrido sobre BTC real.** El código y los datos
-   de las sesiones 2026-08-11 a 2026-08-29 —modelo de volatilidad `R² = 0.615`,
-   `captura_estacional.py`, §1 estratificado, §C.3.5, corrección del 2026-08-29— **no
-   están en este árbol**; `git log` terminaba en `d591256`. `rasgos_desde_captura`
-   reconstruye la familia de rasgos que sí está documentada y va marcada
-   `# NOTA DE INTERPRETACION:`; **hay que sustituirla por la del §C.3.5** al correr.
+`fapi.binance.com`, `api.binance.com` y `data-api.binance.vision` están **denegados por la
+política de egreso** de la sesión remota (403 al CONNECT; GitHub sí resuelve, luego es
+política y no red). Todo lo que se afirma sobre los estimadores está medido **contra datos
+sintéticos con verdad conocida**. La corrida real es local, en un comando.
 
-Todo lo que se afirma sobre los estimadores está medido **contra datos sintéticos con
-verdad conocida**, y así está declarado. **20/20** criterios v4.0.
+### Hallazgos medidos
 
-### Hallazgos de esta tanda, todos medidos
+**1. `σ₁` es una EXTRAPOLACION y su error lo domina `H_p`.** El ajuste vive en [60, 3600] s
+y `σ₁` es su valor en H = 1 s, **60× por debajo** del punto más corto. Un error `d` en `H_p`
+da un factor `60^(−d)`: `d = 0.012` son ~5 %. Sobre 8 semillas con verdad conocida, `σ₁` sale
+sesgado **−1.0 % a −4.4 %, siempre del mismo signo**. El rango no se cambia (está declarado);
+se publica el error típico y se marca `[MARGINAL en C1.1]` a los pares a menos de 2 errores
+del umbral. El test **verifica el mecanismo**: exige que el error de `σ₁` sea el que predice
+`60^(−d)` a partir del de `H_p`.
 
-**1. `σ₁` es una EXTRAPOLACION y su error lo domina `H_p`.** El ajuste vive en
-[60, 3600] s (rango declarado) y `σ₁` es su valor en H = 1 s, **60× por debajo** del
-punto más corto. Un error `d` en `H_p` da un factor `60^(−d)` sobre `σ₁`: `d = 0.012`
-son ~5 %. Sobre 8 semillas de paseo con verdad conocida, `σ₁` sale sesgado **−1.0 % a
-−4.4 %, siempre del mismo signo**. El rango no se cambia (está declarado); se publica
-el error típico y se marca `[MARGINAL en C1.1]` a los pares a menos de 2 errores del
-umbral. El test **verifica el mecanismo**, no solo tolera el error: exige que el error
-de `σ₁` sea el que predice `60^(−d)`.
+**2. Roll cambia veredictos, no decora.** Rebote inyectado de tamaño conocido: `s_eff`
+recuperado 4.932 pb contra 5.000; `σ₁` 0.9092 → 0.6614 contra verdad 0.6455. En el ensayo de
+humo, un par con `σ₁` crudo 3.51 cayó a **2.55** tras Roll y **dejó de superar la compuerta**.
+El sesgo del rebote bid-ask va justo en la dirección que favorece a los pares malos.
 
-**2. Roll cambia veredictos, no decora.** Rebote inyectado de tamaño conocido:
-`s_eff` recuperado 4.932 pb contra 5.000; `σ₁` 0.9092 → 0.6614 contra verdad 0.6455.
-En el ensayo de humo, un par con `σ₁` crudo 3.51 cayó a **2.55** tras Roll y **dejó de
-superar la compuerta**. Sin corregir, el cribado elegiría pares cuya volatilidad es
-horquilla — y el sesgo va justo en la dirección que favorece a los pares malos.
+**3. La curtosis se satura en `1/f` con datos sucios.** Fijado como test permanente: con una
+fracción `f` de valores espurios enormes, la curtosis tiende a `1/f` **sea cual sea la cola
+real**. Medido: sucia 496.9 con `f = 0.002`, limpia 749.5. Es el mecanismo del 601.8 → 1179.7
+de la v3.0, ahora demostrado en general en vez de observado una vez.
 
-**3. Rotación circular contra barajado: el barajado se equivoca por 29×.** Con rasgos
-y objetivo AR(1) de ρ = 0.98 **independientes** (`R²` verdadero = 0):
+### Defectos propios corregidos
 
-| | valor |
-|---|---|
-| `R²` en muestra (regresión espuria) | **0.0807** contra `p/n` = 0.0042 |
-| suelo por **rotación** p95 | **0.2676** → NO FALSABLE ✔ |
-| suelo por **barajado** p95 | 0.00913 → FALSABLE ✘ |
-
-El barajado destruye la autocorrelación; la rotación conserva marginal **y** memoria
-de ambas series y destruye solo el alineamiento. Con contraprueba: una relación real
-entre series igual de persistentes vuelve a salir FALSABLE.
-
-**4. La curtosis se satura en `1/f` con datos sucios.** Fijado como test permanente:
-con una fracción `f` de valores espurios enormes, la curtosis observada tiende a `1/f`
-**sea cual sea la cola real**. Medido: sucia 496.9 con `f = 0.002` (1/f = 500), limpia
-749.5. Es el mecanismo exacto del 601.8 → 1179.7 de la v3.0, ahora demostrado en
-general en vez de observado una vez.
-
-**5. `R²_max` multivariante ≥ máximo univariante, por construcción**, verificado sobre
-30 matrices de covarianza al azar. Y la consecuencia económica está fijada como test:
-si la multivariante rinde 2× la univariante, el factor sobre `estacional_0` baja de
-3.4× a **2.404×** — porque el margen va con `√R²`.
-
-### Defectos propios encontrados y corregidos
-
-- **Los tests se añadieron después del `sys.exit(main())`** de `tests_v13.py`, así que
-  nunca llegaron a definirse: la suite decía 56 tests y pasaba. Un test que no existe
-  se ve exactamente igual que uno que pasa.
-- **`rasgos_y_objetivo` calculaba el retorno del bloque 0 desde su propia primera
-  vela**, dando un retorno corto que se mezclaba con los demás como si fuera
-  comparable. Ahora es NaN y la máscara lo descarta (cuesta 2 bloques de ~2160;
-  inventarse la apertura cuesta un sesgo silencioso).
-- **Rasgos constantes hacían singular a `Σ`**. Se descartan, no se avisan: un rasgo
-  que no varía no puede explicar variación.
-- Dos literales truncados en asertos de test (0.9047619 contra 0.9047619047619048).
+- **Los tests se añadieron después del `sys.exit(main())`** del runner, así que nunca llegaban
+  a definirse: la suite decía 56 y pasaba. Un test que no existe se ve igual que uno que pasa.
+- `rasgos_y_objetivo` medía el retorno del bloque 0 desde su propia primera vela; ahora es NaN
+  y la máscara lo descarta.
 
 ### Pendiente
 
-1. **Correr `identidad_multivariante.py` sobre los datos de BTC en disco**, con los
-   rasgos del §C.3.5 en lugar del adaptador provisional. Fija el factor 3.4×/2.4×.
-2. **Correr `cribado_activos.py` en local**, donde el egreso a Binance esté permitido.
-3. Etapa 2 y Etapa 3 según el §2 y §3 del orden de trabajo.
-4. Traer al repositorio el material de las sesiones 2026-08-11 a 2026-08-29, o
-   declararlo definitivamente fuera del árbol.
+1. **Correr `cribado_activos.py` en local**, donde el egreso a Binance esté permitido.
+2. Etapa 2 y Etapa 3 según el §2 y §3 del orden de trabajo.
+3. **Decidir si hace falta un acta de cierre** que cubra de la v3.2 a la v4.2. La que traía
+   esta rama se retiró por cerrar en la v3.1.
 
 
 ## Convenciones
 
+- **Todo `R²` se etiqueta CONTEMPORÁNEO o PREDICTIVO.** Son cantidades distintas y no
+  comparables; ver la sección propia más arriba. El 65 % de Cont-Kukanov-Stoikov es
+  contemporáneo.
 - Comentarios y nombres de variables en español, consistente con el código y el PDF existentes.
 - Referenciar la sección del PDF en los comentarios al implementar una fórmula.
 - Cualquier suposición que rellene un hueco del PDF debe marcarse explícitamente con

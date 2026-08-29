@@ -24,7 +24,6 @@ import numpy as np
 
 import constantes_micelio as CTE
 import cribado_activos as CRIB
-import identidad_multivariante as IDM
 import dinamica
 import episodios
 import mercado
@@ -1665,7 +1664,7 @@ def test_v30_masa_negativa_es_rebote_bid_ask():
 
 
 # ==============================================================================
-# v4.0 — CRIBADO DE ACTIVOS (PREREGISTRO_CRIBADO_4_0)
+# v5.1 — CRIBADO DE ACTIVOS (PREREGISTRO_CRIBADO_5_1)
 # ==============================================================================
 # Cada test contrasta un estimador contra VERDAD CONOCIDA construida a mano. Es la
 # unica forma de saber que mide lo que dice medir, y este proyecto ya perdio
@@ -1692,7 +1691,7 @@ def _klines_sinteticas(log_p, semilla=0, ofi=None):
     return np.column_stack([t, p, alto, bajo, p, vol, nt, vt])
 
 
-def test_v40_umbral_sigma1_es_consistente_con_R2_declarado():
+def test_v51_umbral_sigma1_es_consistente_con_R2_declarado():
     """Sec. 3.3 del preregistro: la comprobacion de consistencia del propio documento.
 
     `sigma1 = 1.30 pb*s^-0.5` a H = 3600 s con maker 2.000 pb/lado debe implicar un
@@ -1709,7 +1708,7 @@ def test_v40_umbral_sigma1_es_consistente_con_R2_declarado():
             "c=%.4f pb" % (CRIB.SIGMA1_EQUILIBRIO_PB, r2, c))
 
 
-def test_v40_compuerta_conserva_los_umbrales_declarados():
+def test_v51_compuerta_conserva_los_umbrales_declarados():
     """Sec. 8: NO se rebaja ningun umbral. El test lo fija en la suite.
 
     Incluye la lectura declarada de C1.1: "1.30 con margen de 2x" significa
@@ -1735,7 +1734,7 @@ def test_v40_compuerta_conserva_los_umbrales_declarados():
         CRIB.C1_1_SIGMA1_MIN_PB)
 
 
-def test_v40_firma_recupera_sigma1_y_Hp_de_verdad_conocida():
+def test_v51_firma_recupera_sigma1_y_Hp_de_verdad_conocida():
     """Paseo aleatorio con sigma por minuto CONOCIDA -> sigma1 y H_p exactos.
 
     Con incrementos iid de desviacion `sigma_m` por minuto,
@@ -1779,7 +1778,7 @@ def test_v40_firma_recupera_sigma1_y_Hp_de_verdad_conocida():
                                predicho, observado, 100 * err_ref))
 
 
-def test_v40_roll_recupera_el_spread_y_desinfla_sigma1():
+def test_v51_roll_recupera_el_spread_y_desinfla_sigma1():
     """El nucleo de C1.1: sigma de velas de 1 min SOBREESTIMA por rebote bid-ask.
 
     Se inyecta un rebote de tamano CONOCIDO sobre un paseo conocido y se exige:
@@ -1816,7 +1815,7 @@ def test_v40_roll_recupera_el_spread_y_desinfla_sigma1():
                                             esperado, 100 * err_corr))
 
 
-def test_v40_control_barajado_devuelve_Hp_a_un_medio():
+def test_v51_control_barajado_devuelve_Hp_a_un_medio():
     """Sec. 6.2: el control del A.3.4, que ya salvo dos analisis.
 
     Se construye una serie con H_p GENUINAMENTE distinto de 0.5 (retornos AR(1)
@@ -1845,7 +1844,7 @@ def test_v40_control_barajado_devuelve_Hp_a_un_medio():
         real["H_p"], baraj["H_p"], sesgo, CRIB.TOLERANCIA_HP_BARAJADO)
 
 
-def test_v40_objetivo_no_mira_el_futuro():
+def test_v51_objetivo_no_mira_el_futuro():
     """`rasgos_y_objetivo` debe alinear el objetivo con el bloque SIGUIENTE.
 
     Es la familia del defecto de `mode="same"` de la v3.1 Sec. 3, que metia el futuro
@@ -1877,7 +1876,7 @@ def test_v40_objetivo_no_mira_el_futuro():
             % (err_futuro, err_presente, err_rasgo))
 
 
-def test_v40_r2_oos_no_inventa_senal_y_recupera_la_inyectada():
+def test_v51_r2_oos_no_inventa_senal_y_recupera_la_inyectada():
     """Dos mitades: sin senal el R2 fuera de muestra NO puede salir positivo material;
     con senal inyectada tiene que recuperarla.
 
@@ -1900,7 +1899,7 @@ def test_v40_r2_oos_no_inventa_senal_y_recupera_la_inyectada():
         r_ruido, r_senal, teorico)
 
 
-def test_v40_fraccion_de_cola_separa_salto_de_difusion():
+def test_v51_fraccion_de_cola_separa_salto_de_difusion():
     """C1.4: dos series con el MISMO sigma y distinta concentracion no valen lo mismo.
 
     Volatilidad difusa se captura con ordenes maker; volatilidad que es toda salto
@@ -1923,7 +1922,7 @@ def test_v40_fraccion_de_cola_separa_salto_de_difusion():
                                  ms["fraccion_cola"], ms["curtosis"]))
 
 
-def test_v40_limpieza_desenmascara_la_cola():
+def test_v51_limpieza_desenmascara_la_cola():
     """Sec. 6.1: los datos sucios ENMASCARAN la cola, no la crean.  Leccion de la v3.0.
 
     Con una fraccion `f` de valores espurios enormes, la curtosis observada tiende a
@@ -1952,7 +1951,7 @@ def test_v40_limpieza_desenmascara_la_cola():
             "SUBE %.1fx" % (k_sucio, 1.0 / f, k_limpio, k_limpio / k_sucio))
 
 
-def test_v40_limpiar_klines_descarta_velas_vacias():
+def test_v51_limpiar_klines_descarta_velas_vacias():
     """La limpieza tiene que quitar volumen 0 / n_trades 0 y contar la cobertura."""
     rng = np.random.default_rng(13)
     n = 5000
@@ -1968,7 +1967,7 @@ def test_v40_limpiar_klines_descarta_velas_vacias():
         lim["descartadas"], lim["n_bruto"], lim["cobertura"])
 
 
-def test_v40_spearman_y_cola_t_contra_valores_conocidos():
+def test_v51_spearman_y_cola_t_contra_valores_conocidos():
     """El estadistico de la prediccion falsable, contra aritmetica hecha a mano.
 
     Sin SciPy: la cola de la t va por beta incompleta regularizada propia, asi que
@@ -1996,7 +1995,7 @@ def test_v40_spearman_y_cola_t_contra_valores_conocidos():
                                           sp["rho"], sp["p"], inv["rho"]))
 
 
-def test_v40_cribar_par_extremo_a_extremo_sin_red():
+def test_v51_cribar_par_extremo_a_extremo_sin_red():
     """La cadena entera sobre un par sintetico con verdad conocida, sin tocar la red.
 
     Comprueba ademas que un par con horquilla ancha y sigma1 alto NO pasa por el
@@ -2026,181 +2025,6 @@ def test_v40_cribar_par_extremo_a_extremo_sin_red():
             "C1.2 con horquilla de %.1f pb" % (r["sigma1_crudo_pb"], r["sigma1_roll_pb"],
                                                r["delta_roll_pct"], s * 1e4))
 
-
-# ==============================================================================
-# v4.0 — IDENTIDAD DE COVARIANZA MULTIVARIANTE (Sec. C.3.5), la residual de BTC
-# ==============================================================================
-
-def _ar1(n, a, sigma, rng):
-    """Serie AR(1): memoria fuerte, que es lo que hace peligroso al suelo barajado."""
-    x = np.empty(n)
-    x[0] = rng.normal(0.0, sigma / math.sqrt(max(1.0 - a * a, 1e-9)))
-    e = rng.normal(0.0, sigma, n)
-    for i in range(1, n):
-        x[i] = a * x[i - 1] + e[i]
-    return x
-
-
-def test_v40_identidad_recupera_el_R2_poblacional():
-    """`R2_max = c' Sigma^-1 c / var(y)` contra un R2 poblacional CONOCIDO."""
-    rng = np.random.default_rng(17)
-    n, p = 20000, 4
-    X = rng.normal(size=(n, p))
-    beta = np.array([0.5, -0.3, 0.2, 0.0])
-    ruido = 1.0
-    y = X @ beta + rng.normal(0.0, ruido, n)
-    teorico = float(beta @ beta) / (float(beta @ beta) + ruido ** 2)
-    r = IDM.identidad_covarianza(X, y)
-    err = abs(r["r2_max"] - teorico) / teorico
-    assert err < 0.05, "R2_max %.6f vs teorico %.6f" % (r["r2_max"], teorico)
-    # El rasgo con beta = 0 tiene que dar R2 por fila ~ 0.
-    assert abs(r["r2_por_fila"][3]) < 0.005, r["r2_por_fila"][3]
-    return "R2_max=%.6f contra teorico %.6f (err %.2f %%); el rasgo nulo da %.5f" % (
-        r["r2_max"], teorico, 100 * err, r["r2_por_fila"][3])
-
-
-def test_v40_techo_multivariante_es_superior_por_construccion():
-    """La propiedad que hace que valga la pena: el techo multivariante NO puede ser
-    menor que el mejor univariante, porque este es el mismo cociente restringido a
-    una coordenada. Se comprueba sobre 30 matrices de covarianza al azar."""
-    rng = np.random.default_rng(19)
-    peor = float("inf")
-    for _ in range(30):
-        n, p = 800, rng.integers(2, 8)
-        X = rng.normal(size=(n, p)) @ rng.normal(size=(p, p))     # rasgos correlacionados
-        y = X @ rng.normal(size=p) + rng.normal(size=n)
-        r = IDM.identidad_covarianza(X, y)
-        holgura = r["r2_max"] - r["r2_univariante_max"]
-        assert holgura >= -1e-9, "el techo multivariante quedo POR DEBAJO: %.3e" % holgura
-        peor = min(peor, holgura)
-    return "30/30 casos con R2_max >= max univariante; holgura minima %.3e" % peor
-
-
-def test_v40_suelo_por_rotacion_marca_no_falsable_el_ruido():
-    """Sin relacion alguna, el techo NO puede declararse falsable.
-
-    Con X e y independientes el R2 verdadero es CERO, pero el R2 en muestra sale
-    positivo por tamano finito. La marca tiene que decir NO FALSABLE.
-    """
-    rng = np.random.default_rng(29)
-    n, p = 1500, 6
-    X = np.column_stack([rng.normal(size=n) for _ in range(p)])
-    y = rng.normal(size=n)
-    an = IDM.analizar(X, y, "ruido independiente", n_rot=200)
-    r2 = an["identidad"]["r2_max"]
-    assert r2 > 0.0, "el R2 en muestra siempre sale positivo"
-    assert not an["marca"]["falsable"], (
-        "un R2 de %.6f sobre ruido NO puede declararse falsable" % r2)
-    # Y el sesgo tiene que estar en el orden de p/n, que es la teoria.
-    assert abs(r2 - p / n) < 5 * (p / n), (r2, p / n)
-    return "R2_max=%.6f sobre ruido puro (p/n=%.6f), suelo p95=%.6f -> NO FALSABLE" % (
-        r2, p / n, an["suelo"]["suelo"])
-
-
-def test_v40_rotacion_conserva_la_memoria_y_barajar_no():
-    """POR QUE ROTACION CIRCULAR Y NO BARAJADO. La justificacion, medida.
-
-    Con rasgos y objetivo AR(1) fuertemente persistentes E INDEPENDIENTES entre si,
-    el R2 en muestra se infla muy por encima de p/n (regresion espuria clasica). El
-    suelo por ROTACION reproduce esa inflacion, porque conserva la memoria de ambas
-    series, y marca NO FALSABLE, que es lo correcto. Un suelo por BARAJADO destruye
-    la memoria, sale mucho mas bajo, y declararia FALSABLE puro ruido.
-    """
-    rng = np.random.default_rng(37)
-    n, p = 1200, 5
-    X = np.column_stack([_ar1(n, 0.98, 1.0, rng) for _ in range(p)])
-    y = _ar1(n, 0.98, 1.0, rng)                    # independiente de X por construccion
-    r2 = IDM.identidad_covarianza(X, y)["r2_max"]
-
-    rot = IDM.suelo_por_rotacion(X, y, n_rot=300, semilla=1)
-    # Suelo por BARAJADO, construido aqui solo para el contraste.
-    baraj = []
-    for _ in range(300):
-        baraj.append(IDM.identidad_covarianza(X, rng.permutation(y))["r2_max"])
-    suelo_baraj = float(np.percentile(baraj, IDM.PERCENTIL_SUELO))
-
-    assert r2 > 10 * (p / n), "la regresion espuria deberia inflar el R2: %.4f" % r2
-    assert rot["suelo"] > 5 * suelo_baraj, (
-        "el suelo por rotacion deberia ser MUCHO mayor: %.5f vs %.5f"
-        % (rot["suelo"], suelo_baraj))
-    assert not IDM.marcar_falsable(r2, rot)["falsable"], "rotacion deberia rechazar"
-    assert IDM.marcar_falsable(r2, {"suelo": suelo_baraj, "percentil": 95})["falsable"], (
-        "el barajado deberia equivocarse, que es el punto del test")
-    return ("R2 espurio %.4f (p/n=%.4f): suelo rotacion %.4f -> NO FALSABLE (bien); "
-            "suelo barajado %.5f -> FALSABLE (mal, %.0fx mas bajo)"
-            % (r2, p / n, rot["suelo"], suelo_baraj, rot["suelo"] / suelo_baraj))
-
-
-def test_v40_suelo_deja_pasar_una_relacion_real():
-    """El suelo no puede ser tan alto que mate tambien lo verdadero.
-
-    Contraprueba del test anterior: con una relacion REAL entre series igual de
-    persistentes, la marca tiene que salir FALSABLE.
-    """
-    rng = np.random.default_rng(43)
-    n, p = 1200, 5
-    X = np.column_stack([_ar1(n, 0.98, 1.0, rng) for _ in range(p)])
-    y = 0.8 * X[:, 0] + 0.5 * X[:, 2] + _ar1(n, 0.98, 0.5, rng)
-    an = IDM.analizar(X, y, "relacion real", n_rot=200, semilla=2)
-    assert an["marca"]["falsable"], an["marca"]["motivo"]
-    return "relacion real: R2_max=%.4f contra suelo %.4f -> FALSABLE (%.1fx)" % (
-        an["identidad"]["r2_max"], an["suelo"]["suelo"], an["marca"]["razon"])
-
-
-def test_v40_factor_de_sigma_reproduce_el_2_4x_anunciado():
-    """La consecuencia economica declarada: si la multivariante rinde 2x la
-    univariante, el factor necesario sobre `estacional_0` baja de 3.4x a 2.4x.
-
-    El margen va con `rho = sqrt(R2)`, luego el factor de sigma va con `1/sqrt(R2)`
-    y 3.4/sqrt(2) = 2.404. Es el numero que la orden de trabajo anticipa, y sirve de
-    comprobacion cruzada de que el modelo economico de este modulo es el mismo.
-    """
-    f = IDM.factor_sigma_requerido(0.004, 0.008, 3.4)
-    assert abs(f - 2.404) < 0.01, f
-    f1 = IDM.factor_sigma_requerido(0.004, 0.008, 1.2)
-    assert abs(f1 - 0.8485) < 0.01, f1
-    # Sin ganancia, el factor no se mueve.
-    assert abs(IDM.factor_sigma_requerido(0.004, 0.004, 3.4) - 3.4) < 1e-12
-    return "R2 x2 -> estacional_0 3.40x -> %.3fx (anunciado 2.4x); estacional_1 1.20x -> %.3fx" % (f, f1)
-
-
-def test_v40_identidad_avisa_de_colinealidad():
-    """Con un rasgo duplicado, `Sigma` es singular y el techo se infla sin avisar.
-
-    `np.linalg.inv` reventaria o devolveria basura; aqui se exige que el rango
-    efectivo lo DELATE, que es la unica defensa contra leer un techo inflado como
-    si fuera una medida.
-    """
-    rng = np.random.default_rng(53)
-    n = 2000
-    a = rng.normal(size=n)
-    b = rng.normal(size=n)
-    X = np.column_stack([a, b, a, a + b])          # dos columnas redundantes
-    y = a + rng.normal(size=n)
-    r = IDM.identidad_covarianza(X, y)
-    assert r["rango_efectivo"] < r["p"], (r["rango_efectivo"], r["p"])
-    assert np.isfinite(r["r2_max"]), "no puede reventar: tiene que avisar"
-    return "rango efectivo %d de %d rasgos y cond(Sigma)=%.2e: colinealidad detectada" % (
-        r["rango_efectivo"], r["p"], r["cond_Sigma"])
-
-
-def test_v40_rasgos_desde_captura_limpia_los_ceros_del_feed():
-    """El adaptador tiene que filtrar los trades con `p = 0` de la v3.0 en origen."""
-    rng = np.random.default_rng(61)
-    n = 40000
-    p = 60000.0 * np.exp(np.cumsum(rng.normal(0.0, 1e-5, n)))
-    sucios = rng.choice(n, size=int(n * 0.002), replace=False)
-    p[sucios] = 0.0
-    d = {"tr_precio": p, "tr_t": np.arange(n, dtype=float) * 0.03,
-         "tr_cant": np.full(n, 0.01), "tr_maker": (rng.random(n) > 0.5).astype(np.uint8)}
-    X, y_vol, y_dir = IDM.rasgos_desde_captura(d, ventana_tx=200)
-    assert len(y_vol) > 100, len(y_vol)
-    assert np.all(np.isfinite(X)), "quedaron no-finitos tras limpiar"
-    # Sin limpiar, la volatilidad realizada estaria dominada por los saltos a cero.
-    assert float(np.nanmax(X[:, 4])) < 0.5, (
-        "volatilidad realizada absurda: quedaron ceros dentro (%.3f)" % np.nanmax(X[:, 4]))
-    return "%d trades (%d con p=0) -> %d bloques limpios, vol_real max %.5f" % (
-        n, len(sucios), len(y_vol), float(np.nanmax(X[:, 4])))
 
 
 # ==============================================================================

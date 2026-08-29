@@ -51,6 +51,13 @@ captura_*.log
 # Conversiones de los PDF a Markdown: se regeneran desde el PDF
 Markdown de PDF*/
 
-# Cache del cribado de activos (v4.0): klines por par, se regeneran
+# Logs de SSA: se regeneran con barrido_ssa.py / phi_precio.py
+ssa_log/
+ssa_log_*.txt
+phi_*.txt
+telemetria/estacional/
+captura_estacional.log
+
+# Cache del cribado de activos (v5.1): klines por par, se regeneran
 cribado_cache/
 cribado_etapa1.txt
