@@ -83,6 +83,14 @@ def preparar(frag, Hs):
     if i.size < 120:
         return None
     r = np.log(mid[j] / mid[np.minimum(i + 1, mid.size - 1)]) * 1e4   # futuro, pb
+    # [!] TECHO ALCANZABLE, MEDIDO Y SIN PARAMETROS LIBRES. Con nucleo perfecto
+    # y sin ruido, lo mas que un solo signo puede explicar del retorno futuro es
+    # lo que explica del FLUJO FIRMADO futuro:
+    #     R2_max(H) = Corr( eps_t , SUMA_{s=1..H} eps_{t+s} )^2
+    # que depende SOLO de la autocorrelacion de signos y se calcula sobre la
+    # serie. No se estima `gamma` ni se sustituye en una forma cerrada: se mide.
+    flujo = np.concatenate(([0.0], np.cumsum(eps, dtype=np.float64)))
+    fut = flujo[j] - flujo[np.minimum(i + 1, t.size - 1)]
     # sigma pronosticada: |retorno| de la ventana PASADA de la misma longitud.
     # Es ex-ante por construccion: solo usa informacion anterior a t.
     s_prev = np.abs(np.log(mid[i] / mid[k])) * 1e4
@@ -90,8 +98,8 @@ def preparar(frag, Hs):
     t_v = t[0] + 0.80 * dur
     ent = t[j] <= t_e
     vld = (t[i] >= t_e) & (t[j] <= t_v)
-    return {"eps": eps[i], "r": r, "s_prev": s_prev, "ent": ent, "vld": vld,
-            "i": i, "n": i.size}
+    return {"eps": eps[i], "r": r, "fut": fut, "s_prev": s_prev,
+            "ent": ent, "vld": vld, "i": i, "n": i.size}
 
 
 def r2_ident(e, r):
@@ -124,8 +132,9 @@ def etapa_curvas(args) -> int:
         dur = float(f["t"][-1] - f["t"][0])
         log("")
         log("--- %s (%.1f h) ---" % (nombre, dur / 3600.0))
-        log("  %7s %7s %7s | %9s %9s %10s %10s %9s"
-            % ("H", "estrato", "n", "sigma[pb]", "R2_req", "R2_medido", "q95_suelo", "margen"))
+        log("  %7s %7s %7s | %8s %9s %10s %10s %9s %11s"
+            % ("H", "estrato", "n", "R2_req", "R2_medido", "R2_MAX", "q95_max",
+               "margen", "veredicto"))
         for Hs in HS:
             if dur < 6 * Hs:
                 continue
@@ -148,34 +157,59 @@ def etapa_curvas(args) -> int:
                 m = (gi == g_)
                 if m.sum() < 60:
                     continue
-                e, r = P["eps"][m], P["r"][m]
+                e, r, fu = P["eps"][m], P["r"][m], P["fut"][m]
                 sg = float(np.std(r))
                 req = (L / (KAPPA * sg)) ** 2
                 r2 = r2_ident(e, r)
                 q95 = suelo(e, r)
+                r2max = r2_ident(e, fu)          # techo alcanzable, MEDIDO
+                q95max = suelo(e, fu)
                 resuelve = np.isfinite(q95) and req >= 3 * q95
                 margen = req / max(r2, 1e-12) if r2 > 0 else float("inf")
-                log("  %6ds %7s %7d | %9.2f %8.3f %% %10.6f %10.6f %9s%s"
-                    % (Hs, NOMBRES[g_], int(m.sum()), sg, 100 * req, r2, q95,
+                # veredicto por fila: un margen sobre un techo inalcanzable no
+                # es evidencia
+                if not np.isfinite(r2max) or r2max < req:
+                    vered = "NO FALSABLE"
+                elif r2max >= 3 * req:
+                    vered = "falsable"
+                else:
+                    vered = "al limite"
+                log("  %6ds %7s %7d | %7.3f%% %10.6f %10.6f %10.6f %9s %11s%s"
+                    % (Hs, NOMBRES[g_], int(m.sum()), 100 * req, r2, r2max, q95max,
                        ("%.1fx" % margen) if np.isfinite(margen) else "  inf",
-                       "" if resuelve else "   <- NO RESUELVE"))
+                       vered, "" if resuelve else "  NO RESUELVE"))
                 filas.append({"frag": nombre, "H": Hs, "estrato": NOMBRES[g_],
                               "n": int(m.sum()), "sigma": sg, "req": req,
-                              "r2": r2, "q95": q95, "resuelve": bool(resuelve),
-                              "margen": float(margen)})
+                              "r2": r2, "q95": q95, "r2max": r2max,
+                              "q95max": q95max, "veredicto": vered,
+                              "resuelve": bool(resuelve), "margen": float(margen)})
             del P
             gc.collect()
         del f
         gc.collect()
 
     titulo("REGLA DE PARADA, APLICADA")
-    alto = [x for x in filas if x["estrato"] == "ALTO" and x["resuelve"]]
+    alto = [x for x in filas if x["estrato"] == "ALTO" and x["resuelve"]
+            and x["veredicto"] != "NO FALSABLE"]
+    descart = [x for x in filas if x["estrato"] == "ALTO" and x["resuelve"]
+               and x["veredicto"] == "NO FALSABLE"]
+    if descart:
+        log("")
+        log("  filas del estrato ALTO descartadas por NO FALSABLES (R2_max < R2_req):")
+        for x in descart:
+            log("    %-16s H=%6ds  R2_max = %.6f < req = %.6f   (margen %.1fx, no cuenta)"
+                % (x["frag"], x["H"], x["r2max"], x["req"], x["margen"]))
     log("")
     log("  filas del estrato ALTO donde el instrumento RESUELVE: %d de %d"
         % (len(alto), sum(1 for x in filas if x["estrato"] == "ALTO")))
     if not alto:
-        log("  -> en el estrato ALTO el instrumento no resuelve en ninguna H.")
-        log("     La regla no se puede aplicar; se reporta como tal.")
+        log("")
+        log("  *** NO QUEDAN FILAS FALSABLES en el estrato ALTO. El acta cambia de")
+        log("      'no hay senal explotable' a **NO MEDIBLE CON PREDICTOR")
+        log("      UNIVARIANTE A ESTOS HORIZONTES**. La version multivariante del")
+        log("      §C.3.5 -- cuyo techo es superior por construccion -- queda SIN")
+        log("      CONTRASTAR, no refutada. La linea se cierra igual. ***")
+        json.dump(filas, open("telemetria/estratos_v42.json", "w", encoding="utf-8"), indent=1)
         return 0
     mejor = min(alto, key=lambda z: z["margen"])
     log("  margen MINIMO en el estrato ALTO: %.1fx   (%s, H = %d s, n = %d)"

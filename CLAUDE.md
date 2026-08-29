@@ -4693,6 +4693,72 @@ reetiquetar continuaciones: es **sacarlas del recuento** (`N_c` 239 → 0 en el 
 
 ---
 
+### ⚠⚠ CORRECCIÓN DEL TECHO, Y EL ACTA CAMBIA DE FRASE (2026-08-29)
+
+El «techo estructural `R² ≈ 1/H`» que publiqué el 2026-08-28 **estaba mal por dos razones**, y
+el propio dato lo delataba: **tres de las cuatro filas decisivas lo superaban**. Un techo que el
+dato supera está mal especificado.
+
+1. **Suponía `ε` iid**, y este proyecto ha medido que no lo es (`N_eff` de los signos = **46.5**,
+   `γ` en [0.354, 0.522]). El control sintético que lo «verificó» generaba los signos con
+   `np.where(rng.random(n) < 0.5, -1, 1)` — **independientes por construcción**. Verificaba el
+   techo iid, que es justo el que no aplica.
+2. **Error de unidades encima:** usaba `H` en **segundos** cuando los incrementos son **ticks**.
+   A `H` = 3 600 s con `ν` = 18.75 son ~67 500 ticks, techo iid **1.5e-5**, contra un `R²` medido
+   de **2.0e-3**: superado por **133×**.
+
+#### El techo correcto: medido, sin parámetros libres
+
+```
+R2_max(H) = Corr( eps_t , SUMA_{s=1..H} eps_{t+s} )^2
+```
+
+Con núcleo perfecto y sin ruido, lo más que un solo signo puede explicar del retorno futuro es lo
+que explica del **flujo firmado futuro**. Depende sólo de la autocorrelación de signos y **se
+calcula sobre la serie** — no se estima `γ` ni se sustituye en una forma cerrada. Medido sobre
+`estacional_0` a `H` = 3 600 s: **0.006895**, o sea **465× por encima del techo iid**. La memoria
+larga del flujo eleva el techo enormemente, que es exactamente lo que la corrección anticipaba.
+
+#### El veredicto por fila, y lo que hace con la regla de parada
+
+| condición | lectura |
+|---|---|
+| `R²_max ≥ 3·R²_req` | fila **falsable**; su margen cuenta para la regla de parada |
+| `R²_max < R²_req` | fila **NO FALSABLE**; se marca y **no cuenta**, aunque su margen sea grande |
+
+**Las diez filas del estrato ALTO que antes sostenían el cierre son NO FALSABLES:**
+
+| fragmento | `H` | `R²_max` medido | `R²_req` | margen (no cuenta) |
+|---|---|---|---|---|
+| estacional_0 | 3 600 s | 0.006895 | 0.018627 | ~~9.3×~~ |
+| estacional_3 | 1 800 s | 0.012103 | 0.041513 | ~~10.2×~~ |
+| captura_v33 | 1 800 s | 0.006443 | 0.029440 | ~~12.8×~~ |
+| estacional_1 | 900 s | 0.000955 | 0.005623 | ~~14.0×~~ |
+| *(y seis más)* | | | | |
+
+**El margen de 9.3× era un margen sobre un techo inalcanzable. No es evidencia.**
+
+#### ⚠ La frase del acta cambia, y esa frase ES el resultado publicable
+
+- ~~«No hay señal explotable a estos horizontes.»~~
+- ✅ **«NO MEDIBLE con predictor univariante a estos horizontes.»**
+
+Y con ello: **la versión multivariante del §C.3.5 de la Adenda C —cuyo techo es superior por
+construcción— queda SIN CONTRASTAR, no refutada.**
+
+**La línea de microestructura se cierra igual**, y por las otras dos vías que sí son
+concluyentes:
+
+- el **§4 de la v4.2**: superficie de rentabilidad con coste real, **78 de 79 celdas negativas**,
+  y el único positivo (+0.13 % anual) aislado entre vecinas negativas → sobreajuste;
+- la **Adenda C sin estratificar**, donde el instrumento sí resolvía a 60–3 600 s y el déficit
+  iba de 577× a 43×.
+
+Lo que **no** puede seguir apoyando el cierre es el `R²` estratificado univariante: ahí no hay
+medición, hay un techo por debajo del requisito.
+
+---
+
 ### ⚠⚠ §1 ESTRATIFICADO POR σ PRONOSTICADA — REGLA DE PARADA APLICADA: LÍNEA CERRADA
 
 `estratos.py`, 6/6. La tarea marcada BLOQUEANTE desde el 2026-08-23, ejecutada con las tres
@@ -4749,7 +4815,11 @@ pronosticada no compra nada, y quedaba dicho antes de mirarlo.
    sintética inyectada con **un solo** paso de retardo deja `ε_i` fuera de la ventana y el
    estimador hace bien en devolver ~0. Corregido a dos pasos.
 
-#### Un techo estructural que conviene tener escrito
+#### ⚠ Un techo estructural — **CORREGIDO el 2026-08-29, ver el apartado anterior**
+
+⚠ **Lo que sigue es INCORRECTO y se conserva como registro.** El techo `1/H` supone
+`ε` iid y usa `H` en segundos en vez de ticks; el dato lo supera por 133×.
+
 
 Al reparar el control apareció algo que explica los `R²` diminutos de la Adenda C a `H` largo:
 **el `R²` de UN solo signo sobre una ventana de `H` pasos satura en ~`1/H`.** Un incremento de
