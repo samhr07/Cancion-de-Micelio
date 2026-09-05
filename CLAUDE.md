@@ -212,6 +212,12 @@ corregir el filtro 90 veces con la misma medición, y eso está corregido en ori
   `delta`, `A`, `osc`, `B`, `decision`; abre el conjunto de prueba sólo en la última. `log()`
   transcribe a ASCII por sí sola, para que la consola cp1252 deje de ser una regla que recordar.
 - `migracion_v32.py` — **v3.2**: el estimador M0/M1/M2/M2-osc y sus 18 controles.
+- `flujo_omega.py` — **línea nueva (2026-09-05)**: la métrica `φ = Q_neto·P/τ₀` [USD/s] y su
+  derivada `Ω = dφ/dt` [USD/s²], con la regla de la cadena descompuesta en tres canales
+  (FLUJO / PRECIO / LIBRO) de forma **exacta**, `τ₀` medido del libro por tres estimadores, y
+  los `Ω` por día y por bloque. `--autotest` → **18/18**. Diseño en
+  `NOTA_METRICA_FLUJO_OMEGA.md`. ⚠ Su `φ` y su `Ω` **no son** los de la Sec. 1.4 del PDF ni
+  el `φ′` retirado. **No se importa desde `Micelio.py`.**
 - `oscilador.py` / `experimento_v30.py` — **v3.0**: primitivas `k`, `m`, `γ`, `Q` por AR(2) con
   hipótesis nula, verificación dimensional y descomposición del rebote bid-ask.
   `python experimento_v30.py`. **No se importa desde `Micelio.py`.**
@@ -5354,6 +5360,117 @@ que gobierna no está en L1.**
 formulado así, no como «λ ≠ 1». Y sigue siendo una decisión de captura, no de análisis.
 
 ---
+
+## Sesión 2026-09-05 — Línea nueva: la métrica `φ` del flujo y su derivada `Ω`
+
+Encargo del operador: medir la trayectoria del flujo de compra-venta con un enfoque distinto
+al de mirar variables del pasado. Primero la **métrica**. Módulo nuevo `flujo_omega.py`,
+**18/18** controles. `Micelio.py` sin cambios. Diseño completo en `NOTA_METRICA_FLUJO_OMEGA.md`.
+
+    phi(t)   = Q_neto(t) * P(t) / tau_0(t)      [USD/s]
+    Omega(t) = dphi/dt                          [USD/s^2]
+
+⚠ **Esto es una métrica, no una señal, y no reabre nada.** La línea de microestructura sigue
+cerrada (v4.2 §4: 78 de 79 celdas negativas; Adenda C: falta un factor 43×–577×). El bloque
+predictivo del módulo va marcado EXPLORATORIO con su nulo al lado.
+
+⚠ **COLISIÓN DE NOMBRES.** El proyecto ya tiene un `Ω` (Sec. 1.4 del PDF, `BTC/Ticks²`, que
+cuelga de `ω_m` y está refutado) y un `φ′` (ticks/BTC, retirado en `9b2267e`). **Los de este
+módulo no son ninguno de los dos**: otras unidades, otra definición. En actas se escriben
+`φ_F` y `Ω_F`. `flujo_omega.py` **no se importa desde `Micelio.py`**.
+
+### La "EDP" es la regla de la cadena, y se mide EXACTA
+
+Al ser las tres entradas variables, la derivada total se abre en tres canales aditivos:
+
+```
+Omega = (P/tau_0)*dQ/dt  +  (Q/tau_0)*dP/dt  -  (Q*P/tau_0^2)*dtau_0/dt
+        \____ FLUJO ____/    \___ PRECIO ___/    \______ LIBRO ________/
+```
+
+Con diferencias **centradas** y medias de los extremos, la regla del producto es una identidad
+algebraica: los tres canales suman `Ω` a **3e-16 relativo**, no hasta `O(dt²)`. Importa porque
+lo que se lee es el **reparto de `Var(Ω)`** entre canales, y un reparto que no suma al total no
+es un reparto. Se implementan las **dos** formas (`P/tau` y `tau/P`, que el operador enunció en
+ese orden) porque su única diferencia observable es el **signo del canal LIBRO**, que es justo
+lo que la descomposición mide.
+
+### ⚠ `τ₀` NO se toma del ajuste del núcleo, y por dos razones independientes
+
+El `tau0` de `migracion_v32.py` **está retractado** (v4.1 §3.4: "ajuste no identificado en el
+régimen `τ₀` en cota") **y** es un número por ajuste, cuando aquí hace falta una serie `τ₀(t)`.
+Se mide del libro con tres estimadores y se reporta la concordancia entre ellos, en vez de
+elegir uno a ciegas — la lección del §3.1 de la v4.1 aplicada por adelantado:
+
+| estimador | parámetro libre | papel |
+|---|---|---|
+| **`tau_agot`** = profundidad L1 / caudal negociado | **ninguno** | **PRIMARIO** |
+| `tau_recup(θ)` = semi-recuperación / `ln 2` | `θ`, **barrido** | literal |
+| `tau_upd` = 1 / tasa de actualización | ninguno | diagnóstico |
+
+⚠ **Semi-recuperación y no recuperación total, y el motivo decide el estimador.** La primera
+versión medía el tiempo hasta volver al nivel de profundidad **exacto** previo. Bajo relajación
+exponencial hacia un equilibrio eso **no se alcanza en tiempo finito**: el retorno al nivel
+exacto es un tiempo de primer paso que dispara el **ruido de cotización**, no la reposición.
+Medido sobre la captura sintética de verificación daba **0.8 s** con `θ = 0.30` contra una
+constante verdadera de 3.4–24 s. La semi-recuperación vale `τ·ln 2` exactamente bajo relajación
+exponencial, así que tiene verdad conocida: el control 7 recupera 5.0 s con **0.41 %** de error.
+
+⚠ **Limitación heredada:** `@bookTicker` da solo el **nivel 1**, así que este `τ₀` es el de la
+cola visible, no el del libro. **Tercer argumento independiente para ingerir `@depth`**, tras
+H1 (parcial +0.0425 contra techo de nulo +0.0418) y `λ = 0.12` de `cont2014.py`.
+
+### Dos cosas que hay que saber antes de leer la primera tabla
+
+1. **El canal PRECIO va a salir ~0, y es estructural.** `dP/P` por casilla de 10 s es del orden
+   de `1e-5`; `dQ/Q` es de orden 1 porque `Q_neto` cambia de signo continuamente. Entra en
+   `Var(Ω)` con peso ~`1e-7`. No es un fallo: a esta escala el precio es, comparado con el
+   flujo, una constante.
+2. ⚠ **El nulo por rotación se satura si no se quita el ciclo diurno.** `ν`, `τ₀`, `prof` y `rv`
+   llevan el mismo ciclo de 24 h (`ν` recorre 3.9× entre UTC 13-15 y UTC 4, medido el
+   2026-08-23). Dos series con el mismo período correlacionan a **+0.99 por tener el mismo
+   período**, y la rotación circular las vuelve a alinear: el suelo sale **también** en 0.99 y
+   la razón en 1.00. Verificado en la corrida sintética. Por eso `informe_relacion` da **dos
+   columnas**, CRUDO y RESIDUO (sin nivel del día ni forma intradía), y **sólo se lee RESIDUO**,
+   sólo si `razón ≥ 3`. Es la regla que quedó escrita el 2026-08-23 tras fallar tres nulos
+   propios por exactamente esto. El módulo **avisa** cuando hay menos de 4 bloques por parámetro
+   de ciclo: con `--bloque=3600` hacen falta ~5 días para empezar a leer esa columna.
+
+### Estado: verificado, SIN NINGUNA CIFRA DE MERCADO REAL
+
+El contenedor de esta sesión no tiene las capturas (`telemetria/` está en `.gitignore`). La ruta
+de ingesta completa —parquet → índice → rejilla → `Ω` → bloques → CSV— se verificó de punta a
+punta contra una **captura sintética en el formato real**, con ciclo diurno, memoria de flujo,
+profundidad que baja cuando sube `ν` y un hueco de 40 min. **Ninguna cifra de esa corrida es una
+medición**, y ninguna se cita como tal. Para tener números basta correr las tres etapas en la
+máquina de la captura:
+
+```
+python flujo_omega.py --autotest
+python flujo_omega.py --etapa=serie      # cachea la rejilla + concordancia de tau_0
+python flujo_omega.py --etapa=dia        # 24 Omega por dia + resumen por dia + CSV
+python flujo_omega.py --etapa=relacion   # CRUDO vs RESIDUO, con suelo de rotacion
+```
+
+### Dos defectos propios encontrados en la verificación
+
+1. **Los censurados se sumaban a todo el array de casillas.** `+= cens` sobre `nb` posiciones
+   daba a cada casilla el total: **41 869 440 censurados sobre 1.7 M de filas de libro**. Lo
+   delató que el número era imposible, no una aserción — por eso ahora hay una (control 13).
+2. **El reparto de varianza sumaba 1.00025.** `np.cov` normaliza con `ddof=1` y `np.var` con
+   `ddof=0`; mezclarlas da `1 + 1/(n−1)`, que con `n = 4000` son `2.5e-4`, invisible a ojo. Lo
+   cazó el control 5 porque pide la suma a `1e-10`. Argumento para poner la tolerancia donde el
+   estimador puede llegar, no donde uno se conforma.
+
+### Lo que falta, en orden
+
+1. **Correr las tres etapas sobre `captura_estacional` y `captura_v33`.** Es lo único que
+   convierte esto en mediciones.
+2. **Decidir `dt` y `--bloque` midiendo.** `dt = 10 s` viene de `cont2014.py` y `--bloque=3600`
+   de querer 24 `Ω` por día; ninguno está calibrado.
+3. **Comprobar si `τ₀` es una cantidad bien definida.** Si `tau_agot` y `tau_recup(θ)` no se
+   mueven juntas sobre dato real, `τ₀` no está bien definida y hay que decirlo **antes** de
+   construir nada encima. La tabla de concordancia de `--etapa=serie` es ese contraste.
 
 ## ⚠ CONVENCIÓN OBLIGATORIA — todo `R²` se cita como CONTEMPORÁNEO o PREDICTIVO
 
