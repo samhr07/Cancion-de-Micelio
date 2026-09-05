@@ -215,9 +215,15 @@ corregir el filtro 90 veces con la misma medición, y eso está corregido en ori
 - `flujo_omega.py` — **línea nueva (2026-09-05)**: la métrica `φ = Q_neto·P/τ₀` [USD/s] y su
   derivada `Ω = dφ/dt` [USD/s²], con la regla de la cadena descompuesta en tres canales
   (FLUJO / PRECIO / LIBRO) de forma **exacta**, `τ₀` medido del libro por tres estimadores, y
-  los `Ω` por día y por bloque. `--autotest` → **18/18**. Diseño en
+  los `Ω` por día y por bloque, `τ₀` con **θ retroalimentada de `tau_agot`**, la **resiliencia**
+  `tau_agot/tau_recup`, y el reloj de **Nueva York** con corte hábil/finde. `--autotest` →
+  **25/25**. Diseño en
   `NOTA_METRICA_FLUJO_OMEGA.md`. ⚠ Su `φ` y su `Ω` **no son** los de la Sec. 1.4 del PDF ni
   el `φ′` retirado. **No se importa desde `Micelio.py`.**
+- `offset_precio.py` — **línea nueva (2026-09-05)**: el offset `P_ref = P − λ·CumQ`, con `λ`
+  ajustada sobre **incrementos** y **sin intercepto**, por racha continua y por día de NY, con
+  nulo por rotación. Responde a «¿cuánto del nivel de precio lo carga el flujo?».
+  `--autotest` → **11/11**.
 - `oscilador.py` / `experimento_v30.py` — **v3.0**: primitivas `k`, `m`, `γ`, `Q` por AR(2) con
   hipótesis nula, verificación dimensional y descomposición del rebote bid-ask.
   `python experimento_v30.py`. **No se importa desde `Micelio.py`.**
@@ -5471,6 +5477,97 @@ python flujo_omega.py --etapa=relacion   # CRUDO vs RESIDUO, con suelo de rotaci
 3. **Comprobar si `τ₀` es una cantidad bien definida.** Si `tau_agot` y `tau_recup(θ)` no se
    mueven juntas sobre dato real, `τ₀` no está bien definida y hay que decirlo **antes** de
    construir nada encima. La tabla de concordancia de `--etapa=serie` es ese contraste.
+
+### Sesión 2026-09-05 (b) — Las tres correcciones del operador. 25/25 y 11/11
+
+Tres objeciones, las tres con razón, y ninguna cosmética.
+
+#### 1. El offset `P_ref` — `offset_precio.py`, 11/11
+
+⚠ **La fórmula literal no cierra dimensionalmente:** `P_ref = S − Q_neto` resta BTC a USD/BTC, y
+el paso `P/Q_neto = P_ref + P_var/Q_neto = 1 + P_ref/Q_neto` no es una identidad. Integrando la
+premisa del propio operador (`dP/dt` proporcional al flujo) sale la versión que **sí** cierra y
+que es la misma idea:
+
+```
+P(t) = P_ref(t) + lambda * CumQ(t)      ->      P_ref(t) = P(t) - lambda * CumQ(t)
+```
+
+con `λ` en USD/BTC por BTC (la `λ` de Kyle). Decisiones que la sostienen:
+
+- **`λ` se ajusta sobre INCREMENTOS**, nunca sobre niveles: `P` y `CumQ` son las dos integradas,
+  y regresar una sobre otra es el caso de manual de regresión espuria — que este proyecto ya se
+  encontró el 2026-08-08 (f).
+- **Sin intercepto**, y es una decisión: un intercepto en incrementos es una deriva por casilla
+  y se comería exactamente la tendencia que se quiere atribuir, dejando `P_ref` plano por
+  construcción. Es el modo de fallo que la v4.2 §4 tuvo que corregir por **cuatro** puertas.
+  Se reporta al lado cuánto habría valido, como diagnóstico. Control 6: una deriva pura **no**
+  se cuela en `λ`.
+- Los **dos regresores** que el operador propuso, `Q_neto` y `Q_neto·ν`, se ajustan y se compara
+  su `R²` (**CONTEMPORÁNEO**, por la convención del proyecto).
+- El estadístico que responde a la pregunta es `recorrido(P_ref)/recorrido(P)` entre días
+  **contra su nulo de rotación**: `P − λ·CumQ` es una diferencia de dos series integradas y
+  **siempre** tiene recorrido, también por azar.
+- Y se reporta la **estabilidad de `λ` día a día**: si el coeficiente no se sostiene, `P_ref` no
+  es un offset, es el residuo de un modelo que no aplica a todos los días por igual.
+
+⚠ **Fallo propio que la verificación destapó, y era del estadístico, no del código.** `P_ref` se
+ancla al inicio de cada racha (arrastrar `CumQ` por un hueco sumaría flujo no observado), así
+que un día que **contiene** una frontera de racha lleva dos anclas: marcaba **460 pb** de
+recorrido contra 3 pb de los demás, y el recorrido entre días acababa midiendo otra vez el
+precio (razón 1.03, indistinguible del nulo). **Todo el análisis pasa a ser por racha continua**,
+donde el ancla es una. Control 10.
+
+#### 2. `θ` retroalimentada de `tau_agot`, y la resiliencia
+
+La objeción: fijar `θ` en una fracción constante es vacío. Ahora `θ` es **lo que el flujo llegó
+a agotar**, `θ_k = volumen negociado / profundidad previa`, que es exactamente `dt_k/tau_agot_k`.
+Un evento es que la profundidad caiga **al menos lo que el flujo se llevó**. Con eso `tau_recup`
+y `tau_agot` dejan de ser dos medidas independientes y pasan a ser las dos mitades del mismo
+ciclo.
+
+**El piso tampoco es un parámetro libre:** es el **parpadeo medido**, la mediana de
+`|Δprof|/prof` sobre los intervalos **sin transacciones**, donde ningún cambio es atribuible al
+flujo. Sin él, `θ = 0` haría evento de cualquier bajada — que es lo que hundió la primera
+versión del estimador.
+
+Métrica de recuperación pedida: **`resiliencia = tau_agot / tau_recup_LOCAL`** (adimensional).
+`>> 1` el libro repone mucho más rápido de lo que el flujo lo consume; `<< 1` el flujo lo vacía
+más rápido de lo que repone. ⚠ La analogía con VPIN es de **propósito, no de resultado**: que
+esta razón tenga valor de aviso temprano **no está contrastado** y nada en el módulo lo afirma.
+
+#### 3. El reloj pasa a ser el de NUEVA YORK
+
+El pico del ciclo de 24 h (UTC 13-15) **es** la apertura de NY. Agrupar por hora UTC funciona
+por casualidad y se rompe dos veces al año en los cambios de horario de verano, además de
+mezclar el sábado y el domingo de NY con el lunes de UTC. Ahora el día, la hora y `finde` son
+de NY (`--zona=utc` vuelve atrás), lo que convierte el ciclo diurno de una **presunción sobre el
+dato** en una variable exógena con causa conocida. `--etapa=dia` saca el corte **hábil contra
+fin de semana** y el **perfil horario en hora de NY** de cada grupo, y `quitar_ciclo` usa celdas
+intradía **separadas** para hábil y finde — el 2026-08-23 se midió que el fin de semana tiene
+amplitud **y fase** propias, su pico llega ~7 h más tarde.
+
+La regla de horario de verano se implementa a mano y no con `zoneinfo`: en Windows `zoneinfo`
+necesita `tzdata` aparte y esto corre en la máquina de la captura. Verificada contra las dos
+fronteras exactas y contra `datetime.weekday()` en 400 días.
+
+⚠ **`EPOCH_DOW` estaba mal por uno**: 1970-01-01 fue **jueves**, que con 0 = lunes es 3, no 4.
+El caso de prueba lo cazó al instante (2026-03-08 es domingo y salía hábil). **Quinta vez** que
+este proyecto se juega algo en un signo o un offset, tras el 2π de la v1.3, el factor 125, la
+convención de `ε` del propagador y la fase de `atan2` en `estacionalidad.py`.
+
+#### Sigue sin haber ninguna cifra de mercado real
+
+Quitar `telemetria/` del `.gitignore` **no trae los datos aquí**: esta sesión clona el repo
+desde GitHub y las capturas nunca se subieron (ni conviene: 2 GB de parquet contra el límite de
+100 MB por archivo de GitHub). Lo que sí cabe y basta para iterar es **la rejilla cacheada**,
+`telemetria/rejilla_omega_estacional.npz` — es el agregado de 10 s del que comen las tres
+etapas, no lleva credenciales y son decenas de MB.
+
+⚠ **Y hay un riesgo que hay que decir:** el `origin` es **público**, y quitar del `.gitignore`
+los patrones `*Credenciales*`, `*.key`, `*.pem`, `.env*` y `secrets.*` deja a un `git add -A` a
+un paso de commitear la clave de Mainnet — que sobrevive en el historial aunque se borre después.
+Esos patrones conviene restaurarlos aunque se dejen fuera los de datos.
 
 ## ⚠ CONVENCIÓN OBLIGATORIA — todo `R²` se cita como CONTEMPORÁNEO o PREDICTIVO
 

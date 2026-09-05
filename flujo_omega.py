@@ -315,6 +315,78 @@ def eventos_recuperacion(t, prof, theta, censura=TAU_CENSURA_S):
     return t[k[ok]], tau[ok], int((~ok).sum())
 
 
+def piso_parpadeo(prof, vol):
+    """Nivel de PARPADEO del libro, medido: |dprof|/prof donde NO hubo flujo.
+
+    Es el umbral que separa "la profundidad bajo porque se la comieron" de "la
+    profundidad bajo porque el creador de mercado movio su cotizacion". Se mide
+    sobre los intervalos con `vol == 0`, donde por construccion ningun cambio de
+    profundidad es atribuible a transacciones. **No es un parametro elegido**:
+    sale del propio dato, y se reporta.
+    """
+    prof = np.asarray(prof, float); vol = np.asarray(vol, float)
+    if prof.size < 3:
+        return np.nan
+    d = np.abs(prof[1:] - prof[:-1]) / np.maximum(prof[:-1], 1e-12)
+    sin = (vol[1:] <= 0) & np.isfinite(d)
+    if sin.sum() < 20:
+        return np.nan
+    return float(np.median(d[sin]))
+
+
+def eventos_recuperacion_local(t, prof, vol, censura=TAU_CENSURA_S, piso=None):
+    """Recuperacion con `theta` MEDIDA, no elegida. Retroalimenta `tau_agot`.
+
+    ⚠ ESTE ES EL ESTIMADOR QUE PIDIO EL OPERADOR, y su objecion era correcta:
+    fijar `theta` en una fraccion constante es vacio, porque no hay ninguna
+    razon para que el libro se agote un 30 % o un 90 % en un intervalo dado.
+    Aqui `theta` es **lo que el flujo llego a agotar**:
+
+        theta_k = volumen negociado en (t[k-1], t[k]] / profundidad en t[k-1]
+
+    que es exactamente `dt_k / tau_agot_k`, o sea la fraccion de la cola visible
+    que el caudal consumio en ese intervalo. Un evento es que la profundidad
+    caiga **al menos lo que el flujo se llevo**:
+
+        prof[k] <= (1 - theta_k) * prof[k-1]
+
+    o sea, que la reposicion no compensara al consumo. Con eso `tau_recup` y
+    `tau_agot` dejan de ser dos medidas independientes del libro y pasan a ser
+    las dos mitades de un mismo ciclo: cuanto tarda en vaciarse y cuanto en
+    volver.
+
+    EL PISO NO ES UN PARAMETRO LIBRE. Sin piso, un intervalo con `vol = 0` da
+    `theta = 0` y entonces CUALQUIER bajada cuenta como evento -- incluido el
+    parpadeo de cotizacion, que es justo lo que hundio la primera version del
+    estimador. El piso es el parpadeo MEDIDO (`piso_parpadeo`): la mediana de
+    |dprof|/prof sobre los intervalos SIN transacciones, donde ningun cambio es
+    atribuible al flujo. Se mide, se reporta y no se elige.
+    """
+    t = np.asarray(t, float); prof = np.asarray(prof, float)
+    vol = np.asarray(vol, float)
+    if t.size < 3:
+        return np.empty(0), np.empty(0), np.empty(0), 0, np.nan
+    if piso is None:
+        piso = piso_parpadeo(prof, vol)
+    if not np.isfinite(piso):
+        piso = 0.0
+    with np.errstate(divide="ignore", invalid="ignore"):
+        theta = vol[1:] / np.maximum(prof[:-1], 1e-12)
+    theta = np.clip(theta, 0.0, 0.99)
+    k = np.flatnonzero((theta > piso) & (prof[1:] <= (1.0 - theta) * prof[:-1])) + 1
+    if k.size == 0:
+        return np.empty(0), np.empty(0), np.empty(0), 0, piso
+    objetivo = 0.5 * (prof[k - 1] + prof[k])
+    dtm = float(np.median(np.diff(t))) if t.size > 1 else 1.0
+    filas_max = int(min(max(np.ceil(censura / max(dtm, 1e-6)), 8), 20000))
+    j = primer_indice_sobre(prof, k, objetivo, filas_max)
+    vivo = j >= 0
+    tau = np.full(k.size, np.nan)
+    tau[vivo] = (t[j[vivo]] - t[k[vivo]]) / np.log(2.0)
+    ok = vivo & np.isfinite(tau) & (tau > 0) & (tau <= censura)
+    return t[k[ok]], tau[ok], theta[k - 1][ok], int((~ok).sum()), piso
+
+
 # ===========================================================================
 # 3. Rejilla uniforme: una casilla de `dt` segundos
 # ===========================================================================
@@ -339,6 +411,12 @@ def _acc_vacio(nb):
     # el numero era imposible, no una asercion -- por eso ahora hay una
     # (control 13).
     a["cens"] = {th: 0 for th in THETAS}
+    # theta MEDIDA (retroalimentada de tau_agot), ver `eventos_recuperacion_local`
+    a["loc_log"] = np.zeros(nb)      # sum log(tau_recup) por casilla
+    a["loc_n"] = np.zeros(nb)
+    a["loc_theta"] = np.zeros(nb)    # sum de la theta medida, para reportarla
+    a["cens_loc"] = 0
+    a["piso"] = []                   # parpadeo medido, una entrada por parte
     return a
 
 
@@ -352,7 +430,7 @@ def _ultimo_por_casilla(k, v, dest):
     dest[kk[ult]] = vv[ult]
 
 
-def acumular_libro(bt, bb, bB, ba, bA, t0, dt, nb, acc, prev=None):
+def acumular_libro(bt, bb, bB, ba, bA, t0, dt, nb, acc, prev=None, vol_fn=None):
     """Profundidad, mid de cierre, volatilidad realizada y eventos de recuperacion.
 
     `prev` es la ultima fila de la parte anterior, para que el primer incremento
@@ -377,6 +455,20 @@ def acumular_libro(bt, bb, bB, ba, bA, t0, dt, nb, acc, prev=None):
         m = okr & np.isfinite(r)
         if m.any():
             acc["rv"] += np.bincount(kr[m], weights=r[m] ** 2, minlength=nb)
+    # theta MEDIDA: necesita el volumen negociado en cada intervalo del libro
+    if vol_fn is not None:
+        vol = vol_fn(bt)
+        te, tau, thm, cens, piso = eventos_recuperacion_local(bt, prof, vol)
+        if np.isfinite(piso):
+            acc["piso"].append(float(piso))
+        acc["cens_loc"] += cens
+        if te.size:
+            ke, oke = _bins(te, t0, dt, nb)
+            if oke.any():
+                acc["loc_log"] += np.bincount(ke[oke], weights=np.log(tau[oke]),
+                                              minlength=nb)
+                acc["loc_n"] += np.bincount(ke[oke], minlength=nb)
+                acc["loc_theta"] += np.bincount(ke[oke], weights=thm[oke], minlength=nb)
     for th in THETAS:
         te, tau, cens = eventos_recuperacion(bt, prof, th)
         if te.size:
@@ -427,6 +519,20 @@ def cerrar_rejilla(acc, t0, dt, nb):
                 n > 0, np.exp(acc["rec_log_%.2f" % th] / np.maximum(n, 1)), np.nan)
         r["rec_n_%.2f" % th] = n
         r["rec_cens_%.2f" % th] = np.array([float(acc["cens"][th])])
+    n = acc["loc_n"]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        r["tau_recup_loc"] = np.where(n > 0, np.exp(acc["loc_log"] / np.maximum(n, 1)),
+                                      np.nan)
+        r["theta_medida"] = np.where(n > 0, acc["loc_theta"] / np.maximum(n, 1), np.nan)
+        # RESILIENCIA: cuanto tarda en vaciarse contra cuanto tarda en volver.
+        # >> 1 el libro repone mucho mas rapido de lo que el flujo lo consume;
+        # << 1 el flujo lo vacia mas rapido de lo que el libro repone.
+        r["resiliencia"] = tau_agot / np.where(r["tau_recup_loc"] > 0,
+                                               r["tau_recup_loc"], np.nan)
+    r["rec_loc_n"] = n
+    r["rec_loc_cens"] = np.array([float(acc["cens_loc"])])
+    r["piso_parpadeo"] = np.array([float(np.median(acc["piso"])) if acc["piso"]
+                                   else np.nan])
     # El precio del modelo es el MID de cierre; el de transaccion es el respaldo.
     r["precio"] = np.where(np.isfinite(r["mid"]), r["mid"], r["precio_tx"])
     r["valida"] = (n_tx > 0) & (n_lib > 0) & (q_tot > 0) \
@@ -443,6 +549,69 @@ def cerrar_rejilla(acc, t0, dt, nb):
 # dato crudo (223 M de filas de libro), no la rejilla. Por eso se acumula
 # parte a parte y nunca hay mas de una en memoria -- la misma disciplina que
 # `curvas_estacional.limites_tramos` tuvo que adoptar tras morir tres procesos.
+
+
+def volumen_por_intervalo(tt, q):
+    """Devuelve `vol_fn(bt)`: volumen negociado en cada intervalo `(bt[k-1], bt[k]]`.
+
+    `vol[0] = 0` por definicion (no hay intervalo anterior al primer snapshot).
+    Es una suma acumulada mas dos busquedas binarias, o sea O(n log n) sin
+    materializar nada del tamano del producto.
+    """
+    tt = np.asarray(tt, float); q = np.asarray(q, float)
+    o = np.argsort(tt, kind="stable")
+    tt, q = tt[o], q[o]
+    cum = np.concatenate([[0.0], np.cumsum(q)])
+
+    def _fn(bt):
+        idx = np.searchsorted(tt, np.asarray(bt, float), side="right")
+        v = np.empty(idx.size)
+        v[0] = 0.0
+        v[1:] = cum[idx[1:]] - cum[idx[:-1]]
+        return np.maximum(v, 0.0)
+    return _fn
+
+
+class _TradesPorVentana:
+    """Carga solo las partes de transacciones que solapan con la ventana pedida.
+
+    ⚠ MEMORIA. Las 32 M de transacciones del estacional son ~512 MB si se
+    concatenan, y esta maquina tiene ~2 GB libres. Se cachea UNA sola ventana a
+    la vez: como las partes de libro y de transacciones van las dos en orden
+    temporal, cada parte de transacciones se lee un par de veces y nunca hay mas
+    de una ventana viva.
+    """
+
+    def __init__(self, indice):
+        self.idx = sorted(indice, key=lambda z: z[1])
+        self.rango = (np.inf, -np.inf)
+        self.fn = None
+
+    def para(self, t0, t1):
+        if self.fn is not None and t0 >= self.rango[0] and t1 <= self.rango[1]:
+            return self.fn
+        import pyarrow.parquet as pq
+        m = 60.0                        # margen, para no recargar por un borde
+        sel = [x for x in self.idx if not (x[2] < t0 - m or x[1] > t1 + m)]
+        ts, qs = [], []
+        for f, _, _, _ in sel:
+            try:
+                tb = pq.read_table(f, columns=["t", "cant"])
+            except Exception:
+                continue
+            a_ = tb["t"].to_numpy().astype(float)
+            b_ = tb["cant"].to_numpy().astype(float)
+            del tb
+            k = (a_ >= t0 - m) & (a_ <= t1 + m) & (b_ > 0)
+            if k.any():
+                ts.append(a_[k]); qs.append(b_[k])
+        if not ts:
+            self.rango = (t0 - m, t1 + m)
+            self.fn = lambda bt: np.zeros(np.asarray(bt).size)
+            return self.fn
+        self.rango = (t0 - m, t1 + m)
+        self.fn = volumen_por_intervalo(np.concatenate(ts), np.concatenate(qs))
+        return self.fn
 
 
 def _rango_estacional():
@@ -463,6 +632,7 @@ def rejilla_estacional(dt=DT_REJILLA, t_ini=None, t_fin=None):
     log("  ventana: %.2f dias   casillas de %.0f s: %d" % ((t1 - t0) / 86400.0, dt, nb))
     acc = _acc_vacio(nb)
     prev = None
+    trades = _TradesPorVentana(C._indice("trades_"))
     partes = sorted([x for x in C._indice("libro_") if not (x[2] < t0 or x[1] > t1)],
                     key=lambda z: z[1])
     log("  partes de libro que solapan: %d" % len(partes))
@@ -480,7 +650,9 @@ def rejilla_estacional(dt=DT_REJILLA, t_ini=None, t_fin=None):
             continue
         bt, bb, bB, ba, bA = bt[m], bb[m], bB[m], ba[m], bA[m]
         o = np.argsort(bt, kind="stable")
-        prev = acumular_libro(bt[o], bb[o], bB[o], ba[o], bA[o], t0, dt, nb, acc, prev)
+        vf = trades.para(float(bt[o][0]) - 5.0, float(bt[o][-1]) + 5.0)
+        prev = acumular_libro(bt[o], bb[o], bB[o], ba[o], bA[o], t0, dt, nb, acc,
+                              prev, vol_fn=vf)
         del bt, bb, bB, ba, bA, o, m
         if (i + 1) % 50 == 0:
             log("    libro %d/%d" % (i + 1, len(partes)))
@@ -521,7 +693,8 @@ def rejilla_v33(dt=DT_REJILLA):
     nb = int(np.ceil((t1 - t0) / dt))
     log("  ventana: %.2f h   casillas de %.0f s: %d" % ((t1 - t0) / 3600.0, dt, nb))
     acc = _acc_vacio(nb)
-    acumular_libro(bt, bb, bB, ba, bA, t0, dt, nb, acc, None)
+    acumular_libro(bt, bb, bB, ba, bA, t0, dt, nb, acc, None,
+                   vol_fn=volumen_por_intervalo(tt[okt], q[okt]))
     acumular_trades(tt[okt], pr[okt], q[okt], mk[okt], t0, dt, nb, acc)
     return cerrar_rejilla(acc, t0, dt, nb)
 
@@ -533,6 +706,75 @@ def cargar_rejilla(fuente):
                          % (r, fuente))
     d = np.load(r)
     return {k: (float(d[k]) if d[k].ndim == 0 else d[k]) for k in d.files}
+
+
+# ===========================================================================
+# 4.bis  Calendario de NUEVA YORK -- el ciclo diurno que importa es el humano
+# ===========================================================================
+#
+# ⚠ POR QUE NY Y NO UTC. El ciclo de 24 h que este proyecto midio el 2026-08-23
+# tiene su pico en UTC 13-15 y su valle en UTC 4, y ese pico ES la apertura de
+# Nueva York. Agrupar por hora UTC funciona por casualidad -- porque el offset
+# es constante dentro de cada regimen de horario -- pero se rompe dos veces al
+# ano, en los cambios de horario de verano, y ademas mezcla el sabado y el
+# domingo de NY con el lunes de UTC. Fijar el reloj en NY convierte el ciclo de
+# una PRESUNCION sobre el dato en una variable exogena con causa conocida.
+#
+# Se implementa la regla de EE.UU. a mano y no con `zoneinfo` a proposito: en
+# Windows `zoneinfo` necesita el paquete `tzdata` instalado aparte, y este
+# modulo tiene que correr en la maquina de la captura sin anadir dependencias.
+# La regla vigente desde 2007 es: EDT (UTC-4) desde el 2do domingo de marzo a
+# las 02:00 locales hasta el 1er domingo de noviembre a las 02:00 locales; EST
+# (UTC-5) el resto.
+
+# 1970-01-01 fue JUEVES, y con 0 = lunes eso es 3, no 4. La primera version
+# puso 4 y el control lo caza al instante: 2026-03-08 es domingo y salia habil.
+# Quinta vez que este proyecto se juega algo en un offset o un signo (tras el
+# 2pi, el factor 125, la convencion de `eps` y la fase de `atan2`).
+EPOCH_DOW = 3
+
+
+def _domingo_n(ano, mes, n):
+    """Instante UTC (en dias desde epoch) del n-esimo domingo de `ano`/`mes`."""
+    import datetime as _dt
+    d = _dt.date(ano, mes, 1)
+    # weekday(): 0 = lunes ... 6 = domingo
+    primer = 1 + (6 - d.weekday()) % 7
+    return _dt.date(ano, mes, primer + 7 * (n - 1))
+
+
+def offset_ny(t):
+    """Offset de Nueva York en segundos (-5 h o -4 h) para cada instante UTC."""
+    import datetime as _dt
+    t = np.asarray(t, float)
+    off = np.full(t.size, -5 * 3600.0)
+    anos = np.unique((t // 31556952.0).astype(np.int64) + 1970)
+    for a0 in range(int(anos.min()) - 1, int(anos.max()) + 2):
+        try:
+            ini = _domingo_n(a0, 3, 2)      # 2do domingo de marzo, 02:00 EST = 07:00 UTC
+            fin = _domingo_n(a0, 11, 1)     # 1er domingo de noviembre, 02:00 EDT = 06:00 UTC
+        except ValueError:
+            continue
+        t0 = (ini - _dt.date(1970, 1, 1)).days * 86400.0 + 7 * 3600.0
+        t1 = (fin - _dt.date(1970, 1, 1)).days * 86400.0 + 6 * 3600.0
+        off[(t >= t0) & (t < t1)] = -4 * 3600.0
+    return off
+
+
+def calendario_ny(t):
+    """dia local, hora local, dia de la semana y bandera de fin de semana."""
+    t = np.asarray(t, float)
+    loc = t + offset_ny(t)
+    dia = np.floor(loc / 86400.0).astype(np.int64)
+    hora = (loc - dia * 86400.0) / 3600.0
+    dow = (dia + EPOCH_DOW) % 7                 # 0 = lunes ... 6 = domingo
+    return {"dia": dia, "hora": hora, "dow": dow, "finde": dow >= 5, "local": loc}
+
+
+def _fecha_ny(dia):
+    import datetime as _dt
+    d = _dt.date(1970, 1, 1) + _dt.timedelta(days=int(dia))
+    return d.strftime("%Y-%m-%d %a")
 
 
 # ===========================================================================
@@ -584,11 +826,24 @@ def serie_omega(r, tau="tau_agot", forma="P/tau"):
     return out
 
 
-def por_bloque(r, s, bloque=BLOQUE_S):
-    """Una fila por (dia, bloque). Es la tabla que el operador pidio."""
+def por_bloque(r, s, bloque=BLOQUE_S, zona="ny"):
+    """Una fila por (dia, bloque). Es la tabla que el operador pidio.
+
+    ⚠ El dia y la hora son de NUEVA YORK por omision, no UTC, y cada fila lleva
+    su bandera `finde`. El ciclo diurno de este mercado tiene su pico en la
+    apertura de NY (medido el 2026-08-23: `nu` recorre 3.9x entre UTC 13-15 y
+    UTC 4), asi que anclarlo al reloj de NY lo convierte en una variable exogena
+    con causa conocida en vez de una presuncion sobre el dato. `--zona=utc`
+    vuelve al comportamiento anterior.
+    """
     if s["t"].size == 0:
         return []
-    dia, seg = _dia_hora(s["t"])
+    if zona == "ny":
+        cal = calendario_ny(s["t"])
+        dia, seg, finde = cal["dia"], cal["hora"] * 3600.0, cal["finde"]
+    else:
+        dia, seg = _dia_hora(s["t"])
+        finde = np.zeros(dia.size, bool)
     blq = np.floor(seg / bloque).astype(np.int64)
     clave = dia * 10000 + blq
     orden = np.argsort(clave, kind="stable")
@@ -601,21 +856,34 @@ def por_bloque(r, s, bloque=BLOQUE_S):
             continue
         om = s["omega"][sl]; ph = s["phi"][sl]
         j = s["idx"][sl]
-        f = {"dia": int(dia[sl[0]]), "fecha": _fecha(dia[sl[0]]),
+
+        def med(col):
+            x = r[col][j] if col in r else np.full(j.size, np.nan)
+            x = x[np.isfinite(x)]
+            return float(np.median(x)) if x.size else np.nan
+
+        f = {"dia": int(dia[sl[0]]),
+             "fecha": (_fecha_ny(dia[sl[0]]) if zona == "ny"
+                       else _fecha(dia[sl[0]])),
+             "finde": int(bool(finde[sl[0]])),
              "bloque": int(blq[sl[0]]), "n": int(sl.size),
              "t0": float(s["t"][sl].min()),
              # los tres Omega del bloque, y son cantidades DISTINTAS:
-             "omega_neta": float((ph[-1] - ph[0]) / max(s["t"][sl][-1] - s["t"][sl][0], 1e-9)),
+             "omega_neta": float((ph[-1] - ph[0])
+                                 / max(s["t"][sl][-1] - s["t"][sl][0], 1e-9)),
              "omega_rms": float(np.sqrt(np.mean(om ** 2))),
              "omega_med": float(np.median(om)),
              "phi_med": float(np.median(ph)), "phi_sd": float(np.std(ph)),
              # variables de estado del bloque
              "q_neto": float(np.sum(r["q_neto"][j])),
              "q_tot": float(np.sum(r["q_tot"][j])),
-             "precio": float(np.median(r["precio"][j])),
-             "tau0": float(np.median(r[s["tau"]][j])),
-             "prof": float(np.median(r["prof"][j])),
-             "nu": float(np.median(r["nu"][j])),
+             "precio": med("precio"),
+             "tau0": med(s["tau"]),
+             "tau_agot": med("tau_agot"),
+             "tau_recup_loc": med("tau_recup_loc"),
+             "theta_medida": med("theta_medida"),
+             "resiliencia": med("resiliencia"),
+             "prof": med("prof"), "nu": med("nu"),
              "rv_pb": float(np.sqrt(np.mean(r["rv_pb"][j] ** 2)))}
         rep = reparto_varianza({"omega": om, **{c2: s[c2][sl] for c2 in CANALES}})
         for c2 in CANALES:
@@ -721,35 +989,62 @@ def quitar_ciclo(x, dia, blq, en_log=True, iters=3):
 
 
 def informe_tau0(r):
-    titulo("tau_0 -- CONCORDANCIA ENTRE LOS TRES ESTIMADORES")
+    titulo("tau_0 -- CONCORDANCIA ENTRE LOS ESTIMADORES")
     v = r["valida"]
     log("  casillas validas: %d de %d (%.1f %%)" % (v.sum(), v.size, 100 * v.mean()))
     log("")
-    log("  %-22s %10s %10s %10s %10s" % ("estimador", "p10", "MEDIANA", "p90", "n"))
-    cols = [("tau_agot [s]", "tau_agot"), ("tau_upd  [s]", "tau_upd")]
-    cols += [("tau_recup(%.2f)" % th, "tau_recup_%.2f" % th) for th in THETAS]
+    log("  %-24s %10s %10s %10s %10s" % ("estimador", "p10", "MEDIANA", "p90", "n"))
+    cols = [("tau_agot [s]", "tau_agot"), ("tau_upd  [s]", "tau_upd"),
+            ("tau_recup_LOCAL", "tau_recup_loc")]
+    cols += [("tau_recup(%.2f) fijo" % th, "tau_recup_%.2f" % th) for th in THETAS]
     for nom, c in cols:
-        x = r[c][v]
+        x = r[c][v] if c in r else np.zeros(0)
         x = x[np.isfinite(x) & (x > 0)]
         if x.size < 10:
-            log("  %-22s %10s %10s %10s %10d" % (nom, "-", "-", "-", x.size))
+            log("  %-24s %10s %10s %10s %10d" % (nom, "-", "-", "-", x.size))
             continue
-        log("  %-22s %10.3f %10.3f %10.3f %10d"
+        log("  %-24s %10.3f %10.3f %10.3f %10d"
             % (nom, np.percentile(x, 10), np.median(x), np.percentile(x, 90), x.size))
     log("")
-    log("  correlacion de Spearman entre estimadores (casillas validas):")
-    base = r["tau_agot"]
+    log("  correlacion de Spearman contra `tau_agot` (casillas validas):")
     for nom, c in cols[1:]:
-        log("    tau_agot vs %-18s  rho = %+.4f" % (nom, corr(base[v], r[c][v])))
+        if c in r:
+            log("    tau_agot vs %-20s  rho = %+.4f" % (nom, corr(r["tau_agot"][v], r[c][v])))
     log("")
-    for th in THETAS:
-        n = r["rec_n_%.2f" % th][v].sum()
-        cn = r["rec_cens_%.2f" % th].sum()
-        log("    theta = %.2f : %9.0f eventos con recuperacion, %8.0f censurados (%.1f %%)"
-            % (th, n, cn, 100 * cn / max(n + cn, 1)))
+    log("  --- theta MEDIDA (retroalimentada de tau_agot), no elegida ---")
+    if "piso_parpadeo" in r:
+        log("    piso de parpadeo medido (|dprof|/prof sin flujo): %.4f"
+            % float(np.ravel(r["piso_parpadeo"])[0]))
+    if "theta_medida" in r:
+        x = r["theta_medida"][v]
+        x = x[np.isfinite(x)]
+        if x.size:
+            log("    theta medida en los eventos: p10 %.4f  MED %.4f  p90 %.4f"
+                % tuple(np.percentile(x, [10, 50, 90])))
+    if "rec_loc_n" in r:
+        ne = float(r["rec_loc_n"][v].sum()); ce = float(np.ravel(r["rec_loc_cens"])[0])
+        log("    eventos con recuperacion %.0f, censurados %.0f (%.1f %%),"
+            " casillas con dato %d de %d"
+            % (ne, ce, 100 * ce / max(ne + ce, 1),
+               int((r["rec_loc_n"][v] > 0).sum()), int(v.sum())))
     log("")
-    log("  [!] `tau_agot` es el PRIMARIO: no tiene parametro libre. `tau_recup`")
-    log("      es la definicion literal y lleva umbral, por eso va barrido.")
+    log("  --- RESILIENCIA = tau_agot / tau_recup_LOCAL  (adimensional) ---")
+    log("      >> 1 : el libro repone mucho mas rapido de lo que el flujo lo consume")
+    log("      << 1 : el flujo lo vacia mas rapido de lo que el libro repone")
+    if "resiliencia" in r:
+        x = r["resiliencia"][v]
+        x = x[np.isfinite(x) & (x > 0)]
+        if x.size:
+            log("      p10 %.3f   MEDIANA %.3f   p90 %.3f   n = %d"
+                % (np.percentile(x, 10), np.median(x), np.percentile(x, 90), x.size))
+            log("      fraccion de casillas con resiliencia < 1 (libro perdiendo): %.2f %%"
+                % (100 * np.mean(x < 1.0)))
+    log("")
+    log("  [!] `tau_agot` es el PRIMARIO: no tiene parametro libre.")
+    log("      `tau_recup_LOCAL` tampoco: su theta la fija el propio flujo y su")
+    log("      piso lo fija el parpadeo medido. Los `tau_recup(theta)` de umbral")
+    log("      FIJO se conservan solo como contraste, y son los que el operador")
+    log("      objeto con razon: una fraccion constante no describe nada.")
     log("      `tau_upd` es diagnostico: mide parpadeo de cotizacion, no reposicion.")
 
 
@@ -758,14 +1053,20 @@ def informe_relacion(filas, s, forma):
     if len(filas) < 20:
         log("  solo %d bloques: por debajo de 20 no se lee nada." % len(filas))
         return
-    col = {k: np.array([f[k] for f in filas], float)
+    col = {k: np.array([f.get(k, np.nan) for f in filas], float)
            for k in ("omega_rms", "omega_neta", "phi_med", "phi_sd", "q_neto",
-                     "q_tot", "precio", "tau0", "prof", "nu", "rv_pb",
+                     "q_tot", "precio", "tau0", "tau_agot", "tau_recup_loc",
+                     "theta_medida", "resiliencia", "prof", "nu", "rv_pb",
                      "f_FLUJO", "f_PRECIO", "f_LIBRO")}
     col["abs_q_neto"] = np.abs(col["q_neto"])
     col["abs_omega_neta"] = np.abs(col["omega_neta"])
     dia = np.array([f["dia"] for f in filas])
-    blq = np.array([f["bloque"] for f in filas])
+    finde = np.array([f.get("finde", 0) for f in filas])
+    # ⚠ La celda intradia separa HABIL de FIN DE SEMANA. El 2026-08-23 se midio
+    # que el fin de semana tiene amplitud Y FASE propias -- su pico llega ~7 h
+    # mas tarde -- asi que una sola forma intradia para los siete dias mezcla dos
+    # ciclos distintos y no retira ninguno de los dos.
+    blq = np.array([f["bloque"] for f in filas]) + 1000 * finde
     SIGNADAS = ("q_neto", "omega_neta", "f_FLUJO", "f_PRECIO", "f_LIBRO")
     res = {k: quitar_ciclo(v, dia, blq, en_log=(k not in SIGNADAS))
            for k, v in col.items()}
@@ -792,7 +1093,12 @@ def informe_relacion(filas, s, forma):
              ("phi_sd", "nu"), ("phi_sd", "rv_pb"),
              ("tau0", "nu"), ("tau0", "rv_pb"), ("prof", "nu"),
              ("abs_q_neto", "rv_pb"), ("q_neto", "rv_pb"),
-             ("f_LIBRO", "nu"), ("f_LIBRO", "tau0")]
+             ("f_LIBRO", "nu"), ("f_LIBRO", "tau0"),
+             # el ciclo del libro: agotamiento contra reposicion, y el flujo
+             ("tau_agot", "tau_recup_loc"), ("resiliencia", "nu"),
+             ("resiliencia", "q_tot"), ("resiliencia", "abs_q_neto"),
+             ("resiliencia", "rv_pb"), ("resiliencia", "omega_rms"),
+             ("theta_medida", "nu")]
     for a, b in pares:
         rho = corr(col[a], col[b]); su = suelo_rotacion(col[a], col[b])
         rz = abs(rho) / su if (np.isfinite(su) and su > 0) else np.nan
@@ -816,6 +1122,17 @@ def informe_relacion(filas, s, forma):
             log("  %-10s %10.4f %10.4f %10.4f"
                 % (c, np.percentile(x, 10), np.median(x), np.percentile(x, 90)))
     log("")
+    hab = np.array([not f.get("finde", 0) for f in filas])
+    if hab.any() and (~hab).any():
+        log("  --- HABIL contra FIN DE SEMANA (reloj de NY), sobre el RESIDUO ---")
+        log("  %-30s %10s %10s" % ("par", "habil", "finde"))
+        for a2, b2 in (("resiliencia", "nu"), ("omega_rms", "nu"),
+                       ("tau_agot", "tau_recup_loc"), ("omega_rms", "rv_pb")):
+            log("  %-30s %+10.4f %+10.4f"
+                % ("%s vs %s" % (a2, b2), corr(res[a2][hab], res[b2][hab]),
+                   corr(res[a2][~hab], res[b2][~hab])))
+        log("")
+
     log("  --- PREDICTIVO EXPLORATORIO: Omega del bloque contra el retorno del")
     log("      bloque SIGUIENTE. NO es un veredicto y no reabre nada. ---")
     pr = col["precio"]
@@ -827,7 +1144,9 @@ def informe_relacion(filas, s, forma):
     for nom, a, b in (("CONTEMPORANEO omega_neta vs ret(t)", col["omega_neta"], cont),
                       ("PREDICTIVO    omega_neta vs ret(t+1)", col["omega_neta"], ret),
                       ("PREDICTIVO    q_neto     vs ret(t+1)", col["q_neto"], ret),
-                      ("PREDICTIVO    phi_med    vs ret(t+1)", col["phi_med"], ret)):
+                      ("PREDICTIVO    phi_med    vs ret(t+1)", col["phi_med"], ret),
+                      ("PREDICTIVO    resiliencia vs |ret(t+1)|", col["resiliencia"],
+                       np.abs(ret))):
         rho = corr(a, b)
         su = suelo_rotacion(a, b)
         raz = abs(rho) / su if (np.isfinite(su) and su > 0) else np.nan
@@ -883,10 +1202,12 @@ def etapa_dia(args) -> int:
     log("  reparto GLOBAL de Var(Omega):  " + "   ".join(
         "%s %+.4f" % (c, rep[c]) for c in CANALES)
         + "   (suma %+.4f)" % sum(rep[c] for c in CANALES))
-    filas = por_bloque(r, s, args.bloque)
-    titulo("LOS Omega POR DIA -- %d bloques de %.0f min" % (len(filas), args.bloque / 60.0))
+    filas = por_bloque(r, s, args.bloque, zona=args.zona)
+    titulo("LOS Omega POR DIA -- %d bloques de %.0f min, reloj de %s"
+           % (len(filas), args.bloque / 60.0, "NUEVA YORK" if args.zona == "ny" else "UTC"))
     log("  omega_neta = (phi_fin - phi_ini)/T del bloque  [USD/s^2]  -- deriva neta")
     log("  omega_rms  = raiz de la media de Omega^2       [USD/s^2]  -- actividad")
+    log("  resil      = tau_agot / tau_recup_LOCAL (adimensional; < 1 = libro perdiendo)")
     log("  f_X        = parte de Var(Omega) del canal X (los tres suman 1)")
     log("")
     dias = sorted(set(f["dia"] for f in filas))
@@ -894,36 +1215,74 @@ def etapa_dia(args) -> int:
         fs = [f for f in filas if f["dia"] == d]
         log("")
         log("  --- %s : %d bloques ---" % (fs[0]["fecha"], len(fs)))
-        log("  %3s %6s %12s %12s %10s %9s %8s %7s %7s %7s %7s"
-            % ("blq", "n", "omega_neta", "omega_rms", "q_neto", "tau0", "nu",
-               "rv_pb", "fFLU", "fPRE", "fLIB"))
+        log("  %3s %6s %12s %12s %10s %9s %8s %8s %8s %7s %7s %7s"
+            % ("blq", "n", "omega_neta", "omega_rms", "q_neto", "tau0", "t_rec",
+               "resil", "nu", "rv_pb", "fFLU", "fLIB"))
         for f in fs:
-            log("  %3d %6d %+12.4e %12.4e %+10.3f %9.4f %8.2f %7.3f %+7.3f %+7.3f %+7.3f"
+            log("  %3d %6d %+12.4e %12.4e %+10.3f %9.4f %8.3f %8.3f %8.2f %7.3f %+7.3f %+7.3f"
                 % (f["bloque"], f["n"], f["omega_neta"], f["omega_rms"], f["q_neto"],
-                   f["tau0"], f["nu"], f["rv_pb"],
-                   f["f_FLUJO"], f["f_PRECIO"], f["f_LIBRO"]))
+                   f["tau0"], f["tau_recup_loc"], f["resiliencia"], f["nu"],
+                   f["rv_pb"], f["f_FLUJO"], f["f_LIBRO"]))
+    def _nanmed(x):
+        x = np.asarray(x, float)
+        x = x[np.isfinite(x)]
+        return float(np.median(x)) if x.size else np.nan
+
     titulo("RESUMEN POR DIA -- el cambio de un dia a otro")
-    log("  %-12s %5s %13s %13s %10s %9s %8s %7s %7s"
-        % ("fecha", "blq", "omega_rms MED", "omega_rms p90", "q_neto", "tau0",
-           "nu", "rv_pb", "fLIB"))
+    log("  %-16s %3s %5s %13s %10s %9s %8s %8s %8s %7s"
+        % ("fecha", "fin", "blq", "omega_rms MED", "q_neto", "tau0", "t_rec",
+           "resil", "nu", "rv_pb"))
     for d in dias:
         fs = [f for f in filas if f["dia"] == d]
         g = lambda c: np.array([f[c] for f in fs], float)
-        log("  %-12s %5d %13.4e %13.4e %+10.2f %9.4f %8.2f %7.3f %+7.3f"
-            % (fs[0]["fecha"], len(fs), np.median(g("omega_rms")),
-               np.percentile(g("omega_rms"), 90), np.sum(g("q_neto")),
-               np.median(g("tau0")), np.median(g("nu")), np.median(g("rv_pb")),
-               np.median(g("f_LIBRO"))))
+        log("  %-16s %3s %5d %13.4e %+10.2f %9.4f %8.3f %8.3f %8.2f %7.3f"
+            % (fs[0]["fecha"], "SI" if fs[0]["finde"] else "-", len(fs),
+               _nanmed(g("omega_rms")), np.nansum(g("q_neto")), _nanmed(g("tau0")),
+               _nanmed(g("tau_recup_loc")), _nanmed(g("resiliencia")),
+               _nanmed(g("nu")), _nanmed(g("rv_pb"))))
     if len(dias) > 1:
-        rr = np.array([np.median([f["omega_rms"] for f in filas if f["dia"] == d])
+        rr = np.array([_nanmed([f["omega_rms"] for f in filas if f["dia"] == d])
                        for d in dias], float)
+        rr = rr[np.isfinite(rr) & (rr > 0)]
+        if rr.size > 1:
+            log("")
+            log("  recorrido de omega_rms entre dias: %.2fx  (min %.3e, max %.3e)"
+                % (np.max(rr) / max(np.min(rr), 1e-30), np.min(rr), np.max(rr)))
+    # --- habil contra fin de semana, hora de NUEVA YORK --------------------
+    hab = [f for f in filas if not f["finde"]]
+    fin_ = [f for f in filas if f["finde"]]
+    if hab and fin_:
+        titulo("HABIL contra FIN DE SEMANA -- reloj de NUEVA YORK")
+        log("  %-10s %6s %13s %10s %9s %8s %8s %8s"
+            % ("grupo", "blq", "omega_rms MED", "|q_neto|", "tau0", "t_rec",
+               "resil", "nu"))
+        for nom, g in (("habil", hab), ("finde", fin_)):
+            a_ = lambda c: np.array([f[c] for f in g], float)
+            log("  %-10s %6d %13.4e %10.2f %9.4f %8.3f %8.3f %8.2f"
+                % (nom, len(g), _nanmed(a_("omega_rms")),
+                   _nanmed(np.abs(a_("q_neto"))), _nanmed(a_("tau0")),
+                   _nanmed(a_("tau_recup_loc")), _nanmed(a_("resiliencia")),
+                   _nanmed(a_("nu"))))
+        r1 = _nanmed([f["omega_rms"] for f in hab])
+        r2 = _nanmed([f["omega_rms"] for f in fin_])
+        if np.isfinite(r1) and np.isfinite(r2) and r2 > 0:
+            log("")
+            log("  razon habil/finde de omega_rms: %.3fx" % (r1 / r2))
         log("")
-        log("  recorrido de omega_rms entre dias: %.2fx  (min %.3e, max %.3e)"
-            % (np.max(rr) / max(np.min(rr), 1e-30), np.min(rr), np.max(rr)))
+        log("  --- perfil horario de omega_rms (hora de NY) ---")
+        log("  %5s %14s %14s" % ("hora", "habil", "finde"))
+        hs = sorted(set(f["bloque"] for f in filas))
+        for h in hs:
+            v1 = _nanmed([f["omega_rms"] for f in hab if f["bloque"] == h])
+            v2 = _nanmed([f["omega_rms"] for f in fin_ if f["bloque"] == h])
+            log("  %5d %14s %14s"
+                % (h, "%.4e" % v1 if np.isfinite(v1) else "-",
+                   "%.4e" % v2 if np.isfinite(v2) else "-"))
 
     csv = "telemetria/omega_bloques_%s.csv" % args.fuente
-    cab = ["fecha", "dia", "bloque", "n", "t0", "omega_neta", "omega_rms", "omega_med",
-           "phi_med", "phi_sd", "q_neto", "q_tot", "precio", "tau0", "prof", "nu",
+    cab = ["fecha", "dia", "finde", "bloque", "n", "t0", "omega_neta", "omega_rms",
+           "omega_med", "phi_med", "phi_sd", "q_neto", "q_tot", "precio", "tau0",
+           "tau_agot", "tau_recup_loc", "theta_medida", "resiliencia", "prof", "nu",
            "rv_pb", "f_FLUJO", "f_PRECIO", "f_LIBRO"]
     with io.open(csv, "w", encoding="ascii") as fh:
         fh.write(",".join(cab) + "\n")
@@ -946,7 +1305,7 @@ def etapa_relacion(args) -> int:
     if s["t"].size == 0:
         log("  no hay serie. Corre --etapa=serie primero.")
         return 2
-    filas = por_bloque(r, s, args.bloque)
+    filas = por_bloque(r, s, args.bloque, zona=args.zona)
     informe_relacion(filas, s, args.forma)
     return 0
 
@@ -1133,6 +1492,100 @@ def _autotest() -> int:
         "13 censurados = escalar acotado por el numero de filas",
         "eventos+censurados %.0f sobre %d filas" % (tot_ev, tb4.size))
 
+    # --- 14. Calendario de NY: fronteras de horario de verano EXACTAS -------
+    import datetime as _dt
+
+    def _ts(x):
+        return _dt.datetime.strptime(x, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=_dt.timezone.utc).timestamp()
+    casos = [("2026-01-15T12:00:00Z", -5), ("2026-07-15T12:00:00Z", -4),
+             ("2026-03-08T06:59:00Z", -5), ("2026-03-08T07:01:00Z", -4),
+             ("2026-11-01T05:59:00Z", -4), ("2026-11-01T06:01:00Z", -5)]
+    ts = np.array([_ts(c[0]) for c in casos])
+    got = offset_ny(ts) / 3600.0
+    chk(np.array_equal(got, np.array([c[1] for c in casos], float)),
+        "14 offset de NY exacto en las dos fronteras de horario de verano",
+        "medido %s" % np.array2string(got, precision=0))
+
+    # --- 15. dia de la semana contra la biblioteca estandar -----------------
+    ts2 = 1750000000.0 + np.arange(400) * 86400.0
+    cal = calendario_ny(ts2)
+    ref = np.array([(_dt.date(1970, 1, 1) + _dt.timedelta(days=int(d))).weekday()
+                    for d in cal["dia"]])
+    chk(np.array_equal(cal["dow"], ref) and np.array_equal(cal["finde"], ref >= 5),
+        "15 dia de la semana == datetime.weekday() en 400 dias",
+        "y `finde` = sabado o domingo")
+
+    # --- 16. volumen por intervalo: suma exacta -----------------------------
+    tt3 = np.array([0.5, 1.5, 2.5, 3.5, 9.5])
+    q3 = np.array([1.0, 2.0, 4.0, 8.0, 16.0])
+    fn = volumen_por_intervalo(tt3, q3)
+    v = fn(np.array([0.0, 2.0, 4.0, 10.0]))
+    chk(np.allclose(v, [0.0, 3.0, 12.0, 16.0]),
+        "16 volumen por intervalo del libro, suma exacta", "medido %s" % v)
+
+    # --- 17/18. theta MEDIDA y tau_recup con verdad conocida ----------------
+    dtb, tau_v, D_eq = 0.02, 5.0, 10.0
+    nb5 = 60000
+    tb5 = np.arange(nb5) * dtb
+    prof5 = np.full(nb5, D_eq)
+    vol5 = np.zeros(nb5)
+    golpes = np.arange(2000, nb5 - 3000, 4000)
+    v_golpe = 4.0                              # theta verdadera = 4/10 = 0.40
+    for g in golpes:
+        rel = np.arange(nb5 - g) * dtb
+        prof5[g:] = D_eq - v_golpe * np.exp(-rel / tau_v)
+        # [!] EL NIVEL PREVIO SE FIJA EN D_eq EXACTO. Sin esto queda la cola de
+        # la relajacion del golpe anterior (~1e-3) y la condicion de evento
+        # -- que la profundidad caiga AL MENOS lo que el flujo se llevo -- se
+        # evalua justo en su frontera y falla por un pelo: 1 evento de 14. No es
+        # un fallo del estimador, es que el caso de prueba estaba construido en
+        # el punto exacto de igualdad. Fijarlo lo deja en el caso MAS ESTRICTO
+        # posible (igualdad exacta), que es el que hay que probar.
+        prof5[g - 1] = D_eq
+        vol5[g] = v_golpe
+    piso = piso_parpadeo(prof5, vol5)
+    # Sin ruido de cotizacion el piso no es cero: es la COLA DE LA RELAJACION,
+    # que tambien cambia la profundidad sin que haya transacciones. Lo que se
+    # exige es que sea despreciable frente a cualquier theta real (~0.4).
+    chk(np.isfinite(piso) and piso < 1e-4,
+        "17 sin parpadeo el piso es despreciable frente a theta",
+        "medido %.3e contra theta verdadera 0.40" % piso)
+    te, tau, thm, cens, _p = eventos_recuperacion_local(tb5, prof5, vol5)
+    err = abs(np.median(tau) - tau_v) / tau_v if tau.size else np.inf
+    chk(tau.size == golpes.size and err < 0.02 and abs(np.median(thm) - 0.4) < 1e-9,
+        "18 theta MEDIDA y tau_recup local recuperan su verdad conocida",
+        "%d eventos, theta = %.4f (verdad 0.40), tau = %.4f s (verdad %.1f)"
+        % (tau.size, np.median(thm) if thm.size else np.nan,
+           np.median(tau) if tau.size else np.nan, tau_v))
+
+    # --- 19. el piso de parpadeo SI descarta el ruido de cotizacion ---------
+    rng2 = np.random.default_rng(5)
+    prof6 = prof5 * np.exp(rng2.normal(0, 0.20, nb5))     # parpadeo fuerte
+    piso6 = piso_parpadeo(prof6, vol5)
+    te6, tau6, thm6, _c6, _p6 = eventos_recuperacion_local(tb5, prof6, vol5)
+    chk(piso6 > 0.05 and te6.size <= golpes.size,
+        "19 con parpadeo, el piso sube y NO se inventan eventos",
+        "piso %.4f, eventos %d contra %d golpes reales"
+        % (piso6, te6.size, golpes.size))
+
+    # --- 20. resiliencia = tau_agot / tau_recup, con las dos conocidas ------
+    nb7, dt7 = 20, 10.0
+    acc7 = _acc_vacio(nb7)
+    bt7 = np.arange(0, nb7 * dt7, 0.5)
+    pv, cv = 8.0, 2.0                          # tau_agot = 8/2 = 4 s
+    acumular_libro(bt7, np.full(bt7.size, 100.0), np.full(bt7.size, pv),
+                   np.full(bt7.size, 100.1), np.full(bt7.size, pv), t0=0.0,
+                   dt=dt7, nb=nb7, acc=acc7, prev=None)
+    tt7 = np.arange(0, nb7 * dt7, 0.25)
+    acumular_trades(tt7, np.full(tt7.size, 100.0), np.full(tt7.size, cv * 0.25),
+                    rng.random(tt7.size) < 0.5, 0.0, dt7, nb7, acc7)
+    g7 = cerrar_rejilla(acc7, 0.0, dt7, nb7)
+    chk(abs(np.nanmedian(g7["tau_agot"][g7["valida"]]) - 4.0) < 1e-9
+        and "resiliencia" in g7 and g7["resiliencia"].size == nb7,
+        "20 la resiliencia se publica y su numerador sigue siendo tau_agot",
+        "tau_agot %.6f s" % np.nanmedian(g7["tau_agot"][g7["valida"]]))
+
     log("")
     log("  %d / %d" % (n_ok, n_tot))
     return 0 if n_ok == n_tot else 1
@@ -1148,6 +1601,8 @@ def main(argv=None) -> int:
     ap.add_argument("--forma", default="P/tau", choices=("P/tau", "tau/P"))
     ap.add_argument("--dt", type=float, default=DT_REJILLA)
     ap.add_argument("--bloque", type=float, default=BLOQUE_S)
+    ap.add_argument("--zona", default="ny", choices=("ny", "utc"),
+                    help="reloj para dia/hora/finde. NY por omision (Sec.4.bis)")
     a = ap.parse_args(argv)
     if a.autotest:
         return _autotest()

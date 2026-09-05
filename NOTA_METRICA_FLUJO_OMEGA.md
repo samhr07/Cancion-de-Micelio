@@ -146,6 +146,79 @@ no vive en L1: H1 (2026-08-23, parcial +0.0425 contra techo de nulo +0.0418) y
 
 ---
 
+## 3.bis  `theta` RETROALIMENTADA de `tau_agot` (2026-09-05)
+
+Objecion del operador, y era correcta: **fijar `theta` en una fraccion constante
+es vacio.** No hay ninguna razon para que el libro se agote un 30 % o un 90 % en
+un intervalo dado. Ahora `theta` es **lo que el flujo llego a agotar**:
+
+```
+theta_k = volumen negociado en (t[k-1], t[k]]  /  profundidad en t[k-1]
+```
+
+que es exactamente `dt_k / tau_agot_k`: la fraccion de la cola visible que el
+caudal consumio en ese intervalo. Un evento es que la profundidad caiga **al
+menos lo que el flujo se llevo**, `prof[k] <= (1 - theta_k)*prof[k-1]`, o sea que
+la reposicion no compensara al consumo. Con eso `tau_recup` y `tau_agot` dejan de
+ser dos medidas independientes y pasan a ser **las dos mitades de un mismo
+ciclo**: cuanto tarda en vaciarse y cuanto en volver.
+
+**El piso tampoco es un parametro libre.** Sin piso, un intervalo sin
+transacciones da `theta = 0` y entonces cualquier bajada cuenta como evento --
+incluido el parpadeo de cotizacion, que es lo que hundio la primera version del
+estimador. El piso es el **parpadeo MEDIDO**: la mediana de `|dprof|/prof` sobre
+los intervalos **sin transacciones**, donde por construccion ningun cambio es
+atribuible al flujo. Se mide, se reporta y no se elige (controles 17 y 19).
+
+### La metrica de recuperacion: RESILIENCIA
+
+```
+resiliencia = tau_agot / tau_recup_LOCAL        [adimensional]
+```
+
+- `>> 1`: el libro repone mucho mas rapido de lo que el flujo lo consume.
+- `<< 1`: el flujo lo vacia mas rapido de lo que el libro repone.
+
+Se publica por casilla y por bloque, y `--etapa=relacion` la cruza con `nu`,
+`q_tot`, `|Q_neto|`, `rv` y `omega_rms`, con la disciplina CRUDO/RESIDUO. ⚠ La
+analogia con VPIN es de **proposito**, no de resultado: que esta razon tenga o no
+valor de aviso temprano **no esta contrastado**, y nada en este modulo lo afirma.
+
+---
+
+## 3.ter  El reloj es el de NUEVA YORK, no UTC (2026-09-05)
+
+El ciclo de 24 h que este proyecto midio el 2026-08-23 tiene su pico en UTC 13-15
+y su valle en UTC 4, y ese pico **es la apertura de Nueva York**. Agrupar por hora
+UTC funciona por casualidad -- el offset es constante dentro de cada regimen de
+horario -- pero se rompe dos veces al ano en los cambios de horario de verano, y
+mezcla el sabado y el domingo de NY con el lunes de UTC.
+
+Ahora el dia, la hora y la bandera `finde` son de **NY** (`--zona=utc` vuelve al
+comportamiento anterior), lo que convierte el ciclo diurno de una **presuncion
+sobre el dato** en una variable exogena con causa conocida. Consecuencias:
+
+- `--etapa=dia` saca el resumen por dia con su `finde`, una tabla **habil contra
+  fin de semana** y el **perfil horario en hora de NY** para cada grupo.
+- `quitar_ciclo` usa celdas intradia **separadas** para habil y finde: el
+  2026-08-23 se midio que el fin de semana tiene amplitud **y fase** propias -- su
+  pico llega ~7 h mas tarde --, asi que una sola forma intradia para los siete
+  dias mezcla dos ciclos y no retira ninguno.
+
+La regla de horario de verano de EE.UU. se implementa a mano y no con `zoneinfo`
+a proposito: en Windows `zoneinfo` necesita el paquete `tzdata` aparte, y esto
+tiene que correr en la maquina de la captura sin anadir dependencias. Verificado
+contra las dos fronteras exactas y contra `datetime.weekday()` en 400 dias
+(controles 14 y 15).
+
+⚠ Un fallo propio, y el quinto de esta familia en el proyecto: `EPOCH_DOW` se
+puso en 4 cuando 1970-01-01 fue **jueves**, que con 0 = lunes es **3**. El caso
+de prueba lo caza al instante (2026-03-08 es domingo y salia habil). Tras el 2pi
+de la v1.3, el factor 125, la convencion de `eps` del propagador y la fase de
+`atan2` en `estacionalidad.py`.
+
+---
+
 ## 4. Como se corre
 
 ```
@@ -153,11 +226,14 @@ python flujo_omega.py --autotest                    18 controles con verdad cono
 python flujo_omega.py --etapa=serie                 construye y cachea la rejilla
 python flujo_omega.py --etapa=dia                   los Omega por dia y por bloque
 python flujo_omega.py --etapa=relacion              relacion entre variables
+
+python offset_precio.py --autotest                 11 controles
+python offset_precio.py --etapa=offset             el offset P_ref, por racha y dia
 ```
 
-Banderas: `--fuente=estacional|v33`, `--tau=tau_agot|tau_upd|tau_recup_0.50`,
+Banderas: `--fuente=estacional|v33`, `--tau=tau_agot|tau_recup_loc|tau_upd|...`,
 `--forma=P/tau|tau/P`, `--dt=10` (casilla de `phi`), `--bloque=3600` (bloque de
-reporte; 3600 s → **24 Omega por dia**).
+reporte; 3600 s → **24 Omega por dia**), `--zona=ny|utc`.
 
 Salidas: `telemetria/rejilla_omega_<fuente>.npz`,
 `telemetria/omega_bloques_<fuente>.csv` (una fila por bloque, 20 columnas) y
@@ -217,6 +293,39 @@ para leerla comoda.
 
 ---
 
+## 5.bis  El OFFSET `P_ref` -- `offset_precio.py`, 11/11
+
+Modulo aparte porque es otra pregunta: sobre `P`, no sobre `Omega`. Detalle
+completo en su docstring. En corto:
+
+- La formula literal `P_ref = S - Q_neto` **no cierra dimensionalmente** (resta
+  BTC a USD/BTC). Integrando la premisa del propio operador (`dP/dt`
+  proporcional al flujo) sale la version que si cierra:
+  `P(t) = P_ref(t) + lambda*CumQ(t)`, con `lambda` en USD/BTC por BTC.
+- `lambda` se ajusta sobre **incrementos** y **sin intercepto**. Sobre niveles
+  seria una regresion espuria (dos series integradas); con intercepto, la deriva
+  se iria al intercepto y `P_ref` saldria plano por construccion -- el mismo modo
+  de fallo que la v4.2 §4 tuvo que corregir por cuatro puertas distintas.
+- Se prueban los **dos regresores** que el operador propuso, `Q_neto` y
+  `Q_neto*nu`, y se reporta cual explica mas.
+- El estadistico que responde a la pregunta es la **razon de recorridos**
+  `recorrido(P_ref)/recorrido(P)` entre dias, **contra su nulo de rotacion**.
+  `P - lambda*CumQ` es una diferencia de dos series integradas y **siempre**
+  tiene recorrido, tambien por azar.
+- Y se reporta la **estabilidad de `lambda` dia a dia**: si el coeficiente no se
+  sostiene, `P_ref` no es un offset, es el residuo de un modelo que no aplica.
+
+⚠ **Todo va POR RACHA CONTINUA, y eso fue un fallo propio que la corrida de
+verificacion destapo.** `P_ref` se ancla al inicio de cada racha -- arrastrar
+`CumQ` por un hueco sumaria un flujo que nunca se observo --, asi que un dia que
+CONTIENE una frontera de racha lleva dos anclas y su `P_ref` da un salto
+artificial: en la corrida sintetica marcaba **460 pb** de recorrido contra 3 pb
+de los demas, y peor, el recorrido ENTRE dias acababa midiendo otra vez el
+precio (razon 1.03, indistinguible del nulo). Dentro de una racha el ancla es
+UNA y la comparacion entre dias significa algo. Control 10.
+
+---
+
 ## 6. Estado de la verificacion
 
 **Lo que esta verificado (18/18, `python flujo_omega.py --autotest`):**
@@ -240,6 +349,19 @@ para leerla comoda.
 | 11 | la rotacion rompe el emparejamiento y conserva la marginal | `0.999 -> 0.363` |
 | 12 | Spearman con empates promediados | `-1` y `+1` exactos |
 | 13 | censurados = escalar acotado por el numero de filas | exacto |
+| 14 | offset de NY exacto en las dos fronteras de horario de verano | exacto |
+| 15 | dia de la semana == `datetime.weekday()` en 400 dias | exacto |
+| 16 | volumen por intervalo del libro, suma exacta | exacto |
+| 17 | sin parpadeo el piso es despreciable frente a `theta` | `3.0e-07` contra 0.40 |
+| 18 | `theta` MEDIDA y `tau_recup` local recuperan su verdad | theta 0.4000, tau 5.0206 s contra 5.0 |
+| 19 | con parpadeo el piso sube y NO se inventan eventos | piso 0.189, 4 eventos contra 14 golpes |
+| 20 | la resiliencia se publica y su numerador sigue siendo `tau_agot` | exacto |
+
+Y `offset_precio.py --autotest` → **11/11**: OLS sin intercepto exacto,
+recuperacion de una `lambda` conocida, `lambda ~ 0` sin acoplamiento, la
+identidad `Var(dP_ref)/Var(dP) = 1 - R2`, reconstruccion exacta de `P`, una
+**deriva pura no se cuela en `lambda`**, la rotacion destruye el acoplamiento,
+las rachas cortan en los huecos, y el control 10 del fallo de anclaje.
 
 **Lo que NO esta hecho: no hay ni una cifra de mercado real.** El contenedor de
 esta sesion no tiene las capturas — `telemetria/` esta en `.gitignore` y los
