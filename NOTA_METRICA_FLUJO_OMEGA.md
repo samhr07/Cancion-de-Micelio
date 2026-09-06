@@ -256,6 +256,24 @@ tener en el disco: son decenas de MB, de ella comen todas las etapas y el
 offset, y es lo unico que hace falta subir al repositorio para poder iterar
 sobre dato real sin mover los 2 GB de parquet.
 
+**Las rutas reales de la captura** (corregidas por el operador el 2026-09-06):
+
+| ruta | estado |
+|---|---|
+| `C:\Users\Usuario\Desktop\Canción Del Micelio\telemetria\estacional` | **la buena**: local y al dia |
+| `D:\Micelio\telemetria\estacional` | la USB, **desactualizada** (sincronizada el 29-ago con 4.1 GB; hoy son 6.5) |
+
+Lleva espacios y un acento, asi que **hay que entrecomillarla** en `cmd`:
+
+```bat
+C:\Users\Usuario\miniconda3\python.exe flujo_omega.py --etapa=serie ^
+    --datos="C:\Users\Usuario\Desktop\Canción Del Micelio\telemetria\estacional"
+```
+
+Tamanos medidos: **6 508 MB** de parquet crudo, **474 KB** de rejilla comprimida
+por dia, **~13 MB** la rejilla completa. Los 13 MB caben en el repositorio; los
+6.5 GB no, y no hace falta que quepan.
+
 **Acota la ventana en la primera corrida.** El estacional son ~223 M de filas
 de libro y la primera pasada sobre una USB no es rapida: `--dias=1` da una
 prueba de humo que termina en minutos y produce una rejilla que las tres etapas
@@ -443,6 +461,44 @@ captura, en ese orden.
    antes de construir nada encima. La tabla de concordancia de `--etapa=serie`
    es exactamente ese contraste.
 4. **`@depth`**, si se quiere un `tau_0` del libro y no de la cola visible (§3).
+
+---
+
+## 7.bis  La captura esta VIVA: la rejilla es una foto, y lleva su sello
+
+Aviso del operador (2026-09-06), y cambia como hay que citar los resultados: la
+captura **sigue escribiendo**. La rejilla que se genere hoy es una foto de hoy,
+su ultimo dia puede estar **parcial**, y regenerarla manana **no da lo mismo**.
+
+Dos cosas en el modulo responden a eso:
+
+1. **Sello de procedencia dentro del propio `.npz`** (`_procedencia`): instante
+   de generacion en UTC, ventana, directorio de origen, recuento de partes y un
+   **hash** de la lista de ficheros fuente (nombre, filas, rango temporal).
+   Regenerar y comparar el hash dice en un segundo si es la misma foto. Una
+   cifra que se cite tiene que poder decir de que version salio.
+2. **Cobertura por dia** al final de `--etapa=serie`: casillas validas contra
+   las 8 640 que tiene un dia a `dt = 10 s`, con el dia marcado `<- PARCIAL`
+   por debajo del 90 %. Un dia al 30 % no es comparable con uno al 99 %, y sin
+   la tabla se leerian como si lo fueran.
+
+## 7.ter  Por que los `.npy` mapeables NO ahorran la pasada
+
+El operador ofrecio los tramos ya limpios y alineados en
+`telemetria\mmap_estacional_{0,1,2,3}\` (1.6 GB), que consumen `identidad.py`,
+`estratos.py` y `superficie.py`. **No sirven para esta metrica**, por dos
+razones que se ven leyendo `identidad.preparar_mmap`:
+
+- Sus columnas son `t, bid, ask, eps, precio, mid`. **No llevan `B` ni `A`**, o
+  sea la profundidad de nivel 1 — y de ella viven `tau_agot`, `theta`,
+  `tau_recup` y la `resiliencia`, que son justo el denominador de `phi`.
+- Estan alineados a **transaccion** (el ultimo snapshot antes de cada trade),
+  no al flujo de libro. `tau_recup` mide recuperacion **entre actualizaciones
+  del libro**, y esa resolucion no esta en ellos.
+
+Cubririan los canales FLUJO y PRECIO, que son la mitad barata. La mitad cara
+—el libro con sus cantidades— hay que leerla del parquet igual, asi que el
+ahorro es despreciable.
 
 ---
 

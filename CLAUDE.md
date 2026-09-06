@@ -5562,11 +5562,26 @@ convención de `ε` del propagador y la fase de `atan2` en `estacionalidad.py`.
 - El proyecto corre sobre el **Python base de miniconda**,
   `C:/Users/Usuario/miniconda3/python.exe`. Dependencias de esta línea: `numpy` y
   `pyarrow` (`--autotest` corre sin `pyarrow`).
-- **Las capturas viven en la USB `D:` (Maxwell)**, así que `flujo_omega.py` y
-  `offset_precio.py` ya **no cablean ninguna ruta**: `--datos` / `MICELIO_DATOS`
-  (captura_estacional), `--v33` / `MICELIO_V33`, `--salida` / `MICELIO_SALIDA`.
-  La salida se separa de los datos a propósito — la rejilla cacheada conviene en
-  disco, no en el medio extraíble.
+- **Rutas reales de la captura** (corregidas por el operador el 2026-09-06):
+  `C:\Users\Usuario\Desktop\Canción Del Micelio\telemetria\estacional` es la
+  buena (local y al día); `D:\Micelio\telemetria\estacional` es la USB y está
+  **desactualizada** (sincronizada el 29-ago con 4.1 GB; hoy son 6.5). Lleva
+  espacios y acento: hay que entrecomillarla en `cmd`. Por eso `flujo_omega.py` y
+  `offset_precio.py` **no cablean ninguna ruta**: `--datos` / `MICELIO_DATOS`,
+  `--v33` / `MICELIO_V33`, `--salida` / `MICELIO_SALIDA`.
+- **Tamaños medidos**: 6 508 MB de parquet crudo, **474 KB** de rejilla
+  comprimida por día, **~13 MB** la rejilla completa. Los 13 MB caben en el repo;
+  los 6.5 GB no, y no hace falta.
+- ⚠ **La captura sigue escribiendo**, así que la rejilla es una **foto**: su
+  último día puede estar parcial y regenerarla no da lo mismo. El `.npz` lleva
+  dentro un **sello de procedencia** (`_procedencia`: instante UTC, ventana,
+  partes y un hash de los ficheros fuente) y `--etapa=serie` saca una **tabla de
+  cobertura por día** que marca `<- PARCIAL` por debajo del 90 %.
+- ⚠ **Los `.npy` mapeables de `mmap_estacional_*` NO sirven para esta métrica**:
+  sus columnas son `t, bid, ask, eps, precio, mid` — **sin `B` ni `A`**, o sea sin
+  profundidad de L1, que es de donde salen `tau_agot`, `theta`, `tau_recup` y la
+  resiliencia. Y están alineados a transacción, no al flujo de libro. Cubrirían
+  FLUJO y PRECIO, que es la mitad barata; la cara hay que leerla del parquet.
 - **Acotar la ventana en la primera corrida**: `--dias=1` (o `--desde`/`--hasta`)
   da una prueba de humo de minutos sobre las ~223 M de filas de libro del
   estacional, y produce una rejilla que las tres etapas ya leen.

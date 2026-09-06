@@ -748,6 +748,42 @@ def rejilla_v33(dt=DT_REJILLA):
     return cerrar_rejilla(acc, t0, dt, nb)
 
 
+def procedencia(dir_datos, dt, t0, t1, extra=None):
+    """Sello de PROCEDENCIA de la rejilla: de que foto de la captura salio.
+
+    ⚠ EXISTE PORQUE LA CAPTURA SIGUE ESCRIBIENDO. Aviso del operador
+    (2026-09-06): la rejilla que se genere hoy es una foto de hoy, su ultimo dia
+    puede estar PARCIAL, y regenerarla manana NO da lo mismo. Una cifra que se
+    cite tiene que poder decir de que version salio, asi que la rejilla se lleva
+    dentro el instante de generacion, la ventana, el recuento de partes y un
+    hash de la lista de ficheros fuente (nombre, tamano, filas). Regenerar y
+    comparar el hash dice en un segundo si es la misma foto o no.
+    """
+    import hashlib
+    import datetime as _dt
+    meta = {"generado_utc": _dt.datetime.now(_dt.timezone.utc)
+            .strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "dir_datos": os.path.abspath(dir_datos) if dir_datos else None,
+            "dt": dt, "t_ini": t0, "t_fin": t1,
+            "modulo": "flujo_omega"}
+    try:
+        import curvas_estacional as C
+        firma = []
+        for pref in ("trades_", "libro_"):
+            idx = C._indice(pref)
+            meta["n_partes_" + pref.strip("_")] = len(idx)
+            for f, a_, b_, n_ in idx:
+                firma.append("%s|%d|%.3f|%.3f" % (os.path.basename(f), n_, a_, b_))
+        meta["hash_fuente"] = hashlib.sha256(
+            "\n".join(sorted(firma)).encode()).hexdigest()[:16]
+    except Exception as e:
+        meta["hash_fuente"] = None
+        meta["nota"] = "sin indice de partes: %s" % e
+    if extra:
+        meta.update(extra)
+    return meta
+
+
 def cargar_rejilla(fuente):
     r = ruta_cache(fuente)
     if not os.path.exists(r):
@@ -756,8 +792,13 @@ def cargar_rejilla(fuente):
             "  corre primero:  --etapa=serie --fuente=%s\n"
             "  y si las capturas no estan en ./telemetria, pasa --datos=RUTA"
             % (r, fuente))
-    d = np.load(r)
-    return {k: (float(d[k]) if d[k].ndim == 0 else d[k]) for k in d.files}
+    d = np.load(r, allow_pickle=False)
+    out = {}
+    for k in d.files:
+        v = d[k]
+        # el sello de procedencia es texto, no un escalar numerico
+        out[k] = str(v) if v.dtype.kind in "USO" else (float(v) if v.ndim == 0 else v)
+    return out
 
 
 # ===========================================================================
@@ -1307,9 +1348,20 @@ def etapa_serie(args) -> int:
         r = rejilla_v33(args.dt)
     else:
         raise SystemExit("fuente desconocida: %r" % (args.fuente,))
+    import curvas_estacional as C
+    meta = procedencia(C.DIR if args.fuente == "estacional" else DIR_V33,
+                       args.dt, float(r["t"][0]), float(r["t"][-1]),
+                       {"fuente": args.fuente})
+    r["_procedencia"] = np.array(json.dumps(meta, ensure_ascii=True))
     np.savez_compressed(ruta_cache(args.fuente), **r)
     log("")
     log("  guardado en %s" % ruta_cache(args.fuente))
+    log("  PROCEDENCIA  generada %s   hash de fuente %s"
+        % (meta["generado_utc"], meta.get("hash_fuente")))
+    log("               partes: %s trades, %s libro"
+        % (meta.get("n_partes_trades"), meta.get("n_partes_libro")))
+    log("               ⚠ la captura sigue escribiendo: esta rejilla es una FOTO.")
+    log("                 Cita la version por su hash; regenerarla no da lo mismo.")
     v = r["valida"]
     log("  casillas %d, validas %d (%.1f %%), transacciones %d"
         % (v.size, v.sum(), 100 * v.mean(), int(r["n_tx"].sum())))
@@ -1317,8 +1369,36 @@ def etapa_serie(args) -> int:
         log("  nu mediana %.2f tx/s   precio %.1f -- %.1f   profundidad L1 mediana %.3f BTC"
             % (np.median(r["nu"][v]), np.nanmin(r["precio"][v]),
                np.nanmax(r["precio"][v]), np.nanmedian(r["prof"][v])))
+    cobertura_por_dia(r, args.zona)
     informe_tau0(r)
     return 0
+
+
+def cobertura_por_dia(r, zona="ny"):
+    """Fraccion de casillas validas por dia. Un dia PARCIAL se ve aqui.
+
+    El ultimo dia de una captura viva casi siempre esta a medias, y una fila con
+    el 30 % de cobertura no es comparable con una del 99 %. Se reporta antes que
+    nada para que no se lea como si lo fuera.
+    """
+    titulo("COBERTURA POR DIA -- un dia parcial se ve aqui")
+    cal = calendario_ny(r["t"]) if zona == "ny" else None
+    dia = (cal["dia"] if cal is not None
+           else np.floor(r["t"] / 86400.0).astype(np.int64))
+    esperadas = 86400.0 / float(r["dt"])
+    log("  %-16s %3s %10s %10s %9s %9s"
+        % ("fecha", "fin", "validas", "esperadas", "cobertura", "nu MED"))
+    for d in np.unique(dia):
+        m = dia == d
+        v = r["valida"] & m
+        nu = r["nu"][v]
+        cob = v.sum() / esperadas
+        marca = "   <- PARCIAL" if cob < 0.90 else ""
+        log("  %-16s %3s %10d %10.0f %8.1f %% %9.2f%s"
+            % (_fecha_ny(d) if cal is not None else _fecha(d),
+               "SI" if (cal is not None and cal["finde"][m][0]) else "-",
+               int(v.sum()), esperadas, 100 * cob,
+               float(np.median(nu)) if nu.size else np.nan, marca))
 
 
 def etapa_dia(args) -> int:
