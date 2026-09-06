@@ -1624,9 +1624,17 @@ def etapa_saturacion(args) -> int:
         log("")
 
     titulo("SATURACION contra DESATURACION, y el punto de colapso")
-    log("  %-10s %10s %10s %8s %12s %12s %10s"
-        % ("estrato", "x*", "pend<x*", "pend>x*", "razon", "P(col) x<1",
-           "P(col) x>2"))
+    log("  ⚠ LA RAZON SE MIDE EN VENTANA SIMETRICA ALREDEDOR DE x*, Y NO ES UN")
+    log("    DETALLE. La profundidad no puede ser negativa, y esa cota es una")
+    log("    BARRERA REFLECTANTE: cerca de x = 0 crea deriva positiva mecanica.")
+    log("    Midiendo la rama baja desde x = 0.4 la razon salia 0.157 en el")
+    log("    estrato calmo -- una asimetria enorme que era el borde, no el libro.")
+    log("    Es el mismo artefacto que el control 23 existe para cazar. La")
+    log("    columna `ancha` se conserva para que la diferencia quede a la vista.")
+    log("")
+    log("  %-10s %8s %9s %9s %9s %9s %11s %11s"
+        % ("estrato", "x*", "razon0.3", "razon0.4", "razon0.5", "ancha",
+           "P(col) x<1", "P(col) x>2"))
     for k in range(5):
         n = rE["n"][k]
         if n.sum() < 5000:
@@ -1634,23 +1642,37 @@ def etapa_saturacion(args) -> int:
         x_, m_ = rE["x"][k], rE["mu"][k]
         xe, _ = equilibrio(x_, m_, n)
         xe = xe if np.isfinite(xe) else 1.0
-        baja = np.isfinite(x_) & (n >= 500) & (x_ > 0.4) & (x_ < xe)
-        alta = np.isfinite(x_) & (n >= 500) & (x_ > xe)
-        pb = np.polyfit(x_[baja], m_[baja], 1)[0] if baja.sum() >= 3 else np.nan
-        pa = np.polyfit(x_[alta], m_[alta], 1)[0] if alta.sum() >= 3 else np.nan
-        c1 = np.isfinite(x_) & (n >= 500) & (x_ < 1.0)
-        c2 = np.isfinite(x_) & (n >= 500) & (x_ > 2.0)
-        log("  %-10s %10.4f %10.5f %8.5f %12.3f %11.4f %% %9.4f %%"
-            % (nom[k], xe, pb, pa, (pa / pb) if (np.isfinite(pa) and pb) else np.nan,
+        val = np.isfinite(x_) & (n >= 500)
+
+        def _razon(lo_b, hi_a):
+            b = val & (x_ >= lo_b) & (x_ < xe)
+            a_ = val & (x_ > xe) & (x_ <= hi_a)
+            if b.sum() < 3 or a_.sum() < 3:
+                return np.nan
+            pb_ = np.polyfit(x_[b], m_[b], 1)[0]
+            pa_ = np.polyfit(x_[a_], m_[a_], 1)[0]
+            return (pa_ / pb_) if pb_ else np.nan
+
+        c1 = val & (x_ < 1.0)
+        c2 = val & (x_ > 2.0)
+        log("  %-10s %8.4f %9.3f %9.3f %9.3f %9.3f %10.3f %% %10.3f %%"
+            % (nom[k], xe, _razon(xe - 0.3, xe + 0.3), _razon(xe - 0.4, xe + 0.4),
+               _razon(xe - 0.5, xe + 0.5), _razon(0.4, x_[val].max()),
                100 * np.nansum(rE["colapso"][k][c1] * n[c1]) / max(n[c1].sum(), 1),
                100 * np.nansum(rE["colapso"][k][c2] * n[c2]) / max(n[c2].sum(), 1)))
     log("")
-    log("  LECTURA. `pend>x*` / `pend<x*` cerca de 1: la cola es una reversion")
-    log("  simple, sin punto de colapso -- se llena y se vacia con la misma")
-    log("  fuerza. Mucho mayor que 1: por encima de x* la cola se vacia cada vez")
-    log("  mas rapido cuanto mas llena esta, que es lo que 'colapsar' significa.")
-    log("  Menor que 1: satura -- por encima de x* deja de haber fuerza que la")
-    log("  devuelva, o sea que se puede acumular sin limite.")
+    log("  LECTURA. Razon cerca de 1: la cola es una reversion SIMETRICA, sin")
+    log("  punto de colapso -- se llena y se vacia con la misma fuerza. Mucho")
+    log("  mayor que 1: por encima de x* se vacia cada vez mas rapido cuanto mas")
+    log("  llena esta, que es lo que 'colapsar' significa (el control 24 planta")
+    log("  uno y da 1.33). Menor que 1: satura, deja de haber fuerza que la")
+    log("  devuelva. Y si la razon depende mucho de la ventana, no esta")
+    log("  establecida: es ruido de ajuste, no una propiedad del libro.")
+    log("")
+    log("  ⚠ `P(colapso)` para x > 2 esta CONFUNDIDA con la propia reversion:")
+    log("     desde x = 2, caer a la mitad es exactamente volver a x = 1. Esa")
+    log("     columna no separa 'colapso' de 'volver a la normalidad'. Lo que")
+    log("     responde la pregunta es la razon de pendientes, no ella.")
 
     rH = resumen_deriva(accH)
     titulo("¿CUAJA CON LA U? -- equilibrio por hora de NUEVA YORK")
@@ -2256,6 +2278,41 @@ def _autotest() -> int:
             "24 el colapso plantado EMPINA la deriva; sin colapso no",
             "sin colapso alta/baja = %.2f (cuadra con 1); con colapso = %.2f"
             % (a1 / b1, a2 / b2))
+
+    # --- 26. La cota en cero FABRICA asimetria: el artefacto del 2026-09-06
+    # Un OU perfectamente SIMETRICO al que se le impone D >= 0 tiene que dar
+    # razon ~1 en ventana simetrica y una asimetria FALSA si la rama baja se
+    # mide desde cerca del borde. Es el control que habria evitado publicar
+    # "razon 0.157 -> el libro satura" cuando era la cota de no-negatividad.
+    # ⚠ El ruido tiene que ser GRANDE para que la cota muerda, como en el dato
+    # real: alli `sigma` de `Delta` a 1 s vale 1-2 veces `D_ref` mientras `x ~ 1`,
+    # asi que el proceso roza el cero constantemente. Con el OU suave de los
+    # controles 22-24 el recorte casi nunca actua y el artefacto no aparece --
+    # el control no comprobaria nada.
+    rg26 = np.random.default_rng(77)
+    z26 = rg26.normal(0, 5.0, n22)
+    D26 = np.empty(n22)
+    D26[0] = De22
+    for q in range(1, n22):
+        D26[q] = max(0.05, De22 + a22 * (D26[q - 1] - De22) + z26[q])
+    x26, m26, n26 = _campo(D26)
+    xe26, _ = equilibrio(x26, m26, n26)
+    v26 = np.isfinite(x26) & (n26 >= 300)
+
+    def _raz26(lo, hi):
+        b_ = v26 & (x26 >= lo) & (x26 < xe26)
+        a_ = v26 & (x26 > xe26) & (x26 <= hi)
+        if b_.sum() < 3 or a_.sum() < 3:
+            return np.nan
+        return (np.polyfit(x26[a_], m26[a_], 1)[0]
+                / np.polyfit(x26[b_], m26[b_], 1)[0])
+
+    sim = _raz26(xe26 - 0.4, xe26 + 0.4)
+    ancha = _raz26(0.05, x26[v26].max())
+    chk(np.isfinite(sim) and abs(sim - 1.0) < 0.15 and np.isfinite(ancha)
+        and ancha < 0.88 * sim,
+        "26 la cota en cero fabrica asimetria; la ventana simetrica la evita",
+        "simetrica %.3f (verdad ~1), ancha %.3f (falsa)" % (sim, ancha))
 
     # --- 25. `equilibrio` sobre una curva con cruce conocido ---------------
     xx = np.linspace(0.2, 4.0, 40)
