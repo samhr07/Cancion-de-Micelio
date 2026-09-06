@@ -97,15 +97,47 @@ def rachas(valida):
     return [g for g in np.split(idx, corte + 1) if g.size >= 3]
 
 
-def incrementos(r, regresor="Q"):
-    """(`dP`, `x`) sobre las rachas validas. `x` es `Q_neto` o `Q_neto*nu`."""
+# Los regresores que se prueban. El operador propuso `Q` y `Qnu` el 2026-09-05,
+# y `Qtick` el 2026-09-06 ("volumen neto sobre tick"). `Eps` y `Epstick` entran
+# por la misma puerta y con motivo propio: Jones, Kaul & Lipson (1994) y el
+# `cont2014.py` de este proyecto midieron que el NUMERO de operaciones lleva
+# informacion que su tamano no lleva.
+REGRESORES = {
+    "Q":       ("Q_neto",            "volumen neto firmado [BTC]"),
+    "Qnu":     ("Q_neto*nu",         "volumen neto por tasa de ticks"),
+    "Qtick":   ("Q_neto/n_tx",       "volumen neto POR TRANSACCION [BTC/tx]"),
+    "Eps":     ("eps_neto",          "desequilibrio de CONTEO [tx]"),
+    "Epstick": ("eps_neto/n_tx",     "fraccion neta de compras [-1..+1]"),
+}
+
+
+def regresor(r, g, nombre):
+    """La serie explicativa sobre los indices `g`. Une la definicion en un sitio.
+
+    ⚠ Estaba duplicada entre `incrementos` y `offset`, y una discrepancia entre
+    las dos daria un `P_ref` que no corresponde a la `lambda` ajustada -- el tipo
+    de fallo que no levanta ninguna excepcion.
+    """
+    n = np.maximum(r["n_tx"][g], 1.0)
+    if nombre == "Q":
+        return r["q_neto"][g]
+    if nombre == "Qnu":
+        return r["q_neto"][g] * r["nu"][g]
+    if nombre == "Qtick":
+        return r["q_neto"][g] / n
+    if nombre == "Eps":
+        return r["eps_neto"][g]
+    if nombre == "Epstick":
+        return r["eps_neto"][g] / n
+    raise ValueError("regresor desconocido: %r" % (nombre,))
+
+
+def incrementos(r, reg="Q"):
+    """(`dP`, `x`, indices) sobre las rachas validas."""
     dP, X, POS = [], [], []
     for g in rachas(r["valida"]):
-        p = r["precio"][g]
-        d = np.diff(p)
-        q = r["q_neto"][g][1:]
-        if regresor == "Qnu":
-            q = q * r["nu"][g][1:]
+        d = np.diff(r["precio"][g])
+        q = regresor(r, g, reg)[1:]
         m = np.isfinite(d) & np.isfinite(q)
         dP.append(d[m]); X.append(q[m]); POS.append(g[1:][m])
     if not dP:
@@ -124,11 +156,7 @@ def offset(r, lam, regresor="Q"):
     """
     out = np.full(r["precio"].size, np.nan)
     for g in rachas(r["valida"]):
-        q = r["q_neto"][g]
-        if regresor == "Qnu":
-            q = q * r["nu"][g]
-        cum = np.concatenate([[0.0], np.cumsum(q[1:])])
-        out[g] = r["precio"][g] - lam * cum
+        out[g] = offset_en(r, g, lam, regresor)
     return out
 
 
@@ -158,12 +186,9 @@ def suelo_offset(r, regresor="Q", n=N_SORTEOS, semilla=31):
 # 2. Por dia
 # ===========================================================================
 
-def offset_en(r, g, lam, regresor="Q"):
+def offset_en(r, g, lam, reg="Q"):
     """`P_ref` de UNA racha, anclada en su inicio."""
-    q = r["q_neto"][g]
-    if regresor == "Qnu":
-        q = q * r["nu"][g]
-    cum = np.concatenate([[0.0], np.cumsum(q[1:])])
+    cum = np.concatenate([[0.0], np.cumsum(regresor(r, g, reg)[1:])])
     return r["precio"][g] - lam * cum
 
 
@@ -226,7 +251,8 @@ def nulo_recorrido(r, g, lam, regresor, zona, n=60, semilla=97):
     m = g.size
     if m < 400:
         return np.array([])
-    r2 = {k: r[k] for k in ("t", "precio", "q_neto", "nu", "valida")}
+    r2 = {k: r[k] for k in ("t", "precio", "q_neto", "eps_neto", "n_tx",
+                            "nu", "valida")}
     for _ in range(n):
         k = int(rng.integers(m // 20, m - m // 20))
         q = r["q_neto"].copy()
@@ -251,7 +277,7 @@ def etapa_offset(args) -> int:
     log("  %-12s %14s %10s %10s %12s %10s"
         % ("regresor", "lambda", "R2", "R2 nulo", "n", "interc."))
     ajustes = {}
-    for reg, nom in (("Q", "Q_neto"), ("Qnu", "Q_neto*nu")):
+    for reg, (nom, _desc) in REGRESORES.items():
         dP, X, _ = incrementos(r, reg)
         f = ols_sin_intercepto(X, dP)
         su = suelo_offset(r, reg, n=args.sorteos)
@@ -362,7 +388,8 @@ def etapa_offset(args) -> int:
     log("  %-16s %3s %14s %10s %10s" % ("fecha", "fin", "lambda", "R2", "n"))
     lams = []
     for d in np.unique(dia_c[r["valida"]]):
-        sel = {k: r[k] for k in ("t", "precio", "q_neto", "nu", "valida")}
+        sel = {k: r[k] for k in ("t", "precio", "q_neto", "eps_neto", "n_tx",
+                                 "nu", "valida")}
         sel["valida"] = r["valida"] & (dia_c == d)
         dPd, Xd, _ = incrementos(sel, mejor)
         if Xd.size < 100:
@@ -416,6 +443,7 @@ def _rejilla_sintetica(n, lam_true, ruido, semilla=3, deriva=0.0):
     dP = lam_true * q + rng.normal(0, ruido, n) + deriva
     P = 63000.0 + np.cumsum(dP)
     return {"t": np.arange(n) * 10.0, "precio": P, "q_neto": q,
+            "eps_neto": np.sign(q), "n_tx": np.full(n, 200.0),
             "nu": np.full(n, 20.0), "valida": np.ones(n, bool)}
 
 
@@ -538,6 +566,25 @@ def _autotest() -> int:
     chk(n_r == 2 and peor < 20.0,
         "10 un hueco no fabrica recorrido de offset (el fallo del 2026-09-05)",
         "%d rachas, peor recorrido de Pref dentro de un dia %.2f pb" % (n_r, peor))
+
+    # --- 11. Cada regresor es lo que dice ser -----------------------------
+    r11 = {"q_neto": np.array([3.0, -2.0]), "eps_neto": np.array([1.0, -2.0]),
+           "n_tx": np.array([6.0, 4.0]), "nu": np.array([0.6, 0.4]),
+           "precio": np.array([100.0, 100.0]), "t": np.array([0.0, 10.0]),
+           "valida": np.ones(2, bool)}
+    g11 = np.arange(2)
+    esperado = {"Q": [3.0, -2.0], "Qnu": [1.8, -0.8], "Qtick": [0.5, -0.5],
+                "Eps": [1.0, -2.0], "Epstick": [1.0 / 6, -0.5]}
+    malos = [k for k, v in esperado.items()
+             if not np.allclose(regresor(r11, g11, k), v)]
+    chk(not malos, "11 cada regresor calcula lo que su nombre dice",
+        "fallan: %s" % (malos or "ninguno"))
+    # y la MISMA definicion la usan el ajuste y el offset (estaba duplicada)
+    lam11 = 2.0
+    p11 = offset_en(r11, g11, lam11, "Qtick")
+    chk(abs(p11[1] - (100.0 - lam11 * (-0.5))) < 1e-12,
+        "11b `offset_en` usa el mismo regresor que `incrementos`",
+        "P_ref[1] = %.4f" % p11[1])
 
     log("")
     log("  %d / %d" % (n_ok, n_tot))

@@ -447,8 +447,8 @@ def _bins(t, t0, dt, nb):
 
 
 def _acc_vacio(nb):
-    c = ("q_neto", "q_tot", "n_tx", "p_sum", "prof_sum", "n_libro", "rv",
-         "mid_ult", "p_ult")
+    c = ("q_neto", "eps_neto", "q_tot", "n_tx", "p_sum", "prof_sum", "n_libro",
+         "rv", "mid_ult", "p_ult")
     a = {x: np.zeros(nb) for x in c}
     for th in THETAS:
         a["rec_log_%.2f" % th] = np.zeros(nb)
@@ -540,6 +540,13 @@ def acumular_trades(tt, pr, q, maker, t0, dt, nb, acc):
     if not ok.any():
         return
     acc["q_neto"] += np.bincount(k[ok], weights=(eps * q)[ok], minlength=nb)
+    # Desequilibrio por CONTEO de transacciones (compras menos ventas), que es
+    # otra cantidad que la de volumen: Jones, Kaul & Lipson (1994) y el propio
+    # `cont2014.py` de este proyecto midieron que el NUMERO de operaciones lleva
+    # informacion que su tamano no lleva -- alli el desequilibrio de
+    # transacciones salio significativo en el 91 % de submuestras contra el 31 %
+    # del articulo original.
+    acc["eps_neto"] += np.bincount(k[ok], weights=eps[ok], minlength=nb)
     acc["q_tot"] += np.bincount(k[ok], weights=q[ok], minlength=nb)
     acc["n_tx"] += np.bincount(k[ok], minlength=nb)
     acc["p_sum"] += np.bincount(k[ok], weights=pr[ok], minlength=nb)
@@ -555,7 +562,8 @@ def cerrar_rejilla(acc, t0, dt, nb):
         tau_agot = np.where(caudal > 0, prof / np.maximum(caudal, 1e-30), np.nan)
         tau_upd = np.where(n_lib > 0, dt / np.maximum(n_lib, 1), np.nan)
     r = {"t": t0 + (np.arange(nb) + 0.5) * dt, "dt": dt,
-         "q_neto": acc["q_neto"], "q_tot": q_tot, "n_tx": n_tx,
+         "q_neto": acc["q_neto"], "eps_neto": acc["eps_neto"],
+         "q_tot": q_tot, "n_tx": n_tx,
          "nu": n_tx / dt, "prof": prof, "n_libro": n_lib,
          "mid": np.where(acc["mid_ult"] > 0, acc["mid_ult"], np.nan),
          "precio_tx": np.where(acc["p_ult"] > 0, acc["p_ult"], np.nan),
@@ -1405,6 +1413,76 @@ def cobertura_por_dia(r, zona="ny"):
                float(np.median(nu)) if nu.size else np.nan, marca))
 
 
+def etapa_tau(args) -> int:
+    """Diagnostico de `tau_recup`: por que es tan rapida, y ESTRATIFICADO.
+
+    ⚠ ESTA ETAPA EXISTE PORQUE LA LECTURA AGRUPADA ERA ENGANOSA. La primera
+    corrida sobre dato real reporto `tau_recup` (MED 0.007 s) "pegada a
+    `tau_upd`" (MED 0.006 s) y concluyo que el estimador estaba en el suelo de
+    resolucion. Objecion del operador: eso se midio promediando los 12 dias, sin
+    separar los extremos de la U de volatilidad. Tenia razon, y al estratificar
+    la lectura CAMBIA -- ver la tabla que imprime esta etapa.
+    """
+    r = cargar_rejilla(args.fuente)
+    v = r["valida"] & np.isfinite(r["tau_recup_loc"]) & (r["tau_recup_loc"] > 0)
+    titulo("tau_recup -- DIAGNOSTICO ESTRATIFICADO")
+    if v.sum() < 500:
+        log("  casillas insuficientes."); return 2
+    ta, tu, tr = r["tau_agot"][v], r["tau_upd"][v], r["tau_recup_loc"][v]
+    raz = tr / tu
+    log("  casillas con tau_recup: %d de %d validas" % (v.sum(), r["valida"].sum()))
+    log("")
+    log("  --- LAS DOS MITADES DE LA PREGUNTA ---")
+    log("")
+    log("  (a) De los que VUELVEN: cuantas actualizaciones de libro tardan")
+    log("      tau_recup / tau_upd   (1.0 = una sola actualizacion)")
+    log("      p10 %.2f  p25 %.2f  MED %.2f  p75 %.2f  p90 %.2f  p99 %.2f"
+        % tuple(np.percentile(raz, [10, 25, 50, 75, 90, 99])))
+    log("      fraccion en 2 actualizaciones o menos: %.1f %%" % (100 * np.mean(raz <= 2)))
+    ne = float(r["rec_loc_n"][v].sum())
+    nc = float(np.ravel(r["rec_loc_cens"])[0])
+    log("")
+    log("  (b) De los que NO vuelven: censurados a %.0f s" % TAU_CENSURA_S)
+    log("      recuperados %.0f   censurados %.0f   -> **%.1f %% no vuelve**"
+        % (ne, nc, 100 * nc / max(ne + nc, 1)))
+    log("")
+    log("  --- ESTRATIFICADO POR LA U DE VOLATILIDAD (quintiles de rv_pb) ---")
+    rv = r["rv_pb"][v]
+    q = np.percentile(rv, [20, 40, 60, 80])
+    est = np.digitize(rv, q)
+    nom = ("muy baja", "baja", "media", "alta", "MUY ALTA")
+    log("  %-10s %8s %8s %8s %10s %10s %9s %9s"
+        % ("estrato", "n", "rv MED", "nu MED", "tau_upd", "tau_rec", "rec/upd",
+           "tau_agot"))
+    for k in range(5):
+        m = est == k
+        if m.sum() < 50:
+            continue
+        log("  %-10s %8d %8.3f %8.2f %10.4f %10.4f %9.2f %9.3f"
+            % (nom[k], m.sum(), np.median(rv[m]), np.median(r["nu"][v][m]),
+               np.median(tu[m]), np.median(tr[m]), np.median(raz[m]),
+               np.median(ta[m])))
+    log("")
+    log("  --- LA CONCORDANCIA, DENTRO de cada estrato ---")
+    log("  (agrupando los 12 dias salia rho = -0.575; ver si eso era el regimen)")
+    log("  %-10s %26s %26s" % ("estrato", "rho(tau_agot, tau_recup)",
+                               "rho(tau_agot, tau_upd)"))
+    for k in range(5):
+        m = est == k
+        if m.sum() < 50:
+            continue
+        log("  %-10s %26.4f %26.4f"
+            % (nom[k], corr(ta[m], tr[m]), corr(ta[m], tu[m])))
+    log("")
+    log("  [!] Si la concordancia dentro de estrato es mucho mas debil que")
+    log("      agrupada, la anticorrelacion agrupada era CONFUSION POR REGIMEN:")
+    log("      `tau_agot` baja con la actividad y `tau_recup` sube con ella, asi")
+    log("      que mezclar regimenes la fabrica. No son opuestas: son casi")
+    log("      ortogonales dentro de un regimen, o sea que miden cosas")
+    log("      DISTINTAS -- que no es lo mismo que medir cosas contradictorias.")
+    return 0
+
+
 def etapa_dia(args) -> int:
     r = cargar_rejilla(args.fuente)
     informe_tau0(r)
@@ -1673,6 +1751,12 @@ def _autotest() -> int:
         and abs(g2["q_tot"][1] - 28.0) < 1e-12,
         "9 flujo neto firmado por casilla",
         "casilla0 %+.1f  casilla1 %+.1f" % (g2["q_neto"][0], g2["q_neto"][1]))
+    # `eps_neto` cuenta TRANSACCIONES, no volumen: la casilla 1 tiene +1 -1 +1
+    chk(abs(g2["eps_neto"][0] - 0.0) < 1e-12
+        and abs(g2["eps_neto"][1] - 1.0) < 1e-12,
+        "9b eps_neto es desequilibrio de CONTEO, no de volumen",
+        "casilla0 %+.1f (1 compra, 1 venta)  casilla1 %+.1f (2 compras, 1 venta)"
+        % (g2["eps_neto"][0], g2["eps_neto"][1]))
 
     # --- 10. No se deriva a traves de un hueco ------------------------------
     nb3 = 60
@@ -1840,7 +1924,8 @@ def _autotest() -> int:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     ap.add_argument("--autotest", action="store_true")
-    ap.add_argument("--etapa", choices=("rutas", "serie", "dia", "relacion"))
+    ap.add_argument("--etapa", choices=("rutas", "serie", "tau", "dia",
+                                        "relacion"))
     _anadir_rutas(ap)
     ap.add_argument("--fuente", default="estacional", choices=("estacional", "v33"))
     ap.add_argument("--tau", default="tau_agot",
@@ -1862,6 +1947,8 @@ def main(argv=None) -> int:
         return etapa_rutas(a)
     if a.etapa == "serie":
         return etapa_serie(a)
+    if a.etapa == "tau":
+        return etapa_tau(a)
     if a.etapa == "dia":
         return etapa_dia(a)
     if a.etapa == "relacion":
