@@ -221,6 +221,13 @@ corregir el filtro 90 veces con la misma medición, y eso está corregido en ori
   como comprobación previa. `--autotest` → **27/27**. Diseño en
   `NOTA_METRICA_FLUJO_OMEGA.md`. ⚠ Su `φ` y su `Ω` **no son** los de la Sec. 1.4 del PDF ni
   el `φ′` retirado. **No se importa desde `Micelio.py`.**
+- `descarga_binance.py` — **línea nueva (2026-09-06)**: los volcados históricos públicos de
+  Binance (`data.binance.vision`, servidos también por S3) convertidos **al mismo formato
+  parquet que escribe `captura_estacional`**, así que `flujo_omega --datos=RUTA` los lee sin
+  cambios. `--listar` pagina el listado de S3 y saca la cobertura real por dataset; `--bajar`
+  descarga `bookTicker` + `trades` de un rango de días, verifica el CHECKSUM y **deduplica el
+  libro con la misma regla que la captura propia** (si no, `tau_upd` y el piso de parpadeo no
+  serían comparables entre fuentes). `--autotest` → **8/8**.
 - `offset_precio.py` — **línea nueva (2026-09-05)**: el offset `P_ref = P − λ·CumQ`, con `λ`
   ajustada sobre **incrementos** y **sin intercepto**, por racha continua y por día de NY, con
   nulo por rotación. Responde a «¿cuánto del nivel de precio lo carga el flujo?».
@@ -5628,6 +5635,55 @@ Y la exclusión de telemetría pasa de `telemetria/` a **`telemetria/*` con una 
 siquiera desciende al directorio y una negación posterior no tiene efecto. Así la rejilla
 agregada (casillas de 10 s de dato de mercado público, decenas de MB) se puede subir con un
 `git add` normal mientras los 2 GB de parquet y todos los CSV intermedios siguen fuera.
+
+### Sesión 2026-09-06 (b) — ¿Hace falta capturar? Los volcados históricos de Binance
+
+Pregunta del operador: «¿en vez de capturar datos algún broker no los tendrá para descargarlos
+directamente?». **Sí, y con un matiz que decide.** Todo lo de abajo está **verificado
+descargando**, no de memoria: se paginó el listado de S3 (la primera lectura, sin paginar, dio
+«trades hasta 2021-01-19» porque tomaba la última clave de la primera página de 1000) y se bajó
+un día de cada dataset para mirar sus columnas.
+
+**Cobertura medida el 2026-09-06** (futuros USD-M, BTCUSDT):
+
+| dataset | periodo | ficheros | estado |
+|---|---|---|---|
+| **`bookTicker`** diario | 2023-05-16 → **2024-03-30** | 320 | ⛔ **DISCONTINUADO** |
+| `bookTicker` mensual | 2023-05 → 2024-04 | 12 | ⛔ discontinuado |
+| `trades` diario | 2019-09-08 → **ayer** | 2 555 | ✅ vivo |
+| `aggTrades` diario | 2019-12-31 → **ayer** | 2 441 | ✅ vivo |
+| `bookDepth` diario | 2023-01-01 → **ayer** | 1 341 | ✅ vivo |
+
+**Las columnas son las que hacen falta, una a una:**
+
+```
+bookTicker: update_id, best_bid_price, best_bid_qty, best_ask_price,
+            best_ask_qty, transaction_time, event_time
+trades:     id, price, qty, quote_qty, time, is_buyer_maker
+```
+
+`best_bid_qty` / `best_ask_qty` son la profundidad de L1 — o sea que **`bookTicker` sirve entero
+para `tau_0`, `phi` y `Omega`**, y `is_buyer_maker` es el campo `m` del que sale `ε`. Se
+corresponden exactamente con lo que escribe `captura_estacional.BufferDia`.
+
+**Las tres consecuencias, en orden:**
+
+1. ⛔ **`bookTicker` se cortó en marzo de 2024, así que para el AHORA no hay sustituto: la
+   captura en vivo sigue siendo necesaria** si se quiere `τ₀` del presente.
+2. ✅ **Pero hay 320 días de 2023-05 a 2024-03 con L1 y cantidades**, que es **13× la captura
+   propia** y sirve entero para la métrica. Y a diferencia de la captura, no hay que esperar.
+3. ⚠ **`bookDepth` sigue vivo y es otra cosa**: profundidad agregada en bandas de ±1/2/3/4/5 %
+   cada ~10 s (`timestamp, percentage, depth, notional`), 34 561 filas y 527 KB por día. Es
+   **más profundo que L1 y menos fino**, y su cadencia de 10 s coincide con la casilla de
+   `flujo_omega`. Es el candidato natural para el `τ₀` que el proyecto lleva pidiendo desde que
+   H1 y `λ = 0.12` midieron que **la liquidez que gobierna no vive en L1** — y no exige capturar
+   nada.
+
+⚠ **Y el aviso del operador se respeta por construcción:** `φ` mezcla volumen, precio y libro
+**del mismo instante**, así que juntar precio de 2024 con flujo de 2026 sería un artefacto. Cada
+día descargado es autoconsistente (libro y transacciones del mismo día y símbolo) y
+`flujo_omega` ya corta en rachas continuas. El único modo de romperlo es apuntar `--datos` a un
+directorio que **mezcle** descarga y captura propia; no hacerlo.
 
 ## ⚠ CONVENCIÓN OBLIGATORIA — todo `R²` se cita como CONTEMPORÁNEO o PREDICTIVO
 
