@@ -212,6 +212,26 @@ corregir el filtro 90 veces con la misma medición, y eso está corregido en ori
   `delta`, `A`, `osc`, `B`, `decision`; abre el conjunto de prueba sólo en la última. `log()`
   transcribe a ASCII por sí sola, para que la consola cp1252 deje de ser una regla que recordar.
 - `migracion_v32.py` — **v3.2**: el estimador M0/M1/M2/M2-osc y sus 18 controles.
+- `flujo_omega.py` — **línea nueva (2026-09-05)**: la métrica `φ = Q_neto·P/τ₀` [USD/s] y su
+  derivada `Ω = dφ/dt` [USD/s²], con la regla de la cadena descompuesta en tres canales
+  (FLUJO / PRECIO / LIBRO) de forma **exacta**, `τ₀` medido del libro por tres estimadores, y
+  los `Ω` por día y por bloque, `τ₀` con **θ retroalimentada de `tau_agot`**, la **resiliencia**
+  `tau_agot/tau_recup`, y el reloj de **Nueva York** con corte hábil/finde. Rutas
+  configurables (`--datos` / `--salida`, la captura vive en la USB `D:`) y `--etapa=rutas`
+  como comprobación previa. `--autotest` → **27/27**. Diseño en
+  `NOTA_METRICA_FLUJO_OMEGA.md`. ⚠ Su `φ` y su `Ω` **no son** los de la Sec. 1.4 del PDF ni
+  el `φ′` retirado. **No se importa desde `Micelio.py`.**
+- `descarga_binance.py` — **línea nueva (2026-09-06)**: los volcados históricos públicos de
+  Binance (`data.binance.vision`, servidos también por S3) convertidos **al mismo formato
+  parquet que escribe `captura_estacional`**, así que `flujo_omega --datos=RUTA` los lee sin
+  cambios. `--listar` pagina el listado de S3 y saca la cobertura real por dataset; `--bajar`
+  descarga `bookTicker` + `trades` de un rango de días, verifica el CHECKSUM y **deduplica el
+  libro con la misma regla que la captura propia** (si no, `tau_upd` y el piso de parpadeo no
+  serían comparables entre fuentes). `--autotest` → **8/8**.
+- `offset_precio.py` — **línea nueva (2026-09-05)**: el offset `P_ref = P − λ·CumQ`, con `λ`
+  ajustada sobre **incrementos** y **sin intercepto**, por racha continua y por día de NY, con
+  nulo por rotación. Responde a «¿cuánto del nivel de precio lo carga el flujo?».
+  `--autotest` → **11/11**.
 - `oscilador.py` / `experimento_v30.py` — **v3.0**: primitivas `k`, `m`, `γ`, `Q` por AR(2) con
   hipótesis nula, verificación dimensional y descomposición del rebote bid-ask.
   `python experimento_v30.py`. **No se importa desde `Micelio.py`.**
@@ -5354,6 +5374,533 @@ que gobierna no está en L1.**
 formulado así, no como «λ ≠ 1». Y sigue siendo una decisión de captura, no de análisis.
 
 ---
+
+## Sesión 2026-09-05 — Línea nueva: la métrica `φ` del flujo y su derivada `Ω`
+
+Encargo del operador: medir la trayectoria del flujo de compra-venta con un enfoque distinto
+al de mirar variables del pasado. Primero la **métrica**. Módulo nuevo `flujo_omega.py`,
+**18/18** controles. `Micelio.py` sin cambios. Diseño completo en `NOTA_METRICA_FLUJO_OMEGA.md`.
+
+    phi(t)   = Q_neto(t) * P(t) / tau_0(t)      [USD/s]
+    Omega(t) = dphi/dt                          [USD/s^2]
+
+⚠ **Esto es una métrica, no una señal, y no reabre nada.** La línea de microestructura sigue
+cerrada (v4.2 §4: 78 de 79 celdas negativas; Adenda C: falta un factor 43×–577×). El bloque
+predictivo del módulo va marcado EXPLORATORIO con su nulo al lado.
+
+⚠ **COLISIÓN DE NOMBRES.** El proyecto ya tiene un `Ω` (Sec. 1.4 del PDF, `BTC/Ticks²`, que
+cuelga de `ω_m` y está refutado) y un `φ′` (ticks/BTC, retirado en `9b2267e`). **Los de este
+módulo no son ninguno de los dos**: otras unidades, otra definición. En actas se escriben
+`φ_F` y `Ω_F`. `flujo_omega.py` **no se importa desde `Micelio.py`**.
+
+### La "EDP" es la regla de la cadena, y se mide EXACTA
+
+Al ser las tres entradas variables, la derivada total se abre en tres canales aditivos:
+
+```
+Omega = (P/tau_0)*dQ/dt  +  (Q/tau_0)*dP/dt  -  (Q*P/tau_0^2)*dtau_0/dt
+        \____ FLUJO ____/    \___ PRECIO ___/    \______ LIBRO ________/
+```
+
+Con diferencias **centradas** y medias de los extremos, la regla del producto es una identidad
+algebraica: los tres canales suman `Ω` a **3e-16 relativo**, no hasta `O(dt²)`. Importa porque
+lo que se lee es el **reparto de `Var(Ω)`** entre canales, y un reparto que no suma al total no
+es un reparto. Se implementan las **dos** formas (`P/tau` y `tau/P`, que el operador enunció en
+ese orden) porque su única diferencia observable es el **signo del canal LIBRO**, que es justo
+lo que la descomposición mide.
+
+### ⚠ `τ₀` NO se toma del ajuste del núcleo, y por dos razones independientes
+
+El `tau0` de `migracion_v32.py` **está retractado** (v4.1 §3.4: "ajuste no identificado en el
+régimen `τ₀` en cota") **y** es un número por ajuste, cuando aquí hace falta una serie `τ₀(t)`.
+Se mide del libro con tres estimadores y se reporta la concordancia entre ellos, en vez de
+elegir uno a ciegas — la lección del §3.1 de la v4.1 aplicada por adelantado:
+
+| estimador | parámetro libre | papel |
+|---|---|---|
+| **`tau_agot`** = profundidad L1 / caudal negociado | **ninguno** | **PRIMARIO** |
+| `tau_recup(θ)` = semi-recuperación / `ln 2` | `θ`, **barrido** | literal |
+| `tau_upd` = 1 / tasa de actualización | ninguno | diagnóstico |
+
+⚠ **Semi-recuperación y no recuperación total, y el motivo decide el estimador.** La primera
+versión medía el tiempo hasta volver al nivel de profundidad **exacto** previo. Bajo relajación
+exponencial hacia un equilibrio eso **no se alcanza en tiempo finito**: el retorno al nivel
+exacto es un tiempo de primer paso que dispara el **ruido de cotización**, no la reposición.
+Medido sobre la captura sintética de verificación daba **0.8 s** con `θ = 0.30` contra una
+constante verdadera de 3.4–24 s. La semi-recuperación vale `τ·ln 2` exactamente bajo relajación
+exponencial, así que tiene verdad conocida: el control 7 recupera 5.0 s con **0.41 %** de error.
+
+⚠ **Limitación heredada:** `@bookTicker` da solo el **nivel 1**, así que este `τ₀` es el de la
+cola visible, no el del libro. **Tercer argumento independiente para ingerir `@depth`**, tras
+H1 (parcial +0.0425 contra techo de nulo +0.0418) y `λ = 0.12` de `cont2014.py`.
+
+### Dos cosas que hay que saber antes de leer la primera tabla
+
+1. **El canal PRECIO va a salir ~0, y es estructural.** `dP/P` por casilla de 10 s es del orden
+   de `1e-5`; `dQ/Q` es de orden 1 porque `Q_neto` cambia de signo continuamente. Entra en
+   `Var(Ω)` con peso ~`1e-7`. No es un fallo: a esta escala el precio es, comparado con el
+   flujo, una constante.
+2. ⚠ **El nulo por rotación se satura si no se quita el ciclo diurno.** `ν`, `τ₀`, `prof` y `rv`
+   llevan el mismo ciclo de 24 h (`ν` recorre 3.9× entre UTC 13-15 y UTC 4, medido el
+   2026-08-23). Dos series con el mismo período correlacionan a **+0.99 por tener el mismo
+   período**, y la rotación circular las vuelve a alinear: el suelo sale **también** en 0.99 y
+   la razón en 1.00. Verificado en la corrida sintética. Por eso `informe_relacion` da **dos
+   columnas**, CRUDO y RESIDUO (sin nivel del día ni forma intradía), y **sólo se lee RESIDUO**,
+   sólo si `razón ≥ 3`. Es la regla que quedó escrita el 2026-08-23 tras fallar tres nulos
+   propios por exactamente esto. El módulo **avisa** cuando hay menos de 4 bloques por parámetro
+   de ciclo: con `--bloque=3600` hacen falta ~5 días para empezar a leer esa columna.
+
+### Estado: verificado, SIN NINGUNA CIFRA DE MERCADO REAL
+
+El contenedor de esta sesión no tiene las capturas (`telemetria/` está en `.gitignore`). La ruta
+de ingesta completa —parquet → índice → rejilla → `Ω` → bloques → CSV— se verificó de punta a
+punta contra una **captura sintética en el formato real**, con ciclo diurno, memoria de flujo,
+profundidad que baja cuando sube `ν` y un hueco de 40 min. **Ninguna cifra de esa corrida es una
+medición**, y ninguna se cita como tal. Para tener números basta correr las tres etapas en la
+máquina de la captura:
+
+```
+python flujo_omega.py --autotest
+python flujo_omega.py --etapa=serie      # cachea la rejilla + concordancia de tau_0
+python flujo_omega.py --etapa=dia        # 24 Omega por dia + resumen por dia + CSV
+python flujo_omega.py --etapa=relacion   # CRUDO vs RESIDUO, con suelo de rotacion
+```
+
+### Dos defectos propios encontrados en la verificación
+
+1. **Los censurados se sumaban a todo el array de casillas.** `+= cens` sobre `nb` posiciones
+   daba a cada casilla el total: **41 869 440 censurados sobre 1.7 M de filas de libro**. Lo
+   delató que el número era imposible, no una aserción — por eso ahora hay una (control 13).
+2. **El reparto de varianza sumaba 1.00025.** `np.cov` normaliza con `ddof=1` y `np.var` con
+   `ddof=0`; mezclarlas da `1 + 1/(n−1)`, que con `n = 4000` son `2.5e-4`, invisible a ojo. Lo
+   cazó el control 5 porque pide la suma a `1e-10`. Argumento para poner la tolerancia donde el
+   estimador puede llegar, no donde uno se conforma.
+
+### Lo que falta, en orden
+
+1. **Correr las tres etapas sobre `captura_estacional` y `captura_v33`.** Es lo único que
+   convierte esto en mediciones.
+2. **Decidir `dt` y `--bloque` midiendo.** `dt = 10 s` viene de `cont2014.py` y `--bloque=3600`
+   de querer 24 `Ω` por día; ninguno está calibrado.
+3. **Comprobar si `τ₀` es una cantidad bien definida.** Si `tau_agot` y `tau_recup(θ)` no se
+   mueven juntas sobre dato real, `τ₀` no está bien definida y hay que decirlo **antes** de
+   construir nada encima. La tabla de concordancia de `--etapa=serie` es ese contraste.
+
+### Sesión 2026-09-05 (b) — Las tres correcciones del operador. 25/25 y 11/11
+
+Tres objeciones, las tres con razón, y ninguna cosmética.
+
+#### 1. El offset `P_ref` — `offset_precio.py`, 11/11
+
+⚠ **La fórmula literal no cierra dimensionalmente:** `P_ref = S − Q_neto` resta BTC a USD/BTC, y
+el paso `P/Q_neto = P_ref + P_var/Q_neto = 1 + P_ref/Q_neto` no es una identidad. Integrando la
+premisa del propio operador (`dP/dt` proporcional al flujo) sale la versión que **sí** cierra y
+que es la misma idea:
+
+```
+P(t) = P_ref(t) + lambda * CumQ(t)      ->      P_ref(t) = P(t) - lambda * CumQ(t)
+```
+
+con `λ` en USD/BTC por BTC (la `λ` de Kyle). Decisiones que la sostienen:
+
+- **`λ` se ajusta sobre INCREMENTOS**, nunca sobre niveles: `P` y `CumQ` son las dos integradas,
+  y regresar una sobre otra es el caso de manual de regresión espuria — que este proyecto ya se
+  encontró el 2026-08-08 (f).
+- **Sin intercepto**, y es una decisión: un intercepto en incrementos es una deriva por casilla
+  y se comería exactamente la tendencia que se quiere atribuir, dejando `P_ref` plano por
+  construcción. Es el modo de fallo que la v4.2 §4 tuvo que corregir por **cuatro** puertas.
+  Se reporta al lado cuánto habría valido, como diagnóstico. Control 6: una deriva pura **no**
+  se cuela en `λ`.
+- Los **dos regresores** que el operador propuso, `Q_neto` y `Q_neto·ν`, se ajustan y se compara
+  su `R²` (**CONTEMPORÁNEO**, por la convención del proyecto).
+- El estadístico que responde a la pregunta es `recorrido(P_ref)/recorrido(P)` entre días
+  **contra su nulo de rotación**: `P − λ·CumQ` es una diferencia de dos series integradas y
+  **siempre** tiene recorrido, también por azar.
+- Y se reporta la **estabilidad de `λ` día a día**: si el coeficiente no se sostiene, `P_ref` no
+  es un offset, es el residuo de un modelo que no aplica a todos los días por igual.
+
+⚠ **Fallo propio que la verificación destapó, y era del estadístico, no del código.** `P_ref` se
+ancla al inicio de cada racha (arrastrar `CumQ` por un hueco sumaría flujo no observado), así
+que un día que **contiene** una frontera de racha lleva dos anclas: marcaba **460 pb** de
+recorrido contra 3 pb de los demás, y el recorrido entre días acababa midiendo otra vez el
+precio (razón 1.03, indistinguible del nulo). **Todo el análisis pasa a ser por racha continua**,
+donde el ancla es una. Control 10.
+
+#### 2. `θ` retroalimentada de `tau_agot`, y la resiliencia
+
+La objeción: fijar `θ` en una fracción constante es vacío. Ahora `θ` es **lo que el flujo llegó
+a agotar**, `θ_k = volumen negociado / profundidad previa`, que es exactamente `dt_k/tau_agot_k`.
+Un evento es que la profundidad caiga **al menos lo que el flujo se llevó**. Con eso `tau_recup`
+y `tau_agot` dejan de ser dos medidas independientes y pasan a ser las dos mitades del mismo
+ciclo.
+
+**El piso tampoco es un parámetro libre:** es el **parpadeo medido**, la mediana de
+`|Δprof|/prof` sobre los intervalos **sin transacciones**, donde ningún cambio es atribuible al
+flujo. Sin él, `θ = 0` haría evento de cualquier bajada — que es lo que hundió la primera
+versión del estimador.
+
+Métrica de recuperación pedida: **`resiliencia = tau_agot / tau_recup_LOCAL`** (adimensional).
+`>> 1` el libro repone mucho más rápido de lo que el flujo lo consume; `<< 1` el flujo lo vacía
+más rápido de lo que repone. ⚠ La analogía con VPIN es de **propósito, no de resultado**: que
+esta razón tenga valor de aviso temprano **no está contrastado** y nada en el módulo lo afirma.
+
+#### 3. El reloj pasa a ser el de NUEVA YORK
+
+El pico del ciclo de 24 h (UTC 13-15) **es** la apertura de NY. Agrupar por hora UTC funciona
+por casualidad y se rompe dos veces al año en los cambios de horario de verano, además de
+mezclar el sábado y el domingo de NY con el lunes de UTC. Ahora el día, la hora y `finde` son
+de NY (`--zona=utc` vuelve atrás), lo que convierte el ciclo diurno de una **presunción sobre el
+dato** en una variable exógena con causa conocida. `--etapa=dia` saca el corte **hábil contra
+fin de semana** y el **perfil horario en hora de NY** de cada grupo, y `quitar_ciclo` usa celdas
+intradía **separadas** para hábil y finde — el 2026-08-23 se midió que el fin de semana tiene
+amplitud **y fase** propias, su pico llega ~7 h más tarde.
+
+La regla de horario de verano se implementa a mano y no con `zoneinfo`: en Windows `zoneinfo`
+necesita `tzdata` aparte y esto corre en la máquina de la captura. Verificada contra las dos
+fronteras exactas y contra `datetime.weekday()` en 400 días.
+
+⚠ **`EPOCH_DOW` estaba mal por uno**: 1970-01-01 fue **jueves**, que con 0 = lunes es 3, no 4.
+El caso de prueba lo cazó al instante (2026-03-08 es domingo y salía hábil). **Quinta vez** que
+este proyecto se juega algo en un signo o un offset, tras el 2π de la v1.3, el factor 125, la
+convención de `ε` del propagador y la fase de `atan2` en `estacionalidad.py`.
+
+#### Entorno y rutas (2026-09-06)
+
+- El proyecto corre sobre el **Python base de miniconda**,
+  `C:/Users/Usuario/miniconda3/python.exe`. Dependencias de esta línea: `numpy` y
+  `pyarrow` (`--autotest` corre sin `pyarrow`).
+- **Rutas reales de la captura** (corregidas por el operador el 2026-09-06):
+  `C:\Users\Usuario\Desktop\Canción Del Micelio\telemetria\estacional` es la
+  buena (local y al día); `D:\Micelio\telemetria\estacional` es la USB y está
+  **desactualizada** (sincronizada el 29-ago con 4.1 GB; hoy son 6.5). Lleva
+  espacios y acento: hay que entrecomillarla en `cmd`. Por eso `flujo_omega.py` y
+  `offset_precio.py` **no cablean ninguna ruta**: `--datos` / `MICELIO_DATOS`,
+  `--v33` / `MICELIO_V33`, `--salida` / `MICELIO_SALIDA`.
+- **Tamaños medidos**: 6 508 MB de parquet crudo, **474 KB** de rejilla
+  comprimida por día, **~13 MB** la rejilla completa. Los 13 MB caben en el repo;
+  los 6.5 GB no, y no hace falta.
+- ⚠ **La captura sigue escribiendo**, así que la rejilla es una **foto**: su
+  último día puede estar parcial y regenerarla no da lo mismo. El `.npz` lleva
+  dentro un **sello de procedencia** (`_procedencia`: instante UTC, ventana,
+  partes y un hash de los ficheros fuente) y `--etapa=serie` saca una **tabla de
+  cobertura por día** que marca `<- PARCIAL` por debajo del 90 %.
+- ⚠ **Los `.npy` mapeables de `mmap_estacional_*` NO sirven para esta métrica**:
+  sus columnas son `t, bid, ask, eps, precio, mid` — **sin `B` ni `A`**, o sea sin
+  profundidad de L1, que es de donde salen `tau_agot`, `theta`, `tau_recup` y la
+  resiliencia. Y están alineados a transacción, no al flujo de libro. Cubrirían
+  FLUJO y PRECIO, que es la mitad barata; la cara hay que leerla del parquet.
+- **Acotar la ventana en la primera corrida**: `--dias=1` (o `--desde`/`--hasta`)
+  da una prueba de humo de minutos sobre las ~223 M de filas de libro del
+  estacional, y produce una rejilla que las tres etapas ya leen.
+- **`--etapa=rutas`** es la comprobación previa: no toca dato y dice si está
+  `pyarrow`, si los directorios existen con la forma esperada (`trades_*`,
+  `libro_*`) y si la salida es escribible. Un `FileNotFoundError` a los veinte
+  minutos de escanear parquet no dice cuál de las tres rutas estaba mal.
+
+#### ⚠ Declarado para después: HISTERESIS sobre el offset
+
+Idea del operador, **anotada y no implementada**: transformar los datos con una
+histéresis para que cuadren con el modelo lineal y revertir la transformación.
+Tiene sentido físico —la ganancia flujo→precio no tiene por qué ser la misma
+subiendo que bajando, y un `λ` único la promedia—, pero lleva **tres guardas
+obligatorias**, porque «transformar el dato para que cuadre con el modelo» es la
+forma más fácil de fabricar un resultado: (a) la transformación se **congela
+antes** de mirar el `R²` o el offset; (b) la **inversa tiene que ser exacta**, o
+`P_ref` deja de ser un precio; (c) el **nulo pasa por la misma transformación**,
+o los grados de libertad de la histéresis aparecen como señal. Detalle en el §8
+de `NOTA_METRICA_FLUJO_OMEGA.md`.
+
+#### Sigue sin haber ninguna cifra de mercado real
+
+Quitar `telemetria/` del `.gitignore` **no trae los datos aquí**: esta sesión clona el repo
+desde GitHub y las capturas nunca se subieron (ni conviene: 2 GB de parquet contra el límite de
+100 MB por archivo de GitHub). Lo que sí cabe y basta para iterar es **la rejilla cacheada**,
+`telemetria/rejilla_omega_estacional.npz` — es el agregado de 10 s del que comen las tres
+etapas, no lleva credenciales y son decenas de MB.
+
+⚠ **Y hay un riesgo que hay que decir:** el `origin` es **público**, y quitar del `.gitignore`
+los patrones `*Credenciales*`, `*.key`, `*.pem`, `.env*` y `secrets.*` deja a un `git add -A` a
+un paso de commitear la clave de Mainnet — que sobrevive en el historial aunque se borre después.
+Esos patrones conviene restaurarlos aunque se dejen fuera los de datos.
+
+✅ **RESUELTO el 2026-09-06, a petición del operador.** Comprobado primero que **no se filtró
+nada**: cero coincidencias de credenciales en las tres ramas remotas y en el historial
+alcanzable — la edición del `.gitignore` nunca llegó a subirse y `master` conservaba el bloque
+entero. No hay clave que rotar. Los patrones quedan restaurados y **ampliados** (`*.p12`,
+`*.pfx`, `*.apikey`, `credentials*`, `*.env`, `*secret*.json|txt`), y verificados uno a uno con
+`git check-ignore`.
+
+Y la exclusión de telemetría pasa de `telemetria/` a **`telemetria/*` con una negación**:
+`!telemetria/rejilla_omega_*.npz`. El matiz es de git, no cosmético — con `telemetria/` git ni
+siquiera desciende al directorio y una negación posterior no tiene efecto. Así la rejilla
+agregada (casillas de 10 s de dato de mercado público, decenas de MB) se puede subir con un
+`git add` normal mientras los 2 GB de parquet y todos los CSV intermedios siguen fuera.
+
+### Sesión 2026-09-06 (b) — ¿Hace falta capturar? Los volcados históricos de Binance
+
+Pregunta del operador: «¿en vez de capturar datos algún broker no los tendrá para descargarlos
+directamente?». **Sí, y con un matiz que decide.** Todo lo de abajo está **verificado
+descargando**, no de memoria: se paginó el listado de S3 (la primera lectura, sin paginar, dio
+«trades hasta 2021-01-19» porque tomaba la última clave de la primera página de 1000) y se bajó
+un día de cada dataset para mirar sus columnas.
+
+**Cobertura medida el 2026-09-06** (futuros USD-M, BTCUSDT):
+
+| dataset | periodo | ficheros | estado |
+|---|---|---|---|
+| **`bookTicker`** diario | 2023-05-16 → **2024-03-30** | 320 | ⛔ **DISCONTINUADO** |
+| `bookTicker` mensual | 2023-05 → 2024-04 | 12 | ⛔ discontinuado |
+| `trades` diario | 2019-09-08 → **ayer** | 2 555 | ✅ vivo |
+| `aggTrades` diario | 2019-12-31 → **ayer** | 2 441 | ✅ vivo |
+| `bookDepth` diario | 2023-01-01 → **ayer** | 1 341 | ✅ vivo |
+
+**Las columnas son las que hacen falta, una a una:**
+
+```
+bookTicker: update_id, best_bid_price, best_bid_qty, best_ask_price,
+            best_ask_qty, transaction_time, event_time
+trades:     id, price, qty, quote_qty, time, is_buyer_maker
+```
+
+`best_bid_qty` / `best_ask_qty` son la profundidad de L1 — o sea que **`bookTicker` sirve entero
+para `tau_0`, `phi` y `Omega`**, y `is_buyer_maker` es el campo `m` del que sale `ε`. Se
+corresponden exactamente con lo que escribe `captura_estacional.BufferDia`.
+
+**Las tres consecuencias, en orden:**
+
+1. ⛔ **`bookTicker` se cortó en marzo de 2024, así que para el AHORA no hay sustituto: la
+   captura en vivo sigue siendo necesaria** si se quiere `τ₀` del presente.
+2. ✅ **Pero hay 320 días de 2023-05 a 2024-03 con L1 y cantidades**, que es **13× la captura
+   propia** y sirve entero para la métrica. Y a diferencia de la captura, no hay que esperar.
+3. ⚠ **`bookDepth` sigue vivo y es otra cosa**: profundidad agregada en bandas de ±1/2/3/4/5 %
+   cada ~10 s (`timestamp, percentage, depth, notional`), 34 561 filas y 527 KB por día. Es
+   **más profundo que L1 y menos fino**, y su cadencia de 10 s coincide con la casilla de
+   `flujo_omega`. Es el candidato natural para el `τ₀` que el proyecto lleva pidiendo desde que
+   H1 y `λ = 0.12` midieron que **la liquidez que gobierna no vive en L1** — y no exige capturar
+   nada.
+
+⚠ **Y el aviso del operador se respeta por construcción:** `φ` mezcla volumen, precio y libro
+**del mismo instante**, así que juntar precio de 2024 con flujo de 2026 sería un artefacto. Cada
+día descargado es autoconsistente (libro y transacciones del mismo día y símbolo) y
+`flujo_omega` ya corta en rachas continuas. El único modo de romperlo es apuntar `--datos` a un
+directorio que **mezcle** descarga y captura propia; no hacerlo.
+
+### ⚠⚠ PRIMERA MEDICIÓN REAL DE `φ` Y `Ω` (2026-09-06) — y `τ₀` NO ESTÁ BIEN DEFINIDA
+
+Sobre **12 días descargados** (2024-03-19 .. 03-30, 13 días de NY con 2 parciales), **192 M de
+filas de libro** deduplicadas y **58.4 M de transacciones**. Acta completa en
+`telemetria/acta_omega_2024_03.txt`; rejilla en `telemetria/rejilla_omega_estacional.npz`
+(10.7 MB), hash de procedencia **`fca42b728091b334`**.
+
+⚠ **Régimen distinto al de la captura propia, y hay que decirlo antes de comparar nada:**
+`ν` recorre **11 a 80 tx/s**, precio 60 850 – 71 801 (**18 %**), y la **profundidad L1 mediana es
+2.68 BTC** contra los 22–31 BTC que H1 midió en 2026. El libro de marzo de 2024 es **un orden de
+magnitud más fino**.
+
+#### El contraste que se declaró decisivo: FALLA
+
+La nota decía, antes de medir: *«si `tau_agot` y `tau_recup(θ)` no se mueven juntas sobre dato
+real, `τ₀` no está bien definida y hay que decirlo antes de construir nada encima».*
+
+| par | ρ crudo | ρ residuo | razón contra su nulo |
+|---|---|---|---|
+| **`tau_agot` vs `tau_recup_LOCAL`** | **−0.706** | **−0.575** | **4.15 — se lee** |
+| `tau_agot` vs `tau_upd` | +0.819 | — | — |
+
+**Los dos estimadores del mismo concepto se mueven en direcciones OPUESTAS**, y la razón contra
+el nulo (4.15) dice que eso no es ruido. Y hay una segunda razón, peor:
+
+```
+tau_agot          p10 0.245   MED 1.503   p90 8.238   s
+tau_upd           p10 0.003   MED 0.006   p90 0.016   s
+tau_recup_LOCAL   p10 0.003   MED 0.007   p90 0.025   s     <- pegado a tau_upd
+tau_recup(0.30..0.90) fijo      MED 0.006 - 0.007    s     <- lo mismo
+```
+
+**`tau_recup` está en el suelo de resolución del instrumento.** A 167 actualizaciones de libro
+por segundo, la semi-recuperación ocurre en una o dos actualizaciones, así que el estimador no
+mide reposición: mide el intervalo entre snapshots. Todos los `θ`, medido y fijos, colapsan al
+mismo número.
+
+**Consecuencia sobre la métrica: el denominador de `φ` depende de qué estimador se elija, y los
+dos disponibles no coinciden.** Con `tau_agot` (el primario, sin parámetro libre) la métrica es
+computable y lo que sigue está medido con él; pero `τ₀` **no es una cantidad del mercado**, es
+una cantidad del estimador — el mismo desenlace que la v4.1 §3.1 tuvo con `γ`.
+
+#### El reparto de `Var(Ω)`, y el canal PRECIO confirmado en cero
+
+```
+residuo de la regla de la cadena : 1.186e-16 relativo    (identidad exacta, como se prometio)
+phi   [USD/s]   p10 -2.4849e+06   MED -7.5772e+02   p90 +2.4346e+06
+Omega [USD/s^2] p10 -2.8177e+05   MED +3.3328e+00   p90 +2.7396e+05
+
+reparto de Var(Omega)   FLUJO 0.5663    PRECIO 0.0000    LIBRO 0.4339
+```
+
+**El canal PRECIO sale 0.0000 exacto** (p10 y p90 en ±0.0002), que es lo que el §5.1 de la nota
+anticipó como estructural. Y **el canal LIBRO se lleva el 43 %**: casi la mitad de la varianza de
+`Ω` viene de cómo se mueve `τ₀` — justo la cantidad que el apartado anterior deja sin definir.
+Las dos cosas juntas son el resultado importante de esta corrida.
+
+#### Lo que sí replica y es legible (razón ≥ 3 sobre el RESIDUO)
+
+| par | ρ residuo | razón |
+|---|---|---|
+| `tau0` vs `nu` | −0.973 | 5.95 |
+| `omega_rms` vs `rv_pb` | +0.821 | 5.74 |
+| `omega_rms` vs `q_tot` | +0.774 | 5.13 |
+| `omega_rms` vs `nu` | +0.648 | 4.39 |
+| `theta_medida` vs `nu` | +0.608 | 3.28 |
+
+⚠ **`resiliencia` vs `ν` = −0.938 (razón 6.38) es MECÁNICO, no un hallazgo.** Con
+`tau_recup` pegado a la resolución, `resiliencia = tau_agot/tau_recup ≈ tau_agot/cte`, y
+`tau_agot = prof/caudal ∝ 1/ν`. Esa correlación es casi una identidad y así hay que citarla.
+Lo mismo vale para `resiliencia` contra `q_tot` y `rv_pb`.
+
+#### Por día y por reloj de Nueva York
+
+El régimen cambia **21×** en `τ₀` (0.45 s el 19-mar a 9.37 s el 30-mar) y **7×** en `ν`.
+Hábil contra fin de semana: `omega_rms` **2.60×**, `τ₀` 1.44 s contra 2.88 s.
+
+✅ **El pico horario de `omega_rms` cae en NY 9–11 h**, la apertura americana. Anclar el reloj a
+Nueva York queda **validado por el dato**, no supuesto.
+
+#### El offset `P_ref`: `λ` es estable, pero el flujo NO sostiene el nivel
+
+```
+regresor      lambda          R2 CONTEMPORANEO    R2 nulo      n
+Q_neto        3.578941e-01    0.33583            0.00004      103 679
+Q_neto*nu     2.194453e-04    0.07732            0.00002      103 679
+
+lambda entre dias: min 3.03e-01  MED 3.57e-01  max 4.48e-01   recorrido 1.48x
+Var(dP_ref)/Var(dP) = 0.66415        (o sea el flujo absorbe el 33.6 % de la varianza)
+
+recorrido ENTRE dias:  precio 1055.9 pb   offset 1793.8 pb   razon 1.6988
+NULO (Q rotado):       offset MED 2802.0 pb        medido/nulo = 0.64
+```
+
+Tres lecturas, y la tercera responde a la pregunta del operador:
+
+1. **`Q_neto` gana claramente a `Q_neto·ν`** (0.336 contra 0.077). La segunda propuesta pierde.
+2. **`λ` es notablemente estable**: recorre 1.48× entre 13 días. En un proyecto donde `β`, `H_p`
+   y la antipersistencia no replicaron, ésta es de las cantidades más firmes que se han medido.
+   Y el `R²` contemporáneo de 0.336 está **8 400×** sobre su suelo de rotación.
+3. ⛔ **Pero el offset recorre 1.70× lo que recorre el precio.** La respuesta a «¿el nivel del
+   activo se mantiene por el volumen?» es **NO**: a 10 s el flujo explica un tercio de la
+   varianza, pero al integrar 12 días `P − λ·CumQ` se aleja **más** de lo que se mueve `P`. Queda
+   por debajo de su nulo (0.64), o sea que el flujo reduce algo la deriva frente a una rotación
+   al azar, pero no lo bastante para sostener el nivel.
+
+#### El bloque predictivo, y por qué NO reabre nada
+
+`q_neto` contra el retorno del bloque siguiente da ρ = +0.374 con razón 3.47 sobre su nulo.
+⚠ **Eso NO es una señal recuperada.** Son 288 bloques de 1 h; la Adenda C midió lo mismo con
+**422 527 orígenes** y el veredicto fue que falta un factor **43× a 577×** para pagar el peaje, y
+el §4 de la v4.2 dio 78 de 79 celdas negativas con coste real. Se reporta porque el módulo lo
+imprime y porque callarlo sería peor, no porque cambie nada.
+
+### ⚠⚠ CORRECCIONES DEL 2026-09-06 (c): `τ_recup` estratificada y el desequilibrio de CONTEO
+
+Dos objeciones del operador, las dos con razón, y la primera **retracta parcialmente el
+veredicto que se publicó horas antes**.
+
+#### 1. `τ_recup`: la lectura agrupada era confusión por régimen
+
+El acta anterior decía que `τ_recup` (MED 0.007 s) estaba «pegada a `τ_upd`» (MED 0.006 s), o
+sea en el suelo de resolución, y que los dos estimadores de `τ₀` «se mueven en direcciones
+opuestas» (ρ = −0.575). **Eso se midió promediando los 12 días.** Estratificado por quintiles de
+volatilidad realizada (`--etapa=tau`, nueva):
+
+| estrato | n | `rv` MED | `ν` MED | `τ_upd` | `τ_rec` | **`rec/upd`** | `τ_agot` |
+|---|---|---|---|---|---|---|---|
+| muy baja | 17 945 | 0.525 | 16.1 | 0.0109 | 0.0043 | **0.45** | 4.629 |
+| baja | 17 945 | 0.961 | 26.3 | 0.0072 | 0.0057 | 0.84 | 2.318 |
+| media | 17 944 | 1.460 | 38.7 | 0.0056 | 0.0066 | 1.27 | 1.288 |
+| alta | 17 945 | 2.162 | 59.7 | 0.0043 | 0.0076 | 1.90 | 0.672 |
+| **MUY ALTA** | 17 945 | 3.830 | 122.3 | 0.0029 | 0.0091 | **3.25** | 0.224 |
+
+**Y la concordancia DENTRO de cada estrato:**
+
+| estrato | ρ(`τ_agot`, `τ_recup`) | ρ(`τ_agot`, `τ_upd`) |
+|---|---|---|
+| muy baja | −0.067 | +0.419 |
+| baja | −0.093 | +0.330 |
+| media | −0.116 | +0.335 |
+| alta | −0.135 | +0.361 |
+| MUY ALTA | −0.136 | +0.557 |
+
+⚠ **El −0.575 agrupado era CONFUSIÓN POR RÉGIMEN.** `τ_agot` baja con la actividad (4.63 → 0.22 s,
+factor 21) y `τ_recup` sube con ella (0.0043 → 0.0091 s), así que mezclar regímenes fabrica la
+anticorrelación. Dentro de estrato es **−0.07 a −0.14**. La lectura correcta: **no son opuestas,
+son casi ortogonales dentro de un régimen** — miden cosas *distintas*, que no es lo mismo que
+medir cosas *contradictorias*. «`τ₀` no está bien definida» sigue en pie sólo en el sentido de
+que los dos estimadores **no son intercambiables**.
+
+**Y «está en el suelo de resolución» también estaba mal.** En volatilidad baja `rec/upd` = **0.45**,
+o sea *menos de una actualización*: tras una depleción las actualizaciones llegan **en ráfaga**,
+mucho más juntas que el intervalo medio, así que `τ_upd` nunca fue el suelo correcto. En el
+extremo alto `τ_rec` sube a 9 ms y `rec/upd` a **3.25** — el libro tarda más en medio-rellenarse
+en tiempo absoluto **y 7× más en su propio reloj**, aunque esté actualizando 4× más rápido. Eso
+es señal, y crece con la volatilidad.
+
+**Las dos mitades de la pregunta, respondidas:** el **82 %** vuelve en una o dos actualizaciones
+(el 61.9 % en ≤ 2), y el **18 % no vuelve** dentro de los 60 s de censura. La profundidad de L1
+no se relaja hacia su nivel: o la reponen de inmediato, o no la reponen.
+
+#### 2. El desequilibrio de CONTEO gana, y por mucho
+
+El operador pidió «una métrica de volumen neto sobre tick». Se añadió, y con ella el
+desequilibrio por **conteo** de transacciones, que entra con motivo propio: Jones, Kaul & Lipson
+(1994) y el `cont2014.py` de este proyecto ya midieron que **el número de operaciones lleva
+información que su tamaño no lleva**.
+
+| regresor | qué es | **`R²` CONTEMPORÁNEO** | `R²` nulo |
+|---|---|---|---|
+| `Q_neto` | volumen neto [BTC] | 0.336 | 0.00004 |
+| `Q_neto·ν` | volumen por tasa | 0.077 | 0.00002 |
+| **`Q_neto/n_tx`** | **volumen neto por transacción** | **0.269** | 0.00003 |
+| **`eps_neto`** | **desequilibrio de CONTEO [tx]** | **0.569** | 0.00004 |
+| `eps_neto/n_tx` | fracción neta de compras | 0.403 | 0.00004 |
+
+**Normalizar el VOLUMEN por el número de ticks lo empeora** (0.269 < 0.336). Lo que gana es
+**sustituir el volumen por el conteo**: 0.569, un 70 % más que el volumen crudo. Es
+Jones-Kaul-Lipson replicado sobre este instrumento, y es coherente con el 75 % contemporáneo que
+`cont2014.py` midió para OFI-L1. **No es un descubrimiento**; lo que vale es que la tubería lo
+recupera.
+
+#### 3. ⚠ Y el resultado contraintuitivo: mejor `R²` a 10 s ⇒ PEOR offset
+
+| regresor | `R²` a 10 s | recorrido offset/precio | medido/nulo |
+|---|---|---|---|
+| `Q_neto` | 0.336 | **1.70** | 0.64 |
+| `eps_neto` | **0.569** | **3.23** | 0.79 |
+
+El regresor que explica el **57 %** de la varianza a 10 s produce un offset que deriva **3.2×**
+lo que se mueve el precio — *peor* que el que explica el 34 %. `Var(dP_ref)/Var(dP)` baja de
+0.664 a 0.431, o sea que a alta frecuencia absorbe mucho más; y aun así, integrado a 12 días,
+`P − λ·CumX` se aleja más.
+
+**La lectura, y es una regla nueva del proyecto: explicar la varianza INSTANTÁNEA y reconstruir
+el NIVEL integrado son cosas independientes.** Un `R²` alto a 10 s no dice nada sobre si el flujo
+acumulado sigue al precio. Es un tercer eje junto a la convención CONTEMPORÁNEO / PREDICTIVO.
+
+La respuesta a «¿el nivel del activo se mantiene por el volumen?» sigue siendo **NO**, y con el
+regresor bueno es **más** no.
+
+#### 4. ⚠ Defecto propio: el nulo del recorrido era DEGENERADO
+
+`nulo_recorrido` rotaba `r["q_neto"]` sin mirar qué regresor se había elegido. En cuanto el
+ganador pasó a ser `eps_neto`, rotar `q_neto` no tocaba nada de lo que entraba en el cálculo: el
+«nulo» salía **idéntico** a la medición — 3407.1 pb contra 3407.1 pb — y una razón medido/nulo de
+1.0000 se habría leído como «indistinguible del azar» cuando era el mismo número dos veces.
+
+**Sexta vez en este proyecto que un nulo falla por no destruir aquello que se está midiendo.**
+Corregido: se rota la serie explicativa ya construida, sea cual sea el regresor. Control 12: el
+nulo tiene que MOVERSE con los cinco. Con eso, `nulo MED = 4286.3 pb` contra 3407.1 medido.
+
+Y de paso, la definición de cada regresor estaba **duplicada** entre `incrementos` y `offset` —
+una discrepancia entre las dos daría un `P_ref` sin correspondencia con la `λ` ajustada, sin
+lanzar ninguna excepción. Unificada en `regresor()`, controles 11 y 11b.
 
 ## ⚠ CONVENCIÓN OBLIGATORIA — todo `R²` se cita como CONTEMPORÁNEO o PREDICTIVO
 
