@@ -256,6 +256,12 @@ tener en el disco: son decenas de MB, de ella comen todas las etapas y el
 offset, y es lo unico que hace falta subir al repositorio para poder iterar
 sobre dato real sin mover los 2 GB de parquet.
 
+**Acota la ventana en la primera corrida.** El estacional son ~223 M de filas
+de libro y la primera pasada sobre una USB no es rapida: `--dias=1` da una
+prueba de humo que termina en minutos y produce una rejilla que las tres etapas
+ya pueden leer. Si esa sale bien, se relanza sin `--dias` para la captura
+entera. Tambien hay `--desde` / `--hasta` (`YYYY-MM-DD`, UTC).
+
 **Antes de la primera corrida, `--etapa=rutas`**, que no toca dato y dice que ve
 el modulo y desde donde: si `pyarrow` esta, si los directorios existen y tienen
 la forma esperada (`trades_*` y `libro_*`), y si la salida es escribible. Existe

@@ -5567,6 +5567,9 @@ convención de `ε` del propagador y la fase de `atan2` en `estacionalidad.py`.
   (captura_estacional), `--v33` / `MICELIO_V33`, `--salida` / `MICELIO_SALIDA`.
   La salida se separa de los datos a propósito — la rejilla cacheada conviene en
   disco, no en el medio extraíble.
+- **Acotar la ventana en la primera corrida**: `--dias=1` (o `--desde`/`--hasta`)
+  da una prueba de humo de minutos sobre las ~223 M de filas de libro del
+  estacional, y produce una rejilla que las tres etapas ya leen.
 - **`--etapa=rutas`** es la comprobación previa: no toca dato y dice si está
   `pyarrow`, si los directorios existen con la forma esperada (`trades_*`,
   `libro_*`) y si la salida es escribible. Un `FileNotFoundError` a los veinte
@@ -5597,6 +5600,19 @@ etapas, no lleva credenciales y son decenas de MB.
 los patrones `*Credenciales*`, `*.key`, `*.pem`, `.env*` y `secrets.*` deja a un `git add -A` a
 un paso de commitear la clave de Mainnet — que sobrevive en el historial aunque se borre después.
 Esos patrones conviene restaurarlos aunque se dejen fuera los de datos.
+
+✅ **RESUELTO el 2026-09-06, a petición del operador.** Comprobado primero que **no se filtró
+nada**: cero coincidencias de credenciales en las tres ramas remotas y en el historial
+alcanzable — la edición del `.gitignore` nunca llegó a subirse y `master` conservaba el bloque
+entero. No hay clave que rotar. Los patrones quedan restaurados y **ampliados** (`*.p12`,
+`*.pfx`, `*.apikey`, `credentials*`, `*.env`, `*secret*.json|txt`), y verificados uno a uno con
+`git check-ignore`.
+
+Y la exclusión de telemetría pasa de `telemetria/` a **`telemetria/*` con una negación**:
+`!telemetria/rejilla_omega_*.npz`. El matiz es de git, no cosmético — con `telemetria/` git ni
+siquiera desciende al directorio y una negación posterior no tiene efecto. Así la rejilla
+agregada (casillas de 10 s de dato de mercado público, decenas de MB) se puede subir con un
+`git add` normal mientras los 2 GB de parquet y todos los CSV intermedios siguen fuera.
 
 ## ⚠ CONVENCIÓN OBLIGATORIA — todo `R²` se cita como CONTEMPORÁNEO o PREDICTIVO
 

@@ -1267,10 +1267,42 @@ def etapa_rutas(args) -> int:
     return 0 if ok else 2
 
 
+def _ventana(args):
+    """(t_ini, t_fin) desde --desde / --hasta / --dias. None = sin limite."""
+    import datetime as _dt
+
+    def _p(x):
+        if not x:
+            return None
+        for f in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+            try:
+                return _dt.datetime.strptime(x, f).replace(
+                    tzinfo=_dt.timezone.utc).timestamp()
+            except ValueError:
+                continue
+        raise SystemExit("fecha no reconocida: %r (usa YYYY-MM-DD)" % x)
+
+    t0, t1 = _p(getattr(args, "desde", None)), _p(getattr(args, "hasta", None))
+    if getattr(args, "dias", 0):
+        a0, b0 = _rango_estacional()
+        if t0 is None:
+            t0 = a0
+        t1 = min(b0 if t1 is None else t1, t0 + args.dias * 86400.0)
+    return t0, t1
+
+
 def etapa_serie(args) -> int:
     titulo("REJILLA -- una casilla de %.0f s sobre `%s`" % (args.dt, args.fuente))
     if args.fuente == "estacional":
-        r = rejilla_estacional(args.dt)
+        # ⚠ ACOTAR LA VENTANA ES LO PRIMERO QUE CONVIENE HACER en una captura
+        # nueva. El estacional son ~223 M de filas de libro, y la primera pasada
+        # sobre una USB no es rapida: `--dias=1` da una prueba de humo que
+        # termina en minutos y produce una rejilla legible por las tres etapas.
+        # Si esa sale bien, se relanza sin `--dias` para la captura entera.
+        t0, t1 = _ventana(args)
+        if t0 is not None or t1 is not None:
+            log("  ventana acotada por bandera")
+        r = rejilla_estacional(args.dt, t_ini=t0, t_fin=t1)
     elif args.fuente == "v33":
         r = rejilla_v33(args.dt)
     else:
@@ -1732,6 +1764,10 @@ def main(argv=None) -> int:
     ap.add_argument("--forma", default="P/tau", choices=("P/tau", "tau/P"))
     ap.add_argument("--dt", type=float, default=DT_REJILLA)
     ap.add_argument("--bloque", type=float, default=BLOQUE_S)
+    ap.add_argument("--dias", type=float, default=0.0,
+                    help="procesar solo los primeros N dias (prueba de humo)")
+    ap.add_argument("--desde", help="inicio de ventana, YYYY-MM-DD[THH:MM:SS] UTC")
+    ap.add_argument("--hasta", help="fin de ventana, YYYY-MM-DD[THH:MM:SS] UTC")
     ap.add_argument("--zona", default="ny", choices=("ny", "utc"),
                     help="reloj para dia/hora/finde. NY por omision (Sec.4.bis)")
     a = ap.parse_args(argv)

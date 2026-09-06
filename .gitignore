@@ -4,7 +4,16 @@ __pycache__/
 
 # Volcados de telemetría del Hilo Rápido (Sec. 8.6.2).
 # Cada bloque son 10 000 registros; se regeneran en cada corrida.
-telemetria/
+#
+# Se ignora el CONTENIDO de telemetria/ y no el directorio en sí (`telemetria/*`
+# y no `telemetria/`): con la segunda forma git ni siquiera desciende, y una
+# negación posterior no tendría efecto. Así se puede dejar pasar la rejilla
+# agregada de `flujo_omega.py`, que son casillas de 10 s de dato de mercado
+# público (ni credenciales ni dato personal), pesa decenas de MB y es de la que
+# comen todas las etapas y el offset — o sea, lo único que hace falta subir para
+# poder iterar sin mover los 2 GB de parquet.
+telemetria/*
+!telemetria/rejilla_omega_*.npz
 *.parquet
 *.h5
 
@@ -19,15 +28,31 @@ env/
 c_generated_code/
 
 # Credenciales y secretos.
-# NUNCA commitear: el repositorio es publico y un secreto commiteado sobrevive
-# en el historial de git aunque se borre el archivo despues.
-*Credenciales*
-*credenciales*
+#
+# NUNCA commitear: el repositorio es PUBLICO y un secreto commiteado sobrevive
+# en el historial de git aunque se borre el archivo despues -- borrarlo no basta,
+# habria que rotar la clave.
+#
+# ⚠ Estos patrones se quitaron temporalmente el 2026-09-05 para poder mover
+# datos, y se restauran aqui a peticion del operador (2026-09-06). Comprobado
+# ese mismo dia que NO llego nada sensible al remoto: cero coincidencias en las
+# tres ramas y en el historial alcanzable. El riesgo real no era el que ya
+# estuviera subido, era un `git add -A` posterior con los patrones fuera.
+*Credencial*
+*credencial*
+credentials*
+Credentials*
 *.key
 *.pem
+*.p12
+*.pfx
+*.apikey
 .env
 .env.*
+*.env
 secrets.*
+*secret*.json
+*secret*.txt
 
 # Volcados sueltos de telemetria fuera de telemetria/ (Sec. 8.6.2)
 telem_*.npy
