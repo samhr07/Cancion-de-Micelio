@@ -216,8 +216,9 @@ corregir el filtro 90 veces con la misma medición, y eso está corregido en ori
   derivada `Ω = dφ/dt` [USD/s²], con la regla de la cadena descompuesta en tres canales
   (FLUJO / PRECIO / LIBRO) de forma **exacta**, `τ₀` medido del libro por tres estimadores, y
   los `Ω` por día y por bloque, `τ₀` con **θ retroalimentada de `tau_agot`**, la **resiliencia**
-  `tau_agot/tau_recup`, y el reloj de **Nueva York** con corte hábil/finde. `--autotest` →
-  **25/25**. Diseño en
+  `tau_agot/tau_recup`, y el reloj de **Nueva York** con corte hábil/finde. Rutas
+  configurables (`--datos` / `--salida`, la captura vive en la USB `D:`) y `--etapa=rutas`
+  como comprobación previa. `--autotest` → **27/27**. Diseño en
   `NOTA_METRICA_FLUJO_OMEGA.md`. ⚠ Su `φ` y su `Ω` **no son** los de la Sec. 1.4 del PDF ni
   el `φ′` retirado. **No se importa desde `Micelio.py`.**
 - `offset_precio.py` — **línea nueva (2026-09-05)**: el offset `P_ref = P − λ·CumQ`, con `λ`
@@ -5555,6 +5556,34 @@ fronteras exactas y contra `datetime.weekday()` en 400 días.
 El caso de prueba lo cazó al instante (2026-03-08 es domingo y salía hábil). **Quinta vez** que
 este proyecto se juega algo en un signo o un offset, tras el 2π de la v1.3, el factor 125, la
 convención de `ε` del propagador y la fase de `atan2` en `estacionalidad.py`.
+
+#### Entorno y rutas (2026-09-06)
+
+- El proyecto corre sobre el **Python base de miniconda**,
+  `C:/Users/Usuario/miniconda3/python.exe`. Dependencias de esta línea: `numpy` y
+  `pyarrow` (`--autotest` corre sin `pyarrow`).
+- **Las capturas viven en la USB `D:` (Maxwell)**, así que `flujo_omega.py` y
+  `offset_precio.py` ya **no cablean ninguna ruta**: `--datos` / `MICELIO_DATOS`
+  (captura_estacional), `--v33` / `MICELIO_V33`, `--salida` / `MICELIO_SALIDA`.
+  La salida se separa de los datos a propósito — la rejilla cacheada conviene en
+  disco, no en el medio extraíble.
+- **`--etapa=rutas`** es la comprobación previa: no toca dato y dice si está
+  `pyarrow`, si los directorios existen con la forma esperada (`trades_*`,
+  `libro_*`) y si la salida es escribible. Un `FileNotFoundError` a los veinte
+  minutos de escanear parquet no dice cuál de las tres rutas estaba mal.
+
+#### ⚠ Declarado para después: HISTERESIS sobre el offset
+
+Idea del operador, **anotada y no implementada**: transformar los datos con una
+histéresis para que cuadren con el modelo lineal y revertir la transformación.
+Tiene sentido físico —la ganancia flujo→precio no tiene por qué ser la misma
+subiendo que bajando, y un `λ` único la promedia—, pero lleva **tres guardas
+obligatorias**, porque «transformar el dato para que cuadre con el modelo» es la
+forma más fácil de fabricar un resultado: (a) la transformación se **congela
+antes** de mirar el `R²` o el offset; (b) la **inversa tiene que ser exacta**, o
+`P_ref` deja de ser un precio; (c) el **nulo pasa por la misma transformación**,
+o los grados de libertad de la histéresis aparecen como señal. Detalle en el §8
+de `NOTA_METRICA_FLUJO_OMEGA.md`.
 
 #### Sigue sin haber ninguna cifra de mercado real
 

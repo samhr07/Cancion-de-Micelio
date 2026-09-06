@@ -73,7 +73,56 @@ log, titulo = H.log, H.titulo
 
 DT_REJILLA = 10.0          # [s] casilla de phi. La misma que usa `cont2014.py`.
 BLOQUE_S = 3600.0          # [s] bloque de reporte -> 24 Omega por dia
-CACHE = "telemetria/rejilla_omega_%s.npz"
+# ---------------------------------------------------------------------------
+# RUTAS. No estan cableadas: las capturas del operador viven en una USB (D:) y
+# el modulo tiene que poder leerlas desde donde esten sin editar codigo.
+#
+#   --datos=RUTA   directorio de `captura_estacional`   (env MICELIO_DATOS)
+#   --v33=RUTA     directorio de `captura_v33`          (env MICELIO_V33)
+#   --salida=RUTA  donde se escriben npz / csv / json   (env MICELIO_SALIDA)
+#
+# En Windows valen tanto "D:/Maxwell/telemetria/estacional" como
+# "D:\Maxwell\telemetria\estacional"; `os.path.join` no toca lo que ya es
+# absoluto. La SALIDA se separa de los DATOS a proposito: escribir la rejilla
+# cacheada en la USB la ata al medio extraible, y esa rejilla es justo lo que
+# conviene tener en el disco -- son decenas de MB y de ella comen todas las
+# etapas.
+# ---------------------------------------------------------------------------
+
+DIR_SALIDA = os.environ.get("MICELIO_SALIDA", "telemetria")
+DIR_V33 = os.environ.get("MICELIO_V33", "telemetria/captura_v33")
+
+
+def ruta_cache(fuente):
+    return os.path.join(DIR_SALIDA, "rejilla_omega_%s.npz" % fuente)
+
+
+def ruta_salida(nombre):
+    return os.path.join(DIR_SALIDA, nombre)
+
+
+def configurar_rutas(args):
+    """Aplica --datos / --v33 / --salida. Devuelve lo que quedo resuelto."""
+    global DIR_SALIDA, DIR_V33
+    import curvas_estacional as C
+    if getattr(args, "datos", None):
+        C.DIR = args.datos
+    elif os.environ.get("MICELIO_DATOS"):
+        C.DIR = os.environ["MICELIO_DATOS"]
+    if getattr(args, "v33", None):
+        DIR_V33 = args.v33
+    if getattr(args, "salida", None):
+        DIR_SALIDA = args.salida
+    os.makedirs(DIR_SALIDA, exist_ok=True)
+    return {"datos": C.DIR, "v33": DIR_V33, "salida": DIR_SALIDA}
+
+
+def _anadir_rutas(ap):
+    ap.add_argument("--datos", help="directorio de captura_estacional"
+                                    " (env MICELIO_DATOS)")
+    ap.add_argument("--v33", help="directorio de captura_v33 (env MICELIO_V33)")
+    ap.add_argument("--salida", help="donde escribir npz/csv/json"
+                                     " (env MICELIO_SALIDA)")
 THETAS = (0.30, 0.50, 0.70, 0.90)   # barrido del umbral de agotamiento
 TAU_CENSURA_S = 60.0       # por encima de esto el evento de recuperacion se censura
 N_SORTEOS_NULO = 200
@@ -679,7 +728,7 @@ def rejilla_estacional(dt=DT_REJILLA, t_ini=None, t_fin=None):
 def rejilla_v33(dt=DT_REJILLA):
     """`captura_v33` -- 16.4 h en un solo tramo continuo. Cabe entera en memoria."""
     from captura_larga import cargar_larga
-    d = cargar_larga("telemetria/captura_v33")
+    d = cargar_larga(DIR_V33)
     bt, bb, bB = d["bk_t"], d["bk_b"], d["bk_B"]
     ba, bA = d["bk_a"], d["bk_A"]
     m = (bb > 0) & (ba > 0) & (bB > 0) & (bA > 0)
@@ -700,10 +749,13 @@ def rejilla_v33(dt=DT_REJILLA):
 
 
 def cargar_rejilla(fuente):
-    r = CACHE % fuente
+    r = ruta_cache(fuente)
     if not os.path.exists(r):
-        raise SystemExit("falta %s -- corre primero --etapa=serie --fuente=%s"
-                         % (r, fuente))
+        raise SystemExit(
+            "falta %s\n"
+            "  corre primero:  --etapa=serie --fuente=%s\n"
+            "  y si las capturas no estan en ./telemetria, pasa --datos=RUTA"
+            % (r, fuente))
     d = np.load(r)
     return {k: (float(d[k]) if d[k].ndim == 0 else d[k]) for k in d.files}
 
@@ -1158,6 +1210,63 @@ def informe_relacion(filas, s, forma):
 # 7. Etapas
 # ===========================================================================
 
+def etapa_rutas(args) -> int:
+    """Comprobacion previa: que ve el modulo y desde donde. Sin tocar dato.
+
+    Existe porque la primera corrida en la maquina del operador es sobre una
+    USB y una ruta de Windows, y un `FileNotFoundError` a los veinte minutos de
+    escanear parquet no dice cual de las tres rutas estaba mal.
+    """
+    import curvas_estacional as C
+    titulo("RUTAS -- que ve el modulo y desde donde")
+    log("  datos  (captura_estacional) : %s" % os.path.abspath(C.DIR))
+    log("  datos  (captura_v33)        : %s" % os.path.abspath(DIR_V33))
+    log("  salida (npz / csv / json)   : %s" % os.path.abspath(DIR_SALIDA))
+    log("")
+    ok = True
+    try:
+        import pyarrow  # noqa: F401
+        import pyarrow.parquet  # noqa: F401
+        log("  [OK ] pyarrow disponible")
+    except Exception as e:
+        ok = False
+        log("  [FALLA] pyarrow NO disponible: %s" % e)
+        log("          instalalo en el Python que corre esto:")
+        log("          C:/Users/Usuario/miniconda3/python.exe -m pip install pyarrow")
+    for nom, d in (("captura_estacional", C.DIR), ("captura_v33", DIR_V33)):
+        if not os.path.isdir(d):
+            log("  [ -- ] %s: no existe %s" % (nom, d))
+            continue
+        try:
+            sub = sorted(os.listdir(d))
+        except Exception as e:
+            ok = False
+            log("  [FALLA] %s: no se puede listar %s (%s)" % (nom, d, e))
+            continue
+        tr = [x for x in sub if x.startswith("trades_")]
+        lb = [x for x in sub if x.startswith("libro_")]
+        log("  [OK ] %s: %d entradas (%d trades_, %d libro_)"
+            % (nom, len(sub), len(tr), len(lb)))
+        if nom == "captura_estacional" and (not tr or not lb):
+            log("         ⚠ se esperan subdirectorios `trades_*` y `libro_*` con")
+            log("           parquet dentro. Si tu captura tiene otra forma, apunta")
+            log("           --datos al directorio que los CONTIENE.")
+    try:
+        p = os.path.join(DIR_SALIDA, "._prueba_escritura")
+        with io.open(p, "w", encoding="ascii") as fh:
+            fh.write("ok")
+        os.remove(p)
+        log("  [OK ] la salida es escribible")
+    except Exception as e:
+        ok = False
+        log("  [FALLA] no se puede escribir en la salida: %s" % e)
+    log("")
+    log("  rejilla cacheada esperada: %s  (%s)"
+        % (ruta_cache("estacional"),
+           "EXISTE" if os.path.exists(ruta_cache("estacional")) else "no existe aun"))
+    return 0 if ok else 2
+
+
 def etapa_serie(args) -> int:
     titulo("REJILLA -- una casilla de %.0f s sobre `%s`" % (args.dt, args.fuente))
     if args.fuente == "estacional":
@@ -1166,10 +1275,9 @@ def etapa_serie(args) -> int:
         r = rejilla_v33(args.dt)
     else:
         raise SystemExit("fuente desconocida: %r" % (args.fuente,))
-    os.makedirs("telemetria", exist_ok=True)
-    np.savez_compressed(CACHE % args.fuente, **r)
+    np.savez_compressed(ruta_cache(args.fuente), **r)
     log("")
-    log("  guardado en %s" % (CACHE % args.fuente))
+    log("  guardado en %s" % ruta_cache(args.fuente))
     v = r["valida"]
     log("  casillas %d, validas %d (%.1f %%), transacciones %d"
         % (v.size, v.sum(), 100 * v.mean(), int(r["n_tx"].sum())))
@@ -1279,7 +1387,7 @@ def etapa_dia(args) -> int:
                 % (h, "%.4e" % v1 if np.isfinite(v1) else "-",
                    "%.4e" % v2 if np.isfinite(v2) else "-"))
 
-    csv = "telemetria/omega_bloques_%s.csv" % args.fuente
+    csv = ruta_salida("omega_bloques_%s.csv" % args.fuente)
     cab = ["fecha", "dia", "finde", "bloque", "n", "t0", "omega_neta", "omega_rms",
            "omega_med", "phi_med", "phi_sd", "q_neto", "q_tot", "precio", "tau0",
            "tau_agot", "tau_recup_loc", "theta_medida", "resiliencia", "prof", "nu",
@@ -1294,7 +1402,7 @@ def etapa_dia(args) -> int:
     json.dump({"fuente": args.fuente, "tau": args.tau, "forma": args.forma,
                "dt": args.dt, "bloque": args.bloque, "n_bloques": len(filas),
                "residuo_rel": res, "reparto": {c: rep[c] for c in CANALES}},
-              io.open("telemetria/omega_resumen_%s.json" % args.fuente, "w",
+              io.open(ruta_salida("omega_resumen_%s.json" % args.fuente), "w",
                       encoding="ascii"))
     return 0
 
@@ -1586,6 +1694,28 @@ def _autotest() -> int:
         "20 la resiliencia se publica y su numerador sigue siendo tau_agot",
         "tau_agot %.6f s" % np.nanmedian(g7["tau_agot"][g7["valida"]]))
 
+    # --- 21. Las rutas se pueden reapuntar sin editar codigo ---------------
+    import curvas_estacional as _C
+    guarda = (_C.DIR, DIR_V33, DIR_SALIDA)
+    try:
+        class _A:
+            datos = os.path.join("D:", "Maxwell", "telemetria", "estacional")
+            v33 = None
+            salida = os.path.join("/tmp", "salida_prueba_micelio")
+        r21 = configurar_rutas(_A())
+        chk(r21["datos"] == _A.datos
+            and ruta_cache("estacional").startswith(_A.salida)
+            and ruta_salida("x.csv") == os.path.join(_A.salida, "x.csv"),
+            "21 --datos y --salida reapuntan lectura y escritura",
+            "datos %s   cache %s" % (r21["datos"], ruta_cache("estacional")))
+    finally:
+        _C.DIR, DIR_V33_, DIR_SALIDA_ = guarda
+        globals()["DIR_V33"], globals()["DIR_SALIDA"] = DIR_V33_, DIR_SALIDA_
+        import shutil
+        shutil.rmtree("/tmp/salida_prueba_micelio", ignore_errors=True)
+    chk(_C.DIR == guarda[0] and DIR_SALIDA == guarda[2],
+        "21b el control restaura las rutas y no contamina las demas etapas")
+
     log("")
     log("  %d / %d" % (n_ok, n_tot))
     return 0 if n_ok == n_tot else 1
@@ -1594,7 +1724,8 @@ def _autotest() -> int:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     ap.add_argument("--autotest", action="store_true")
-    ap.add_argument("--etapa", choices=("serie", "dia", "relacion"))
+    ap.add_argument("--etapa", choices=("rutas", "serie", "dia", "relacion"))
+    _anadir_rutas(ap)
     ap.add_argument("--fuente", default="estacional", choices=("estacional", "v33"))
     ap.add_argument("--tau", default="tau_agot",
                     help="tau_agot | tau_upd | tau_recup_0.50 ...")
@@ -1606,6 +1737,9 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     if a.autotest:
         return _autotest()
+    configurar_rutas(a)
+    if a.etapa == "rutas":
+        return etapa_rutas(a)
     if a.etapa == "serie":
         return etapa_serie(a)
     if a.etapa == "dia":

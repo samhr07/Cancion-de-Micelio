@@ -383,14 +383,14 @@ def etapa_offset(args) -> int:
         log("      `lambda` global no es un offset: es el residuo de un modelo que")
         log("      no aplica a todos los dias por igual.")
 
-    os.makedirs("telemetria", exist_ok=True)
     json.dump({"fuente": args.fuente, "regresor": mejor, "lambda": lam,
                "R2_contemporaneo": f["R2"], "R2_nulo_q95": su.get("R2_q95"),
                "var_ratio": vr,
                "rachas": [{k: v for k, v in x.items() if k != "filas"}
                           for x in resumen]},
-              io.open("telemetria/offset_%s.json" % args.fuente, "w", encoding="ascii"))
-    csv = "telemetria/offset_dias_%s.csv" % args.fuente
+              io.open(F.ruta_salida("offset_%s.json" % args.fuente), "w",
+                      encoding="ascii"))
+    csv = F.ruta_salida("offset_dias_%s.csv" % args.fuente)
     cab = ["racha", "fecha", "dia", "finde", "n", "P_med", "P_rango_pb", "Pref_med",
            "Pref_rango_pb", "q_neto", "sd_dP", "sd_dPref"]
     with io.open(csv, "w", encoding="ascii") as fh:
@@ -550,12 +550,14 @@ def main(argv=None) -> int:
     ap.add_argument("--etapa", choices=("offset",))
     ap.add_argument("--fuente", default="estacional", choices=("estacional", "v33"))
     ap.add_argument("--zona", default="ny", choices=("ny", "utc"))
+    F._anadir_rutas(ap)
     ap.add_argument("--sorteos", type=int, default=N_SORTEOS)
     ap.add_argument("--min-dias", dest="min_dias", type=float, default=1.5,
                     help="racha continua minima para comparar dias entre si")
     a = ap.parse_args(argv)
     if a.autotest:
         return _autotest()
+    F.configurar_rutas(a)
     if a.etapa == "offset":
         return etapa_offset(a)
     ap.print_help()

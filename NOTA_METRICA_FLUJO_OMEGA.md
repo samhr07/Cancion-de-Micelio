@@ -239,6 +239,40 @@ Salidas: `telemetria/rejilla_omega_<fuente>.npz`,
 `telemetria/omega_bloques_<fuente>.csv` (una fila por bloque, 20 columnas) y
 `telemetria/omega_resumen_<fuente>.json`.
 
+### Rutas: las capturas no tienen que estar en `./telemetria`
+
+Las capturas del operador viven en una USB (`D:`), asi que ninguna ruta esta
+cableada:
+
+| bandera | variable de entorno | que es |
+|---|---|---|
+| `--datos=RUTA` | `MICELIO_DATOS` | directorio de `captura_estacional` |
+| `--v33=RUTA` | `MICELIO_V33` | directorio de `captura_v33` |
+| `--salida=RUTA` | `MICELIO_SALIDA` | donde se escriben npz / csv / json |
+
+**La salida se separa de los datos a proposito.** Escribir la rejilla cacheada
+en la USB la ata al medio extraible, y esa rejilla es justo lo que conviene
+tener en el disco: son decenas de MB, de ella comen todas las etapas y el
+offset, y es lo unico que hace falta subir al repositorio para poder iterar
+sobre dato real sin mover los 2 GB de parquet.
+
+**Antes de la primera corrida, `--etapa=rutas`**, que no toca dato y dice que ve
+el modulo y desde donde: si `pyarrow` esta, si los directorios existen y tienen
+la forma esperada (`trades_*` y `libro_*`), y si la salida es escribible. Existe
+porque un `FileNotFoundError` a los veinte minutos de escanear parquet no dice
+cual de las tres rutas estaba mal.
+
+### Entorno
+
+El proyecto corre sobre el **Python base de miniconda**,
+`C:/Users/Usuario/miniconda3/python.exe`. Dependencias: `numpy` y `pyarrow`
+(esta ultima solo para leer las capturas -- `--autotest` corre sin ella).
+
+```
+C:/Users/Usuario/miniconda3/python.exe flujo_omega.py --etapa=rutas ^
+    --datos=D:/telemetria/estacional --salida=telemetria
+```
+
 ### Memoria
 
 Una sola pasada por parte, sobre una rejilla global. Con `dt = 10 s`, tres
@@ -403,3 +437,36 @@ captura, en ese orden.
    antes de construir nada encima. La tabla de concordancia de `--etapa=serie`
    es exactamente ese contraste.
 4. **`@depth`**, si se quiere un `tau_0` del libro y no de la cola visible (§3).
+
+---
+
+## 8. Declarado para despues: HISTERESIS sobre el offset
+
+Idea del operador (2026-09-06), anotada aqui para que exista cuando toque y **no
+implementada**: transformar los datos con una histeresis para que cuadren con el
+modelo lineal, y revertir la transformacion despues.
+
+Tiene sentido fisico. La relacion flujo-precio no tiene por que tener la misma
+ganancia subiendo que bajando, ni la misma justo despues de un choque que en
+reposo: eso es exactamente una histeresis (dependencia del camino, no solo del
+estado), y un `lambda` unico la promedia y la pierde. Es la generalizacion
+natural de `P = P_ref + lambda*CumQ`.
+
+⚠ **Tres guardas, y no son opcionales**, porque «transformar el dato para que
+cuadre con el modelo» es la forma mas facil que hay de fabricar un resultado:
+
+1. **La transformacion se congela ANTES de mirar el `R2` o el offset.** Si se
+   elige la histeresis que mejora la razon de recorridos, la razon deja de ser
+   una medicion. Este proyecto ya tiene el mecanismo montado -- preregistro con
+   hash antes de tocar dato, como `PREREGISTRO_3_2.md` y la rejilla de
+   `superficie.py`.
+2. **La inversa tiene que ser EXACTA.** Si «revertir la transformacion» no
+   devuelve exactamente las unidades originales, `P_ref` deja de ser un precio y
+   la tabla por dia no significa nada. Control obligatorio: `inv(f(x)) == x` a
+   precision de maquina, como el control 5 de `offset_precio.py` hace con
+   `P_ref + lambda*CumQ == P`.
+3. **El NULO pasa por la MISMA transformacion.** Una histeresis tiene grados de
+   libertad propios, y si el nulo se calcula sobre el dato crudo mientras la
+   medicion se calcula sobre el transformado, esos grados de libertad aparecen
+   como senal. Es la leccion que este proyecto ha repetido cinco veces: el nulo
+   tiene que reproducir la propiedad del dato que ensancha al estadistico.
