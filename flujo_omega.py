@@ -814,6 +814,120 @@ def cargar_rejilla(fuente):
 
 
 # ===========================================================================
+# 3.bis  ¿COLAPSA LA COLA? El campo de deriva de la profundidad
+# ===========================================================================
+#
+# LA PREGUNTA DEL OPERADOR (2026-09-06): "¿hay un punto en el cual la cola se
+# llena tanto que colapsa? ¿hay curvas de saturacion y desaturacion?"
+#
+# La forma medible de preguntarlo es tratar la profundidad como un proceso
+# estocastico y estimar su DERIVA, sin suponer forma funcional:
+#
+#     dD = mu(D) dt + sigma(D) dW
+#
+#     mu(x)    = E[ D(t+h) - D(t) | D(t)/D_ref = x ]      <- fuerza restauradora
+#     sigma(x) = sd de lo mismo                            <- ruido
+#
+# Como se lee:
+#   - `mu` cruza cero con PENDIENTE NEGATIVA  -> equilibrio estable en ese x.
+#     La cola tiene un nivel al que vuelve.
+#   - `mu` casi plana en cero                 -> paseo aleatorio, no hay nivel.
+#   - `mu` se hunde por encima de cierto x    -> COLAPSO: por encima de ese
+#     punto la cola se vacia mas rapido cuanto mas llena esta. Eso es lo que el
+#     operador pregunta, y es una firma distinta de la reversion normal.
+#   - `mu(x<1)` contra `mu(x>1)` -> las curvas de SATURACION y DESATURACION, y
+#     su asimetria es histeresis de cola.
+#
+# ⚠ `D` SE NORMALIZA POR SU REFERENCIA DIARIA. La profundidad mediana recorre
+# un orden de magnitud entre regimenes (2.68 BTC en 2024-03 contra 22-31 BTC que
+# H1 midio en 2026), asi que un umbral en BTC no significa lo mismo dos dias
+# seguidos. `x = D / mediana(D del dia)` es adimensional y comparable.
+#
+# ⚠ Y TODO VA ESTRATIFICADO POR LA U DE VOLATILIDAD, por la leccion del
+# 2026-09-06: agrupar los dias fabrico una anticorrelacion que dentro de estrato
+# no existia.
+
+NB_X = 48                 # celdas de x = D/D_ref (ancho 0.125)
+X_MAX = 6.0
+COLAPSO = 0.5             # "colapso" = la profundidad cae a la mitad o menos
+
+
+def _celdas_x(x):
+    k = np.floor(np.asarray(x, float) / X_MAX * NB_X).astype(np.int64)
+    return np.clip(k, 0, NB_X - 1)
+
+
+def campo_deriva(t, prof, d_ref, estrato, horizonte=1.0, nb_s=5):
+    """Acumula `mu`, `sigma` y la tasa de colapso por celda de `x` y estrato.
+
+    Devuelve dicts de arrays [nb_s, NB_X]. `estrato` es un entero por fila.
+    """
+    t = np.asarray(t, float); prof = np.asarray(prof, float)
+    n = t.size
+    out = {c: np.zeros((nb_s, NB_X)) for c in ("n", "sd", "sd2", "col", "sx")}
+    if n < 10 or not np.isfinite(d_ref) or d_ref <= 0:
+        return out
+    j = np.searchsorted(t, t + horizonte, side="left")
+    v = j < n
+    if not v.any():
+        return out
+    i = np.flatnonzero(v)
+    j = j[v]
+    d0, d1 = prof[i], prof[j]
+    x = d0 / d_ref
+    k = _celdas_x(x)
+    e = np.clip(np.asarray(estrato, np.int64)[i], 0, nb_s - 1)
+    lin = e * NB_X + k
+    delta = (d1 - d0) / d_ref                 # adimensional, como x
+    m = np.isfinite(delta)
+    lin, delta, x = lin[m], delta[m], x[m]
+    tam = nb_s * NB_X
+    out["n"] += np.bincount(lin, minlength=tam).reshape(nb_s, NB_X)
+    out["sd"] += np.bincount(lin, weights=delta, minlength=tam).reshape(nb_s, NB_X)
+    out["sd2"] += np.bincount(lin, weights=delta ** 2,
+                              minlength=tam).reshape(nb_s, NB_X)
+    out["sx"] += np.bincount(lin, weights=x, minlength=tam).reshape(nb_s, NB_X)
+    col = (d1 <= COLAPSO * d0)[m]
+    out["col"] += np.bincount(lin, weights=col.astype(float),
+                              minlength=tam).reshape(nb_s, NB_X)
+    return out
+
+
+def resumen_deriva(acc):
+    """De los acumuladores a `mu`, `sigma`, tasa de colapso y `x` medio."""
+    n = acc["n"]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        mu = np.where(n > 0, acc["sd"] / np.maximum(n, 1), np.nan)
+        m2 = np.where(n > 0, acc["sd2"] / np.maximum(n, 1), np.nan)
+        sig = np.sqrt(np.maximum(m2 - mu ** 2, 0.0))
+        col = np.where(n > 0, acc["col"] / np.maximum(n, 1), np.nan)
+        xm = np.where(n > 0, acc["sx"] / np.maximum(n, 1), np.nan)
+    return {"mu": mu, "sigma": sig, "colapso": col, "x": xm, "n": n}
+
+
+def equilibrio(x, mu, n, n_min=200):
+    """Primer cruce de `mu` por cero con pendiente NEGATIVA -> equilibrio estable.
+
+    Devuelve (x*, pendiente) o (nan, nan). Interpola linealmente entre celdas.
+    """
+    ok = (n >= n_min) & np.isfinite(mu) & np.isfinite(x)
+    if ok.sum() < 4:
+        return np.nan, np.nan
+    xs, ms = x[ok], mu[ok]
+    o = np.argsort(xs)
+    xs, ms = xs[o], ms[o]
+    cr = np.flatnonzero((ms[:-1] > 0) & (ms[1:] <= 0))
+    if cr.size == 0:
+        return np.nan, np.nan
+    i = int(cr[0])
+    dx = xs[i + 1] - xs[i]
+    if dx <= 0:
+        return float(xs[i]), np.nan
+    p = (ms[i + 1] - ms[i]) / dx
+    return float(xs[i] - ms[i] / p), float(p)
+
+
+# ===========================================================================
 # 4.bis  Calendario de NUEVA YORK -- el ciclo diurno que importa es el humano
 # ===========================================================================
 #
@@ -1413,6 +1527,145 @@ def cobertura_por_dia(r, zona="ny"):
                float(np.median(nu)) if nu.size else np.nan, marca))
 
 
+def etapa_saturacion(args) -> int:
+    """¿Colapsa la cola? Campo de deriva de la profundidad, sobre el libro real."""
+    import curvas_estacional as C
+    import pyarrow.parquet as pq
+    r = cargar_rejilla(args.fuente)
+    titulo("SATURACION Y COLAPSO DE LA COLA -- campo de deriva de la profundidad")
+    log("  horizonte h = %.2f s   colapso = la profundidad cae al %.0f %% o menos"
+        % (args.horizonte, 100 * COLAPSO))
+    v = r["valida"]
+    rv = r["rv_pb"]
+    qs = np.percentile(rv[v & np.isfinite(rv)], [20, 40, 60, 80])
+    t0g, dtg = float(r["t"][0] - r["dt"] / 2.0), float(r["dt"])
+    nbg = r["t"].size
+    est_bin = np.where(v, np.digitize(rv, qs), -1).astype(np.int64)
+    cal = calendario_ny(r["t"])
+    hora_bin = np.where(v, np.floor(cal["hora"]).astype(np.int64), -1)
+    # referencia diaria de profundidad, del propio grid
+    dia = cal["dia"]
+    ref = {}
+    for d in np.unique(dia[v]):
+        p = r["prof"][v & (dia == d)]
+        p = p[np.isfinite(p) & (p > 0)]
+        if p.size:
+            ref[int(d)] = float(np.median(p))
+    log("  referencia diaria de profundidad: %d dias, mediana global %.3f BTC"
+        % (len(ref), np.median(list(ref.values())) if ref else np.nan))
+
+    accE = {c: np.zeros((5, NB_X)) for c in ("n", "sd", "sd2", "col", "sx")}
+    accH = {c: np.zeros((24, NB_X)) for c in ("n", "sd", "sd2", "col", "sx")}
+    partes = sorted(C._indice("libro_"), key=lambda z: z[1])
+    log("  partes de libro: %d" % len(partes))
+    for i, (f, _, _, _) in enumerate(partes):
+        try:
+            tb = pq.read_table(f, columns=["t", "b", "B", "a", "A"])
+        except Exception:
+            continue
+        bt = tb["t"].to_numpy().astype(float)
+        prof = (0.5 * (tb["B"].to_numpy().astype(float)
+                       + tb["A"].to_numpy().astype(float)))
+        del tb
+        m = np.isfinite(bt) & np.isfinite(prof) & (prof > 0)
+        bt, prof = bt[m], prof[m]
+        if bt.size < 100:
+            continue
+        o = np.argsort(bt, kind="stable")
+        bt, prof = bt[o], prof[o]
+        k = np.floor((bt - t0g) / dtg).astype(np.int64)
+        ok = (k >= 0) & (k < nbg)
+        bt, prof, k = bt[ok], prof[ok], k[ok]
+        if bt.size < 100:
+            continue
+        d_dia = dia[k]
+        # una parte = un dia, asi que basta la referencia de su dia dominante
+        dd = int(np.bincount(np.maximum(d_dia - d_dia.min(), 0)).argmax()
+                 + d_dia.min())
+        d_ref = ref.get(dd, np.nan)
+        e = est_bin[k]
+        h = hora_bin[k]
+        val = (e >= 0) & (h >= 0)
+        if not val.any() or not np.isfinite(d_ref):
+            continue
+        for acc, etq, nb_s in ((accE, e, 5), (accH, h, 24)):
+            sub = campo_deriva(bt[val], prof[val], d_ref, etq[val],
+                               args.horizonte, nb_s=nb_s)
+            for c in acc:
+                acc[c] += sub[c]
+        del bt, prof, k, e, h, val
+        paso = max(1, len(partes) // 12)
+        if (i + 1) % paso == 0 or i + 1 == len(partes):
+            log("    libro %d/%d" % (i + 1, len(partes)))
+
+    rE = resumen_deriva(accE)
+    nom = ("muy baja", "baja", "media", "alta", "MUY ALTA")
+    titulo("EL CAMPO DE DERIVA, POR ESTRATO DE VOLATILIDAD")
+    log("  x = profundidad / mediana del dia (adimensional)")
+    log("  mu = E[ D(t+h) - D(t) ] / D_ref     sigma = su desviacion")
+    log("  Un equilibrio estable es un cruce de mu por cero con pendiente < 0.")
+    log("")
+    for k in range(5):
+        n = rE["n"][k]
+        if n.sum() < 5000:
+            continue
+        log("  --- estrato %s  (n = %.0f) ---" % (nom[k], n.sum()))
+        log("  %8s %10s %12s %12s %12s" % ("x", "n", "mu", "sigma", "P(colapso)"))
+        for j in range(NB_X):
+            if n[j] < max(500, 0.001 * n.sum()):
+                continue
+            log("  %8.3f %10.0f %+12.5f %12.5f %11.4f %%"
+                % (rE["x"][k][j], n[j], rE["mu"][k][j], rE["sigma"][k][j],
+                   100 * rE["colapso"][k][j]))
+        xe, pe = equilibrio(rE["x"][k], rE["mu"][k], n)
+        log("    equilibrio: x* = %s   pendiente = %s"
+            % ("%.4f" % xe if np.isfinite(xe) else "NO HAY CRUCE",
+               "%.5f" % pe if np.isfinite(pe) else "-"))
+        log("")
+
+    titulo("SATURACION contra DESATURACION, y el punto de colapso")
+    log("  %-10s %10s %10s %8s %12s %12s %10s"
+        % ("estrato", "x*", "pend<x*", "pend>x*", "razon", "P(col) x<1",
+           "P(col) x>2"))
+    for k in range(5):
+        n = rE["n"][k]
+        if n.sum() < 5000:
+            continue
+        x_, m_ = rE["x"][k], rE["mu"][k]
+        xe, _ = equilibrio(x_, m_, n)
+        xe = xe if np.isfinite(xe) else 1.0
+        baja = np.isfinite(x_) & (n >= 500) & (x_ > 0.4) & (x_ < xe)
+        alta = np.isfinite(x_) & (n >= 500) & (x_ > xe)
+        pb = np.polyfit(x_[baja], m_[baja], 1)[0] if baja.sum() >= 3 else np.nan
+        pa = np.polyfit(x_[alta], m_[alta], 1)[0] if alta.sum() >= 3 else np.nan
+        c1 = np.isfinite(x_) & (n >= 500) & (x_ < 1.0)
+        c2 = np.isfinite(x_) & (n >= 500) & (x_ > 2.0)
+        log("  %-10s %10.4f %10.5f %8.5f %12.3f %11.4f %% %9.4f %%"
+            % (nom[k], xe, pb, pa, (pa / pb) if (np.isfinite(pa) and pb) else np.nan,
+               100 * np.nansum(rE["colapso"][k][c1] * n[c1]) / max(n[c1].sum(), 1),
+               100 * np.nansum(rE["colapso"][k][c2] * n[c2]) / max(n[c2].sum(), 1)))
+    log("")
+    log("  LECTURA. `pend>x*` / `pend<x*` cerca de 1: la cola es una reversion")
+    log("  simple, sin punto de colapso -- se llena y se vacia con la misma")
+    log("  fuerza. Mucho mayor que 1: por encima de x* la cola se vacia cada vez")
+    log("  mas rapido cuanto mas llena esta, que es lo que 'colapsar' significa.")
+    log("  Menor que 1: satura -- por encima de x* deja de haber fuerza que la")
+    log("  devuelva, o sea que se puede acumular sin limite.")
+
+    rH = resumen_deriva(accH)
+    titulo("¿CUAJA CON LA U? -- equilibrio por hora de NUEVA YORK")
+    log("  %5s %12s %12s %12s" % ("hora", "x*", "pendiente", "n"))
+    for h in range(24):
+        n = rH["n"][h]
+        if n.sum() < 5000:
+            continue
+        xe, pe = equilibrio(rH["x"][h], rH["mu"][h], n)
+        log("  %5d %12s %12s %12.0f"
+            % (h, "%.4f" % xe if np.isfinite(xe) else "-",
+               "%.5f" % pe if np.isfinite(pe) else "-", n.sum()))
+    return 0
+
+
 def etapa_tau(args) -> int:
     """Diagnostico de `tau_recup`: por que es tan rapida, y ESTRATIFICADO.
 
@@ -1916,6 +2169,101 @@ def _autotest() -> int:
     chk(_C.DIR == guarda[0] and DIR_SALIDA == guarda[2],
         "21b el control restaura las rutas y no contamina las demas etapas")
 
+    # --- 22. El campo de deriva recupera un equilibrio CONOCIDO ------------
+    # Ornstein-Uhlenbeck exacto: D[q] = De + a*(D[q-1]-De) + s*sqrt((1-a^2)/(2th))*z
+    # A horizonte h la deriva teorica es mu(D) = (De - D)*(1 - exp(-th*h)).
+    dt22, th22, De22, sg22, n22, h22 = 0.05, 0.8, 3.0, 1.2, 400_000, 1.0
+    t22 = np.arange(n22) * dt22
+    a22 = np.exp(-th22 * dt22)
+    sd22 = sg22 * np.sqrt((1 - a22 ** 2) / (2 * th22))
+
+    def _ou(g_fuga=0.0, Dc=1e9, sem=2026):
+        rg = np.random.default_rng(sem)
+        z = rg.normal(0, sd22, n22)
+        D = np.empty(n22)
+        D[0] = De22
+        for q in range(1, n22):
+            p = D[q - 1]
+            D[q] = De22 + a22 * (p - De22) + z[q] - g_fuga * max(p - Dc, 0.0) * dt22
+        return D
+
+    def _campo(D):
+        r_ = resumen_deriva(campo_deriva(t22, D, np.median(D),
+                                         np.zeros(n22, np.int64), h22, nb_s=1))
+        return r_["x"][0], r_["mu"][0], r_["n"][0]
+
+    D22 = _ou()
+    x22, mu22, nn22 = _campo(D22)
+    xe, pe = equilibrio(x22, mu22, nn22)
+    p_teo = -(1 - np.exp(-th22 * h22))
+    chk(np.isfinite(xe) and abs(xe - 1.0) < 0.06 and pe < 0
+        and abs(pe - p_teo) / abs(p_teo) < 0.25,
+        "22 el campo de deriva recupera un equilibrio OU conocido",
+        "x* = %.4f (verdad 1.000), pendiente %.3f (teorica %.3f)"
+        % (xe, pe, p_teo))
+
+    # --- 23. Un paseo aleatorio NO tiene nivel al que volver ---------------
+    # ⚠ SIN RECORTAR EN CERO. La primera version hacia `maximum(W, 0.05)`, y un
+    # recorte es una BARRERA REFLECTANTE: crea deriva positiva real cerca del
+    # borde, o sea que el control media su propio artefacto (max|mu| = 0.574).
+    # Se arranca alto y con paso pequeno para que nunca se acerque a cero.
+    # Se usa un paseo GEOMETRICO: siempre positivo sin recortar, y recorre un
+    # rango de `x` amplio (un paseo aritmetico estrecho solo puebla una celda y
+    # el control no comprobaria nada -- fallo de la version anterior).
+    rg23 = np.random.default_rng(31)
+    W = 3.0 * np.exp(np.cumsum(rg23.normal(0, 0.002, n22)))
+    x23, mu23, n23 = _campo(W)
+    ok23 = (n23 >= 500) & np.isfinite(mu23)
+    xe23, _ = equilibrio(x23, mu23, n23, n_min=500)
+    chk(W.min() > 0.2 and ok23.sum() >= 6 and np.nanmax(np.abs(mu23[ok23])) < 0.05,
+        "23 un paseo aleatorio da deriva plana (no hay nivel al que volver)",
+        "max|mu| = %.4f contra %.3f del OU; minimo de la serie %.2f"
+        % (np.nanmax(np.abs(mu23[ok23])),
+           np.nanmax(np.abs(mu22[nn22 >= 500])), W.min()))
+
+    # --- 24. Un COLAPSO plantado se ve, y el test DISCRIMINA ---------------
+    # ⚠ EL ESTADISTICO ES LA PENDIENTE LOCAL, no una extrapolacion. Con una fuga
+    # por encima de Dc, la fuerza restauradora efectiva pasa de `th` a `th+g`, o
+    # sea que `mu(x)` se EMPINA a partir de ahi. La primera version comparaba
+    # `mu` real contra la extrapolacion lineal de la zona central, y era debil:
+    # una fuga fuerte despuebla la zona alta (el proceso no puede quedarse ahi),
+    # asi que la extrapolacion se evalua donde ya casi no hay dato. La pendiente
+    # local no tiene ese problema.
+    def _pendientes(D):
+        x_, m_, n_ = _campo(D)
+        baja = np.isfinite(x_) & (n_ >= 300) & (x_ > 0.6) & (x_ < 1.05)
+        alta = np.isfinite(x_) & (n_ >= 150) & (x_ >= 1.15)
+        if baja.sum() < 3 or alta.sum() < 3:
+            return None
+        return (float(np.polyfit(x_[baja], m_[baja], 1)[0]),
+                float(np.polyfit(x_[alta], m_[alta], 1)[0]))
+
+    sin_col = _pendientes(D22)
+    con_col = _pendientes(_ou(g_fuga=4.0, Dc=3.2))
+    if sin_col is None or con_col is None:
+        chk(False, "24 el control no puebla las dos zonas (generador mal)",
+            "sin=%s con=%s" % (sin_col, con_col))
+    else:
+        b1, a1 = sin_col
+        b2, a2 = con_col
+        # ⚠ El criterio es el CONTRASTE entre las dos series, no un umbral
+        # absoluto. Cuanto se empina depende de que fraccion de la ventana alta
+        # cae pasado el umbral plantado -- una propiedad de MI generador, no del
+        # estimador. Bajar `Dc` para forzar un numero mas grande lo empeora,
+        # porque entonces la fuga contamina tambien la ventana baja (probado:
+        # Dc = 3.2 da 1.33, Dc = 2.9 da 1.26, Dc = 2.6 da 1.18).
+        chk(abs(a1 / b1 - 1.0) < 0.35 and (a2 / b2) > 1.2 * (a1 / b1),
+            "24 el colapso plantado EMPINA la deriva; sin colapso no",
+            "sin colapso alta/baja = %.2f (cuadra con 1); con colapso = %.2f"
+            % (a1 / b1, a2 / b2))
+
+    # --- 25. `equilibrio` sobre una curva con cruce conocido ---------------
+    xx = np.linspace(0.2, 4.0, 40)
+    mm = 0.5 * (1.7 - xx)                      # cruza en x = 1.7, pendiente -0.5
+    xe2, pe2 = equilibrio(xx, mm, np.full(40, 1000))
+    chk(abs(xe2 - 1.7) < 1e-9 and abs(pe2 + 0.5) < 1e-9,
+        "25 el cruce por cero se localiza exacto", "x* = %.6f, p = %.6f" % (xe2, pe2))
+
     log("")
     log("  %d / %d" % (n_ok, n_tot))
     return 0 if n_ok == n_tot else 1
@@ -1924,8 +2272,10 @@ def _autotest() -> int:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     ap.add_argument("--autotest", action="store_true")
-    ap.add_argument("--etapa", choices=("rutas", "serie", "tau", "dia",
-                                        "relacion"))
+    ap.add_argument("--etapa", choices=("rutas", "serie", "tau", "saturacion",
+                                        "dia", "relacion"))
+    ap.add_argument("--horizonte", type=float, default=1.0,
+                    help="horizonte h del campo de deriva, en segundos")
     _anadir_rutas(ap)
     ap.add_argument("--fuente", default="estacional", choices=("estacional", "v33"))
     ap.add_argument("--tau", default="tau_agot",
@@ -1949,6 +2299,8 @@ def main(argv=None) -> int:
         return etapa_serie(a)
     if a.etapa == "tau":
         return etapa_tau(a)
+    if a.etapa == "saturacion":
+        return etapa_saturacion(a)
     if a.etapa == "dia":
         return etapa_dia(a)
     if a.etapa == "relacion":
