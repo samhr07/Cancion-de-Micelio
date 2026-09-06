@@ -5799,6 +5799,109 @@ Tres lecturas, y la tercera responde a la pregunta del operador:
 el §4 de la v4.2 dio 78 de 79 celdas negativas con coste real. Se reporta porque el módulo lo
 imprime y porque callarlo sería peor, no porque cambie nada.
 
+### ⚠⚠ CORRECCIONES DEL 2026-09-06 (c): `τ_recup` estratificada y el desequilibrio de CONTEO
+
+Dos objeciones del operador, las dos con razón, y la primera **retracta parcialmente el
+veredicto que se publicó horas antes**.
+
+#### 1. `τ_recup`: la lectura agrupada era confusión por régimen
+
+El acta anterior decía que `τ_recup` (MED 0.007 s) estaba «pegada a `τ_upd`» (MED 0.006 s), o
+sea en el suelo de resolución, y que los dos estimadores de `τ₀` «se mueven en direcciones
+opuestas» (ρ = −0.575). **Eso se midió promediando los 12 días.** Estratificado por quintiles de
+volatilidad realizada (`--etapa=tau`, nueva):
+
+| estrato | n | `rv` MED | `ν` MED | `τ_upd` | `τ_rec` | **`rec/upd`** | `τ_agot` |
+|---|---|---|---|---|---|---|---|
+| muy baja | 17 945 | 0.525 | 16.1 | 0.0109 | 0.0043 | **0.45** | 4.629 |
+| baja | 17 945 | 0.961 | 26.3 | 0.0072 | 0.0057 | 0.84 | 2.318 |
+| media | 17 944 | 1.460 | 38.7 | 0.0056 | 0.0066 | 1.27 | 1.288 |
+| alta | 17 945 | 2.162 | 59.7 | 0.0043 | 0.0076 | 1.90 | 0.672 |
+| **MUY ALTA** | 17 945 | 3.830 | 122.3 | 0.0029 | 0.0091 | **3.25** | 0.224 |
+
+**Y la concordancia DENTRO de cada estrato:**
+
+| estrato | ρ(`τ_agot`, `τ_recup`) | ρ(`τ_agot`, `τ_upd`) |
+|---|---|---|
+| muy baja | −0.067 | +0.419 |
+| baja | −0.093 | +0.330 |
+| media | −0.116 | +0.335 |
+| alta | −0.135 | +0.361 |
+| MUY ALTA | −0.136 | +0.557 |
+
+⚠ **El −0.575 agrupado era CONFUSIÓN POR RÉGIMEN.** `τ_agot` baja con la actividad (4.63 → 0.22 s,
+factor 21) y `τ_recup` sube con ella (0.0043 → 0.0091 s), así que mezclar regímenes fabrica la
+anticorrelación. Dentro de estrato es **−0.07 a −0.14**. La lectura correcta: **no son opuestas,
+son casi ortogonales dentro de un régimen** — miden cosas *distintas*, que no es lo mismo que
+medir cosas *contradictorias*. «`τ₀` no está bien definida» sigue en pie sólo en el sentido de
+que los dos estimadores **no son intercambiables**.
+
+**Y «está en el suelo de resolución» también estaba mal.** En volatilidad baja `rec/upd` = **0.45**,
+o sea *menos de una actualización*: tras una depleción las actualizaciones llegan **en ráfaga**,
+mucho más juntas que el intervalo medio, así que `τ_upd` nunca fue el suelo correcto. En el
+extremo alto `τ_rec` sube a 9 ms y `rec/upd` a **3.25** — el libro tarda más en medio-rellenarse
+en tiempo absoluto **y 7× más en su propio reloj**, aunque esté actualizando 4× más rápido. Eso
+es señal, y crece con la volatilidad.
+
+**Las dos mitades de la pregunta, respondidas:** el **82 %** vuelve en una o dos actualizaciones
+(el 61.9 % en ≤ 2), y el **18 % no vuelve** dentro de los 60 s de censura. La profundidad de L1
+no se relaja hacia su nivel: o la reponen de inmediato, o no la reponen.
+
+#### 2. El desequilibrio de CONTEO gana, y por mucho
+
+El operador pidió «una métrica de volumen neto sobre tick». Se añadió, y con ella el
+desequilibrio por **conteo** de transacciones, que entra con motivo propio: Jones, Kaul & Lipson
+(1994) y el `cont2014.py` de este proyecto ya midieron que **el número de operaciones lleva
+información que su tamaño no lleva**.
+
+| regresor | qué es | **`R²` CONTEMPORÁNEO** | `R²` nulo |
+|---|---|---|---|
+| `Q_neto` | volumen neto [BTC] | 0.336 | 0.00004 |
+| `Q_neto·ν` | volumen por tasa | 0.077 | 0.00002 |
+| **`Q_neto/n_tx`** | **volumen neto por transacción** | **0.269** | 0.00003 |
+| **`eps_neto`** | **desequilibrio de CONTEO [tx]** | **0.569** | 0.00004 |
+| `eps_neto/n_tx` | fracción neta de compras | 0.403 | 0.00004 |
+
+**Normalizar el VOLUMEN por el número de ticks lo empeora** (0.269 < 0.336). Lo que gana es
+**sustituir el volumen por el conteo**: 0.569, un 70 % más que el volumen crudo. Es
+Jones-Kaul-Lipson replicado sobre este instrumento, y es coherente con el 75 % contemporáneo que
+`cont2014.py` midió para OFI-L1. **No es un descubrimiento**; lo que vale es que la tubería lo
+recupera.
+
+#### 3. ⚠ Y el resultado contraintuitivo: mejor `R²` a 10 s ⇒ PEOR offset
+
+| regresor | `R²` a 10 s | recorrido offset/precio | medido/nulo |
+|---|---|---|---|
+| `Q_neto` | 0.336 | **1.70** | 0.64 |
+| `eps_neto` | **0.569** | **3.23** | 0.79 |
+
+El regresor que explica el **57 %** de la varianza a 10 s produce un offset que deriva **3.2×**
+lo que se mueve el precio — *peor* que el que explica el 34 %. `Var(dP_ref)/Var(dP)` baja de
+0.664 a 0.431, o sea que a alta frecuencia absorbe mucho más; y aun así, integrado a 12 días,
+`P − λ·CumX` se aleja más.
+
+**La lectura, y es una regla nueva del proyecto: explicar la varianza INSTANTÁNEA y reconstruir
+el NIVEL integrado son cosas independientes.** Un `R²` alto a 10 s no dice nada sobre si el flujo
+acumulado sigue al precio. Es un tercer eje junto a la convención CONTEMPORÁNEO / PREDICTIVO.
+
+La respuesta a «¿el nivel del activo se mantiene por el volumen?» sigue siendo **NO**, y con el
+regresor bueno es **más** no.
+
+#### 4. ⚠ Defecto propio: el nulo del recorrido era DEGENERADO
+
+`nulo_recorrido` rotaba `r["q_neto"]` sin mirar qué regresor se había elegido. En cuanto el
+ganador pasó a ser `eps_neto`, rotar `q_neto` no tocaba nada de lo que entraba en el cálculo: el
+«nulo» salía **idéntico** a la medición — 3407.1 pb contra 3407.1 pb — y una razón medido/nulo de
+1.0000 se habría leído como «indistinguible del azar» cuando era el mismo número dos veces.
+
+**Sexta vez en este proyecto que un nulo falla por no destruir aquello que se está midiendo.**
+Corregido: se rota la serie explicativa ya construida, sea cual sea el regresor. Control 12: el
+nulo tiene que MOVERSE con los cinco. Con eso, `nulo MED = 4286.3 pb` contra 3407.1 medido.
+
+Y de paso, la definición de cada regresor estaba **duplicada** entre `incrementos` y `offset` —
+una discrepancia entre las dos daría un `P_ref` sin correspondencia con la `λ` ajustada, sin
+lanzar ninguna excepción. Unificada en `regresor()`, controles 11 y 11b.
+
 ## ⚠ CONVENCIÓN OBLIGATORIA — todo `R²` se cita como CONTEMPORÁNEO o PREDICTIVO
 
 **Ninguna cifra de `R²` de este proyecto se escribe sin una de esas dos etiquetas.** Son

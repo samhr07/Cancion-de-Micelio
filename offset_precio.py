@@ -186,13 +186,18 @@ def suelo_offset(r, regresor="Q", n=N_SORTEOS, semilla=31):
 # 2. Por dia
 # ===========================================================================
 
-def offset_en(r, g, lam, reg="Q"):
-    """`P_ref` de UNA racha, anclada en su inicio."""
-    cum = np.concatenate([[0.0], np.cumsum(regresor(r, g, reg)[1:])])
+def offset_en(r, g, lam, reg="Q", x=None):
+    """`P_ref` de UNA racha, anclada en su inicio.
+
+    `x`, si se da, es la serie explicativa YA construida sobre todo el array;
+    sirve para que el nulo pueda rotarla. Ver `nulo_recorrido`.
+    """
+    xs = regresor(r, g, reg) if x is None else np.asarray(x)[g]
+    cum = np.concatenate([[0.0], np.cumsum(xs[1:])])
     return r["precio"][g] - lam * cum
 
 
-def tabla_por_dia(r, g, lam, regresor="Q", zona="ny"):
+def tabla_por_dia(r, g, lam, regresor="Q", zona="ny", x=None):
     """Una fila por dia DENTRO de una racha continua.
 
     ⚠ POR RACHA Y NO SOBRE TODA LA REJILLA, y esto fue un fallo propio que la
@@ -206,7 +211,7 @@ def tabla_por_dia(r, g, lam, regresor="Q", zona="ny"):
     ancla es UNA, y ahi la comparacion entre dias si significa algo.
     """
     P = r["precio"][g]
-    PR = offset_en(r, g, lam, regresor)
+    PR = offset_en(r, g, lam, regresor, x=x)
     t = r["t"][g]
     cal = F.calendario_ny(t) if zona == "ny" else None
     dia = cal["dia"] if cal is not None else np.floor(t / 86400.0).astype(np.int64)
@@ -244,21 +249,32 @@ def recorridos(filas):
             1e4 * (np.max(pm) - np.min(pm)) / ref)
 
 
-def nulo_recorrido(r, g, lam, regresor, zona, n=60, semilla=97):
-    """Recorrido del offset entre dias con `Q` ROTADO dentro de la racha."""
+def nulo_recorrido(r, g, lam, reg, zona, n=60, semilla=97):
+    """Recorrido del offset entre dias con la SERIE EXPLICATIVA rotada.
+
+    ⚠ ESTE NULO ESTUVO MAL Y DIO UN NUMERO QUE PARECIA UN RESULTADO. La primera
+    version rotaba `r["q_neto"]` sin mirar que regresor se habia elegido. En
+    cuanto el ganador paso a ser `eps_neto` (el desequilibrio de conteo), rotar
+    `q_neto` no tocaba nada de lo que entraba en el calculo: el "nulo" salia
+    **identico** a la medicion -- 3407.1 pb contra 3407.1 pb -- y una razon
+    medido/nulo de 1.0000 se habria leido como "indistinguible del azar" cuando
+    en realidad era el mismo numero dos veces.
+
+    Es la sexta vez en este proyecto que un nulo falla por no destruir aquello
+    que se esta midiendo. Ahora se rota la serie explicativa YA CONSTRUIDA, sea
+    cual sea el regresor, y el control 12 comprueba que el nulo se MUEVE.
+    """
     rng = np.random.default_rng(semilla)
     out = []
     m = g.size
     if m < 400:
         return np.array([])
-    r2 = {k: r[k] for k in ("t", "precio", "q_neto", "eps_neto", "n_tx",
-                            "nu", "valida")}
+    x = regresor(r, np.arange(r["precio"].size), reg)
     for _ in range(n):
         k = int(rng.integers(m // 20, m - m // 20))
-        q = r["q_neto"].copy()
-        q[g] = np.roll(r["q_neto"][g], k)
-        r2["q_neto"] = q
-        fn = tabla_por_dia(r2, g, lam, regresor, zona)
+        xr = x.copy()
+        xr[g] = np.roll(x[g], k)
+        fn = tabla_por_dia(r, g, lam, reg, zona, x=xr)
         if len(fn) >= 2:
             out.append(recorridos(fn)[1])
     return np.array(out, float)
@@ -293,8 +309,9 @@ def etapa_offset(args) -> int:
                                         if np.isfinite(ajustes[k][0]["R2"]) else -9))
     f, su = ajustes[mejor]
     lam = f["b"]
-    log("  regresor con mas R2: %s   ->  lambda = %.6e USD/BTC por %s"
-        % (mejor, lam, "BTC" if mejor == "Q" else "BTC/s"))
+    log("  regresor con mas R2: %-9s (%s)"
+        % (REGRESORES[mejor][0], REGRESORES[mejor][1]))
+    log("  lambda = %.6e USD/BTC por unidad de ese regresor" % lam)
     if np.isfinite(su.get("R2_q95", np.nan)) and f["R2"] <= su["R2_q95"]:
         log("  ⚠ El R2 medido NO supera su suelo de rotacion: el offset que sigue")
         log("    NO es legible, cualquier serie rotada da lo mismo.")
@@ -585,6 +602,26 @@ def _autotest() -> int:
     chk(abs(p11[1] - (100.0 - lam11 * (-0.5))) < 1e-12,
         "11b `offset_en` usa el mismo regresor que `incrementos`",
         "P_ref[1] = %.4f" % p11[1])
+
+    # --- 12. EL NULO TIENE QUE MOVERSE, con CUALQUIER regresor -------------
+    # El control que habria cazado el fallo del 2026-09-06: la primera version
+    # de `nulo_recorrido` rotaba `q_neto` sin mirar el regresor elegido, asi que
+    # con `Eps` devolvia EXACTAMENTE la medicion. Un nulo que no destruye lo que
+    # se mide no es un nulo.
+    r12 = _rejilla_sintetica(8640 * 3, 0.35, ruido=0.02, semilla=41)
+    r12["t"] = 1755000000.0 + np.arange(r12["precio"].size) * 10.0
+    g12 = rachas(r12["valida"])[0]
+    degenerados = []
+    for reg in REGRESORES:
+        dP, X, _ = incrementos(r12, reg)
+        f = ols_sin_intercepto(X, dP)
+        med = recorridos(tabla_por_dia(r12, g12, f["b"], reg, "ny"))[1]
+        nul = nulo_recorrido(r12, g12, f["b"], reg, "ny", n=8, semilla=5)
+        if nul.size == 0 or np.all(np.abs(nul - med) < 1e-9):
+            degenerados.append(reg)
+    chk(not degenerados,
+        "12 el nulo del recorrido se MUEVE con los cinco regresores",
+        "degenerados: %s" % (degenerados or "ninguno"))
 
     log("")
     log("  %d / %d" % (n_ok, n_tot))
