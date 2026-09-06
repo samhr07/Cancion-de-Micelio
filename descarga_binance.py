@@ -215,6 +215,148 @@ def convertir_trades(datos):
     return {"t": t[o], "precio": p[o], "cant": q[o], "id": i[o], "maker": m[o]}
 
 
+# ---------------------------------------------------------------------------
+# Conversion POR LOTES -- la que se usa de verdad
+# ---------------------------------------------------------------------------
+#
+# ⚠ LA VERSION EN MEMORIA NO CABE EN LA MAQUINA DEL OPERADOR. Un dia agitado de
+# `bookTicker` son 26.8 M de filas ya deduplicadas (2024-03-19), y materializarlo
+# entero costo **4.6 GB de RSS** medidos. Ese portatil tiene ~2 GB libres, y este
+# proyecto lleva tres procesos muertos por exactamente esto. Asi que el camino
+# real descarga a DISCO y convierte por lotes, con la memoria acotada por el
+# tamano del lote y no por el del dia.
+#
+# Lo que se pierde: no se puede ordenar globalmente en streaming. En su lugar se
+# COMPRUEBA la monotonia y se falla ruidosamente si el volcado no viniera
+# ordenado -- verificado que lo viene, pero suponerlo en silencio seria otra
+# cosa. `--en-memoria` vuelve al camino que si ordena.
+
+
+def bajar_a_fichero(url, ruta, verificar=True, trozo=1 << 20):
+    """Descarga a disco por trozos, comprobando el CHECKSUM sobre la marcha."""
+    h = hashlib.sha256()
+    tmp = ruta + ".tmp"
+    with urllib.request.urlopen(url, timeout=600) as r, open(tmp, "wb") as fh:
+        while True:
+            b = r.read(trozo)
+            if not b:
+                break
+            h.update(b)
+            fh.write(b)
+    if verificar:
+        try:
+            with urllib.request.urlopen(url + ".CHECKSUM", timeout=60) as r:
+                esperado = r.read().decode().split()[0].lower()
+            if h.hexdigest() != esperado:
+                os.remove(tmp)
+                raise IOError("CHECKSUM no coincide para %s" % url)
+        except urllib.error.HTTPError:
+            pass
+    os.replace(tmp, ruta)
+    return ruta
+
+
+def _lotes_csv(zip_ruta, esperadas, filas_lote=1_000_000):
+    """RecordBatches del CSV de dentro del ZIP, sin materializarlo entero."""
+    from pyarrow import csv as _csv
+    z = zipfile.ZipFile(zip_ruta)
+    nombre = [n for n in z.namelist() if n.endswith(".csv")][0]
+    fh = z.open(nombre)
+    cab = fh.read(400).split(b"\n", 1)[0].decode("utf-8", "replace").strip()
+    fh.close()
+    tiene_cab = cab.split(",")[0] == esperadas[0]
+    fh = z.open(nombre)
+    rd = _csv.open_csv(
+        fh,
+        read_options=_csv.ReadOptions(
+            column_names=None if tiene_cab else list(esperadas),
+            block_size=1 << 24),
+        convert_options=_csv.ConvertOptions())
+    try:
+        for b in rd:
+            yield {c: b.column(i).to_numpy(zero_copy_only=False)
+                   for i, c in enumerate(b.schema.names)}
+    finally:
+        rd.close()
+        fh.close()
+        z.close()
+
+
+def convertir_por_lotes(zip_ruta, destino, sub, tipo, dedup=True):
+    """Convierte un ZIP a parquet por lotes. Devuelve (filas, bytes)."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    d = os.path.join(destino, sub)
+    os.makedirs(d, exist_ok=True)
+    ruta = os.path.join(d, "parte_00000.parquet")
+    tmp = ruta + ".tmp"
+    esperadas = COLS_BT if tipo == "libro" else COLS_TR
+    esquema = (pa.schema([("t", pa.float64()), ("b", pa.float64()),
+                          ("B", pa.float64()), ("a", pa.float64()),
+                          ("A", pa.float64()), ("u", pa.int64())])
+               if tipo == "libro" else
+               pa.schema([("t", pa.float64()), ("precio", pa.float64()),
+                          ("cant", pa.float64()), ("id", pa.int64()),
+                          ("maker", pa.bool_())]))
+    n = 0
+    prev_t = -np.inf
+    prev_q = None            # ultima tupla (b, B, a, A) para deduplicar
+    w = pq.ParquetWriter(tmp, esquema, compression="zstd")
+    try:
+        for c in _lotes_csv(zip_ruta, esperadas):
+            cols = (_lote_libro(c, dedup, prev_q) if tipo == "libro"
+                    else _lote_trades(c))
+            if tipo == "libro":
+                cols, prev_q = cols
+            if cols["t"].size == 0:
+                continue
+            if cols["t"][0] < prev_t or np.any(np.diff(cols["t"]) < 0):
+                raise IOError(
+                    "el volcado de %s no viene ordenado por tiempo; usa"
+                    " --en-memoria (que si ordena)" % sub)
+            prev_t = float(cols["t"][-1])
+            w.write_table(pa.table({k: pa.array(v) for k, v in cols.items()},
+                                   schema=esquema))
+            n += cols["t"].size
+    finally:
+        w.close()
+    os.replace(tmp, ruta)
+    return n, os.path.getsize(ruta)
+
+
+def _lote_libro(c, dedup, prev_q):
+    t = c["transaction_time"].astype(np.float64) / 1000.0
+    b = c["best_bid_price"].astype(np.float64)
+    B = c["best_bid_qty"].astype(np.float64)
+    a = c["best_ask_price"].astype(np.float64)
+    A = c["best_ask_qty"].astype(np.float64)
+    u = c["update_id"].astype(np.int64)
+    ok = (b > 0) & (a > 0) & (B > 0) & (A > 0) & np.isfinite(t)
+    t, b, B, a, A, u = t[ok], b[ok], B[ok], a[ok], A[ok], u[ok]
+    if dedup and t.size:
+        if prev_q is None:
+            cam = np.r_[True, (b[1:] != b[:-1]) | (B[1:] != B[:-1])
+                        | (a[1:] != a[:-1]) | (A[1:] != A[:-1])]
+        else:
+            pb, pB, pa_, pA = prev_q
+            cam = np.r_[(b[0] != pb) or (B[0] != pB) or (a[0] != pa_) or (A[0] != pA),
+                        (b[1:] != b[:-1]) | (B[1:] != B[:-1])
+                        | (a[1:] != a[:-1]) | (A[1:] != A[:-1])]
+        t, b, B, a, A, u = t[cam], b[cam], B[cam], a[cam], A[cam], u[cam]
+    q = (float(b[-1]), float(B[-1]), float(a[-1]), float(A[-1])) if t.size else prev_q
+    return {"t": t, "b": b, "B": B, "a": a, "A": A, "u": u}, q
+
+
+def _lote_trades(c):
+    t = c["time"].astype(np.float64) / 1000.0
+    p = c["price"].astype(np.float64)
+    q = c["qty"].astype(np.float64)
+    i = c["id"].astype(np.int64)
+    m = _booleano(c["is_buyer_maker"])
+    ok = (p > 0) & (q > 0) & np.isfinite(t)
+    return {"t": t[ok], "precio": p[ok], "cant": q[ok], "id": i[ok], "maker": m[ok]}
+
+
 def escribir_parquet(destino, sub, cols):
     import pyarrow as pa
     import pyarrow.parquet as pq
@@ -260,11 +402,15 @@ def _dias(desde, hasta):
 
 def etapa_bajar(args) -> int:
     titulo("DESCARGA -> formato de `captura_estacional`  (%s)" % args.simbolo)
+    import tempfile
     dias = _dias(args.desde, args.hasta)
     os.makedirs(args.dir, exist_ok=True)
+    tmpd = tempfile.mkdtemp(prefix="binance_")
     log("  destino: %s" % os.path.abspath(args.dir))
     log("  dias solicitados: %d  (%s .. %s)" % (len(dias), dias[0], dias[-1]))
     log("  deduplicacion del libro: %s" % ("NO" if args.sin_dedup else "SI"))
+    log("  conversion: %s" % ("EN MEMORIA (ordena; ~4.6 GB de pico)"
+                              if args.en_memoria else "POR LOTES (memoria acotada)"))
     log("")
     log("  %-12s %12s %12s %10s %10s" % ("dia", "libro filas", "trades filas",
                                          "libro MB", "trades MB"))
@@ -278,23 +424,37 @@ def etapa_bajar(args) -> int:
             ok += 1
             continue
         try:
-            lb = convertir_libro(bajar(_url("bookTicker", args.simbolo, d)),
-                                 dedup=not args.sin_dedup)
-            tr = convertir_trades(bajar(_url("trades", args.simbolo, d)))
+            if args.en_memoria:
+                lb = convertir_libro(bajar(_url("bookTicker", args.simbolo, d)),
+                                     dedup=not args.sin_dedup)
+                tr = convertir_trades(bajar(_url("trades", args.simbolo, d)))
+                if lb["t"].size == 0 or tr["t"].size == 0:
+                    raise IOError("vacio")
+                _, n1 = escribir_parquet(args.dir, "libro_" + sufijo, lb)
+                _, n2 = escribir_parquet(args.dir, "trades_" + sufijo, tr)
+                f1, f2 = lb["t"].size, tr["t"].size
+                del lb, tr
+            else:
+                z1 = os.path.join(tmpd, "bt.zip")
+                z2 = os.path.join(tmpd, "tr.zip")
+                bajar_a_fichero(_url("bookTicker", args.simbolo, d), z1)
+                bajar_a_fichero(_url("trades", args.simbolo, d), z2)
+                f1, n1 = convertir_por_lotes(z1, args.dir, "libro_" + sufijo,
+                                             "libro", dedup=not args.sin_dedup)
+                f2, n2 = convertir_por_lotes(z2, args.dir, "trades_" + sufijo,
+                                             "trades")
+                os.remove(z1); os.remove(z2)
+                if f1 == 0 or f2 == 0:
+                    raise IOError("vacio")
         except Exception as e:
             log("  %-12s  FALLA: %s" % (d, str(e)[:70]))
             fallos += 1
             continue
-        if lb["t"].size == 0 or tr["t"].size == 0:
-            log("  %-12s  vacio, se omite" % d)
-            fallos += 1
-            continue
-        _, n1 = escribir_parquet(args.dir, "libro_" + sufijo, lb)
-        _, n2 = escribir_parquet(args.dir, "trades_" + sufijo, tr)
-        log("  %-12s %12d %12d %10.1f %10.1f"
-            % (d, lb["t"].size, tr["t"].size, n1 / 1e6, n2 / 1e6))
+        log("  %-12s %12d %12d %10.1f %10.1f" % (d, f1, f2, n1 / 1e6, n2 / 1e6))
         ok += 1
     log("")
+    import shutil
+    shutil.rmtree(tmpd, ignore_errors=True)
     log("  dias listos: %d   fallidos: %d" % (ok, fallos))
     log("")
     log("  ahora:  python flujo_omega.py --etapa=serie --datos=%s" % args.dir)
@@ -387,6 +547,58 @@ def _autotest() -> int:
     chk(u.endswith("BTCUSDT/BTCUSDT-bookTicker-2024-03-30.zip"),
         "7 URL bien formada", u.split("/data/")[-1])
 
+    # --- 8. POR LOTES == EN MEMORIA, sobre el mismo ZIP -------------------
+    # El control que justifica el camino nuevo: si no dieran exactamente lo
+    # mismo, la version por lotes seria otra medicion, no la misma mas barata.
+    import tempfile, shutil
+    d8 = tempfile.mkdtemp()
+    try:
+        z8 = os.path.join(d8, "bt.zip")
+        with open(z8, "wb") as fh:
+            fh.write(_zip(csv_bt))
+        n8, _ = convertir_por_lotes(z8, d8, "libro_x", "libro", dedup=True)
+        import pyarrow.parquet as pq
+        t8 = pq.read_table(os.path.join(d8, "libro_x", "parte_00000.parquet"))
+        mem = convertir_libro(_zip(csv_bt))
+        igual = (n8 == mem["t"].size
+                 and np.allclose(t8["t"].to_numpy(), mem["t"])
+                 and np.allclose(t8["B"].to_numpy(), mem["B"])
+                 and np.array_equal(t8["u"].to_numpy(), mem["u"]))
+        chk(igual, "8 la conversion POR LOTES da lo mismo que EN MEMORIA",
+            "%d filas por las dos vias" % n8)
+        # trades por la misma via
+        z9 = os.path.join(d8, "tr.zip")
+        with open(z9, "wb") as fh:
+            fh.write(_zip(csv_tr))
+        n9, _ = convertir_por_lotes(z9, d8, "trades_x", "trades")
+        t9 = pq.read_table(os.path.join(d8, "trades_x", "parte_00000.parquet"))
+        m9 = convertir_trades(_zip(csv_tr))
+        chk(n9 == m9["t"].size
+            and np.array_equal(t9["maker"].to_numpy(), m9["maker"]),
+            "8b idem para trades, con el flag de maker intacto",
+            "maker = %s" % list(t9["maker"].to_numpy()))
+    finally:
+        shutil.rmtree(d8, ignore_errors=True)
+
+    # --- 9. un volcado DESORDENADO falla ruidosamente en vez de mentir -----
+    d9 = tempfile.mkdtemp()
+    try:
+        mal = ("update_id,best_bid_price,best_bid_qty,best_ask_price,"
+               "best_ask_qty,transaction_time,event_time\n"
+               "1,100.0,2.0,100.1,3.0,1700000009000,1700000009005\n"
+               "2,100.0,4.0,100.1,3.0,1700000001000,1700000001005\n")
+        z = os.path.join(d9, "m.zip")
+        with open(z, "wb") as fh:
+            fh.write(_zip(mal))
+        try:
+            convertir_por_lotes(z, d9, "libro_m", "libro")
+            chk(False, "9 un volcado desordenado tiene que fallar, no colarse")
+        except IOError as e:
+            chk("no viene ordenado" in str(e),
+                "9 un volcado desordenado falla ruidosamente", str(e)[:60])
+    finally:
+        shutil.rmtree(d9, ignore_errors=True)
+
     log("")
     log("  %d / %d" % (n_ok, n_tot))
     return 0 if n_ok == n_tot else 1
@@ -403,6 +615,9 @@ def main(argv=None) -> int:
     ap.add_argument("--dir", default="telemetria/descarga")
     ap.add_argument("--sin-dedup", dest="sin_dedup", action="store_true")
     ap.add_argument("--rehacer", action="store_true")
+    ap.add_argument("--en-memoria", dest="en_memoria", action="store_true",
+                    help="camino antiguo: ordena, pero carga el dia entero"
+                         " (~4.6 GB de pico en un dia agitado)")
     a = ap.parse_args(argv)
     if a.autotest:
         return _autotest()

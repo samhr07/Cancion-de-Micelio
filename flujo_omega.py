@@ -703,7 +703,11 @@ def rejilla_estacional(dt=DT_REJILLA, t_ini=None, t_fin=None):
         prev = acumular_libro(bt[o], bb[o], bB[o], ba[o], bA[o], t0, dt, nb, acc,
                               prev, vol_fn=vf)
         del bt, bb, bB, ba, bA, o, m
-        if (i + 1) % 50 == 0:
+        # cada 50 partes no vale para todos los casos: con 12 partes (una
+        # captura de 12 dias descargada) no se imprimiria NUNCA y la corrida
+        # parece colgada. El paso se adapta al numero de partes.
+        paso = max(1, len(partes) // 20)
+        if (i + 1) % paso == 0 or i + 1 == len(partes):
             log("    libro %d/%d" % (i + 1, len(partes)))
     partes = sorted([x for x in C._indice("trades_") if not (x[2] < t0 or x[1] > t1)],
                     key=lambda z: z[1])
