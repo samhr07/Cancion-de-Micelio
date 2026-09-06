@@ -5685,6 +5685,120 @@ día descargado es autoconsistente (libro y transacciones del mismo día y símb
 `flujo_omega` ya corta en rachas continuas. El único modo de romperlo es apuntar `--datos` a un
 directorio que **mezcle** descarga y captura propia; no hacerlo.
 
+### ⚠⚠ PRIMERA MEDICIÓN REAL DE `φ` Y `Ω` (2026-09-06) — y `τ₀` NO ESTÁ BIEN DEFINIDA
+
+Sobre **12 días descargados** (2024-03-19 .. 03-30, 13 días de NY con 2 parciales), **192 M de
+filas de libro** deduplicadas y **58.4 M de transacciones**. Acta completa en
+`telemetria/acta_omega_2024_03.txt`; rejilla en `telemetria/rejilla_omega_estacional.npz`
+(10.7 MB), hash de procedencia **`fca42b728091b334`**.
+
+⚠ **Régimen distinto al de la captura propia, y hay que decirlo antes de comparar nada:**
+`ν` recorre **11 a 80 tx/s**, precio 60 850 – 71 801 (**18 %**), y la **profundidad L1 mediana es
+2.68 BTC** contra los 22–31 BTC que H1 midió en 2026. El libro de marzo de 2024 es **un orden de
+magnitud más fino**.
+
+#### El contraste que se declaró decisivo: FALLA
+
+La nota decía, antes de medir: *«si `tau_agot` y `tau_recup(θ)` no se mueven juntas sobre dato
+real, `τ₀` no está bien definida y hay que decirlo antes de construir nada encima».*
+
+| par | ρ crudo | ρ residuo | razón contra su nulo |
+|---|---|---|---|
+| **`tau_agot` vs `tau_recup_LOCAL`** | **−0.706** | **−0.575** | **4.15 — se lee** |
+| `tau_agot` vs `tau_upd` | +0.819 | — | — |
+
+**Los dos estimadores del mismo concepto se mueven en direcciones OPUESTAS**, y la razón contra
+el nulo (4.15) dice que eso no es ruido. Y hay una segunda razón, peor:
+
+```
+tau_agot          p10 0.245   MED 1.503   p90 8.238   s
+tau_upd           p10 0.003   MED 0.006   p90 0.016   s
+tau_recup_LOCAL   p10 0.003   MED 0.007   p90 0.025   s     <- pegado a tau_upd
+tau_recup(0.30..0.90) fijo      MED 0.006 - 0.007    s     <- lo mismo
+```
+
+**`tau_recup` está en el suelo de resolución del instrumento.** A 167 actualizaciones de libro
+por segundo, la semi-recuperación ocurre en una o dos actualizaciones, así que el estimador no
+mide reposición: mide el intervalo entre snapshots. Todos los `θ`, medido y fijos, colapsan al
+mismo número.
+
+**Consecuencia sobre la métrica: el denominador de `φ` depende de qué estimador se elija, y los
+dos disponibles no coinciden.** Con `tau_agot` (el primario, sin parámetro libre) la métrica es
+computable y lo que sigue está medido con él; pero `τ₀` **no es una cantidad del mercado**, es
+una cantidad del estimador — el mismo desenlace que la v4.1 §3.1 tuvo con `γ`.
+
+#### El reparto de `Var(Ω)`, y el canal PRECIO confirmado en cero
+
+```
+residuo de la regla de la cadena : 1.186e-16 relativo    (identidad exacta, como se prometio)
+phi   [USD/s]   p10 -2.4849e+06   MED -7.5772e+02   p90 +2.4346e+06
+Omega [USD/s^2] p10 -2.8177e+05   MED +3.3328e+00   p90 +2.7396e+05
+
+reparto de Var(Omega)   FLUJO 0.5663    PRECIO 0.0000    LIBRO 0.4339
+```
+
+**El canal PRECIO sale 0.0000 exacto** (p10 y p90 en ±0.0002), que es lo que el §5.1 de la nota
+anticipó como estructural. Y **el canal LIBRO se lleva el 43 %**: casi la mitad de la varianza de
+`Ω` viene de cómo se mueve `τ₀` — justo la cantidad que el apartado anterior deja sin definir.
+Las dos cosas juntas son el resultado importante de esta corrida.
+
+#### Lo que sí replica y es legible (razón ≥ 3 sobre el RESIDUO)
+
+| par | ρ residuo | razón |
+|---|---|---|
+| `tau0` vs `nu` | −0.973 | 5.95 |
+| `omega_rms` vs `rv_pb` | +0.821 | 5.74 |
+| `omega_rms` vs `q_tot` | +0.774 | 5.13 |
+| `omega_rms` vs `nu` | +0.648 | 4.39 |
+| `theta_medida` vs `nu` | +0.608 | 3.28 |
+
+⚠ **`resiliencia` vs `ν` = −0.938 (razón 6.38) es MECÁNICO, no un hallazgo.** Con
+`tau_recup` pegado a la resolución, `resiliencia = tau_agot/tau_recup ≈ tau_agot/cte`, y
+`tau_agot = prof/caudal ∝ 1/ν`. Esa correlación es casi una identidad y así hay que citarla.
+Lo mismo vale para `resiliencia` contra `q_tot` y `rv_pb`.
+
+#### Por día y por reloj de Nueva York
+
+El régimen cambia **21×** en `τ₀` (0.45 s el 19-mar a 9.37 s el 30-mar) y **7×** en `ν`.
+Hábil contra fin de semana: `omega_rms` **2.60×**, `τ₀` 1.44 s contra 2.88 s.
+
+✅ **El pico horario de `omega_rms` cae en NY 9–11 h**, la apertura americana. Anclar el reloj a
+Nueva York queda **validado por el dato**, no supuesto.
+
+#### El offset `P_ref`: `λ` es estable, pero el flujo NO sostiene el nivel
+
+```
+regresor      lambda          R2 CONTEMPORANEO    R2 nulo      n
+Q_neto        3.578941e-01    0.33583            0.00004      103 679
+Q_neto*nu     2.194453e-04    0.07732            0.00002      103 679
+
+lambda entre dias: min 3.03e-01  MED 3.57e-01  max 4.48e-01   recorrido 1.48x
+Var(dP_ref)/Var(dP) = 0.66415        (o sea el flujo absorbe el 33.6 % de la varianza)
+
+recorrido ENTRE dias:  precio 1055.9 pb   offset 1793.8 pb   razon 1.6988
+NULO (Q rotado):       offset MED 2802.0 pb        medido/nulo = 0.64
+```
+
+Tres lecturas, y la tercera responde a la pregunta del operador:
+
+1. **`Q_neto` gana claramente a `Q_neto·ν`** (0.336 contra 0.077). La segunda propuesta pierde.
+2. **`λ` es notablemente estable**: recorre 1.48× entre 13 días. En un proyecto donde `β`, `H_p`
+   y la antipersistencia no replicaron, ésta es de las cantidades más firmes que se han medido.
+   Y el `R²` contemporáneo de 0.336 está **8 400×** sobre su suelo de rotación.
+3. ⛔ **Pero el offset recorre 1.70× lo que recorre el precio.** La respuesta a «¿el nivel del
+   activo se mantiene por el volumen?» es **NO**: a 10 s el flujo explica un tercio de la
+   varianza, pero al integrar 12 días `P − λ·CumQ` se aleja **más** de lo que se mueve `P`. Queda
+   por debajo de su nulo (0.64), o sea que el flujo reduce algo la deriva frente a una rotación
+   al azar, pero no lo bastante para sostener el nivel.
+
+#### El bloque predictivo, y por qué NO reabre nada
+
+`q_neto` contra el retorno del bloque siguiente da ρ = +0.374 con razón 3.47 sobre su nulo.
+⚠ **Eso NO es una señal recuperada.** Son 288 bloques de 1 h; la Adenda C midió lo mismo con
+**422 527 orígenes** y el veredicto fue que falta un factor **43× a 577×** para pagar el peaje, y
+el §4 de la v4.2 dio 78 de 79 celdas negativas con coste real. Se reporta porque el módulo lo
+imprime y porque callarlo sería peor, no porque cambie nada.
+
 ## ⚠ CONVENCIÓN OBLIGATORIA — todo `R²` se cita como CONTEMPORÁNEO o PREDICTIVO
 
 **Ninguna cifra de `R²` de este proyecto se escribe sin una de esas dos etiquetas.** Son
