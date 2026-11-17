@@ -1,0 +1,12 @@
+M0   testigo: unidad rc 1 fallas ('XB.1f',); nueva == previa True; XB.0c (0, 0, 5)
+M1   real fuera del estrato en el Monte Carlo           CAZADO (U 1 ('XB.1a', 'XB.1b', 'XB.1f'))
+M2   Monte Carlo del pool global (estrato al azar)      CAZADO (U 1 ('XB.1a', 'XB.1f'))
+M3   p sin el +1                                        NO CAZADO (cambia la salida de la rama nueva)
+M4   p_min sin la cola inferior                         CAZADO (U 1 ('XB.1a',))
+M5   resoluble con alfa en vez de alfa/4                NO CAZADO (salida identica: equivalente en estos mundos)
+M6   omision invertida (INTERCAMBIABLE por omision)     CAZADO (X0; X0b)
+M7   sobrepaso por evento sin bifurcar                  CAZADO (X0b)
+M8   contraste_iid_pool_loo sin llenar                  CAZADO (X0b)
+M9   u del real contra el estrato que lo incluye        CAZADO (U 1 ('XB.1a', 'XB.1f'))
+M10  Holm de 4 con el p viejo en INTERCAMBIABLE         CAZADO (X0c (0, 0, 8))
+8/10 cazados

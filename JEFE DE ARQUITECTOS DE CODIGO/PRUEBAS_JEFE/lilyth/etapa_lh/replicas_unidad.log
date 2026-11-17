@@ -1,0 +1,17 @@
+﻿[OK   ] U4   escalera tau_k = 2^k hasta 2^K >= T_max (128 -> 8 tau, 129 -> 9)
+      U1: 86 eventos, LL recursiva -402.8638721032, bruta -402.8638721032
+[OK   ] U1   log-verosimilitud = referencia de fuerza bruta
+      U2: 5700 eventos, rho verdad 0.650, ajuste 0.661, [0.639, 0.679]; N(+,+) 0.432 N(+,-) 0.185; mu 0.0019 0.0076 0.0034 0.0065; KKT 9.24e-05; iter 6248; p_lr 0.0063; estado 1
+[OK   ] U2   recupera rho dentro de su intervalo bootstrap, DECIDIBLE y optimo KKT
+      U3: hijas + 1.0146 (teoria 1.0168, ee 0.0049)  hijas - 0.8447 (teoria 0.8403, ee 0.0046)
+[OK   ] U3   cumulo de dos tipos = N (I - N)^-1 dentro de 4 ee
+      R1u/R4: DECIDIBLE sin excitacion: homogeneo 1/40, por fase con base por fase 2/40, por fase con base CONSTANTE 40/40 (banda 4.3)
+[OK   ] R1u  tamano del contraste del ajuste en un Poisson homogeneo <= alfa + banda
+[OK   ] R4   Poisson por fase sin excitacion: con base por fase no pasa su nulo (<= alfa + banda)
+      R4 (reporte): con base constante la excitacion falsa pasa su nulo en 40 de 40
+      R5: 1194 eventos, rho 0.986, cota 1.165, explosivos 6, estado 3
+[OK   ] R5   ramificacion critica: NO_IDENTIFICADO
+      R2bu caso 0: N contrario verdad 0.300, ajuste 0.336, basico [0.295, 0.360]; mismo signo 0.286 [0.245, 0.302]
+      R2bu caso 1: N contrario verdad 0.000, ajuste 0.010, basico [-0.028, 0.017]; mismo signo 0.304 [0.261, 0.331]
+[OK   ] R2bu excitacion de mismo signo y de signo contrario recuperadas en su intervalo basico (0.3 y 0.0)
+PASA

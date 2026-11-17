@@ -1,24 +1,28 @@
 # Bytecode de Python
-__pycache__/
-*.py[cod]
+#__pycache__/
+#*.py[cod]
+
 
 # Volcados de telemetría del Hilo Rápido (Sec. 8.6.2).
 # Cada bloque son 10 000 registros; se regeneran en cada corrida.
-telemetria/
-*.parquet
-*.h5
+#telemetria/
+#*.parquet
+#*.h5
 
 # Entornos virtuales
-.venv/
-venv/
-env/
+#.venv/
+#venv/
+#env/
 
 # Artefactos de compilación de los núcleos acelerados (Numba / CUDA / acados)
-*.so
-*.pyd
-c_generated_code/
+#*.so
+#*.pyd
+#c_generated_code/
 
 # Credenciales y secretos.
+# ⚠ REACTIVADAS el 17/09/2026 (A0 de la ORDEN 6.0): estaban COMENTADAS,
+#   y por eso `Claves Coinbase.env` acabo RASTREADO. `.env` a secas no casa
+#   con `*.env`. Descomentar esto no destraquea lo ya rastreado.
 # NUNCA commitear: el repositorio es publico y un secreto commiteado sobrevive
 # en el historial de git aunque se borre el archivo despues.
 *Credenciales*
@@ -26,34 +30,295 @@ c_generated_code/
 *.key
 *.pem
 .env
+*.env
 .env.*
 secrets.*
 
 # Volcados sueltos de telemetria fuera de telemetria/ (Sec. 8.6.2)
-telem_*.npy
+#telem_*.npy
 
 # Sistema operativo / editor
-.vscode/
-.idea/
-Thumbs.db
-desktop.ini
+#.vscode/
+#.idea/
+#Thumbs.db
+#desktop.ini
 
 # Resumenes y diagnosticos por episodio (Sec. C.5): se regeneran en cada corrida
-episodios/
+#episodios/
 
 # Logs de corridas: se regeneran
-corrida_*.log
+#corrida_*.log
 
 # Capturas de mercado para el test §5.2: se regeneran
-captura_*.npz
-captura_*.log
+#captura_*.npz
+#captura_*.log
 
 # Conversiones de los PDF a Markdown: se regeneran desde el PDF
 Markdown de PDF*/
 
 # Logs de SSA: se regeneran con barrido_ssa.py / phi_precio.py
-ssa_log/
-ssa_log_*.txt
-phi_*.txt
-telemetria/estacional/
-captura_estacional.log
+#ssa_log/
+#ssa_log_*.txt
+#phi_*.txt
+#telemetria/estacional/
+#captura_estacional.log
+
+#Claves de Coinbase
+
+# ===========================================================================
+# DATOS DE BLOOMBERG -- NUNCA COMMITEAR   (anadido el 21/09/2026)
+# ===========================================================================
+# El `origin` de este repo es PUBLICO y la redistribucion de datos de
+# Bloomberg esta restringida por sus terminos de licencia. Esto cubre la
+# extraccion cruda Y cualquier cache derivado que conserve NIVELES de precio.
+# (Una serie de RETORNOS o un estadistico agregado no son redistribucion de
+#  la serie; los niveles OHLC si.)
+#
+# ⚠⚠ ESTO NO DESTRAQUEA LO YA RASTREADO. Al escribir esto ya estaban en el
+#    historial publico, con niveles OHLC de DXY / ES1 / USGG10YR / VIX /
+#    IBIT / XBTUSD:
+#        Bloomberg y modelo Macro/bloomberg_macro_btc_diario.csv
+#        Bloomberg y modelo Macro/prueba/bloomberg_macro_btc.csv
+#        Bloomberg y modelo Macro/prueba/bloomberg_macro_btc_diario.csv
+#        Bloomberg y modelo Macro/micelio_bdh_plantilla.xlsx
+#    Retirarlos del arbol exige `git rm --cached`, y del HISTORIAL exige
+#    reescribirlo. Es decision del operador. Mismo patron que la nota de
+#    `Claves Coinbase.env` de arriba: un `.gitignore` solo protege del
+#    proximo commit, no del anterior.
+#
+# NOTA: no se bloquean las capturas de pantalla por patron (romperia las
+# legitimas). Una captura de una terminal de Bloomberg es del mismo tipo de
+# dato -- revisarla a mano antes de anadirla.
+
+# Carpeta para extracciones crudas. Poner aqui los .xlsx del terminal.
+datos_bloomberg/*
+
+# Cache derivado del libro: conserva NIVELES OHLC, asi que es redistribucion.
+# (Las ACTAS y los JSON de resultados NO: solo llevan estadisticos.)
+cachas/macro_bbg/
+cachas/macro_mix/
+cachas/macro_div/
+# ⚠⚠ Anadidos el 2026-09-24. `macro_agro` y `macro_d1` llevaban NIVELES OHLC y
+#   NO estaban ignorados; `horario` son barras de una hora, que es peor todavia.
+#   El `origin` es publico: un nivel commiteado sobrevive en el historial aunque
+#   despues se borre el fichero, asi que la unica defensa barata es que no entre.
+cachas/macro_agro/
+cachas/macro_d1/
+cachas/horario/
+# ⚠⚠ Y `horario_ohlc` el 2026-09-24 (h): son barras horarias con OHLC COMPLETO,
+#   o sea la version peor de lo mismo -- y no basto con que `horario/` estuviera
+#   ignorado, porque el nombre es otro. **Tercera vez que un cache nuevo nace
+#   fuera del `.gitignore`** (I62 fueron `macro_agro`, `macro_d1` y `horario`).
+#   Impacto realizado: CERO, verificado con `git ls-files` y `git log --all`.
+cachas/horario_ohlc/
+
+# ⚠⚠⚠ REGLA GENERAL, anadida el 2026-09-24 (h) tras la TERCERA reincidencia.
+#   Ignorar los caches UNO A UNO no funciona: cada tanda crea uno nuevo con un
+#   nombre nuevo y nace fuera. Se ignora el ARBOL ENTERO y se exceptua a mano
+#   lo que de verdad haga falta versionar (por ahora, nada).
+#
+#   ⚠ Esto NO desrastrea lo que ya entro. `git ls-files cachas/` devuelve **20
+#   ficheros, 195 MB**, metidos en el commit `1b0485e` -- entre ellos
+#   `scratch_mid_m.npy` (2 459 252 precios medios de BTC) y los trades crudos
+#   de Bitfinex y de Coinbase. Verificado que **NO han llegado a `origin`**
+#   (`git log origin/master -- cachas/` sale vacio), asi que la exposicion es
+#   LATENTE y se realiza en cuanto alguien empuje. Sacarlos del indice o
+#   reescribir el historial es decision del operador, no se hace aqui.
+cachas/*
+
+# El libro traido en USB el 21/09/2026 y su familia
+*Indices EE.UU*
+
+# Extracciones y caches derivados, en cualquier carpeta
+*bloomberg*.csv
+*Bloomberg*.csv
+*bloomberg*.xlsx
+*Bloomberg*.xlsx
+*bloomberg*.parquet
+*bloomberg*.npy
+*bloomberg*.npz
+bbg_*
+*_bbg.csv
+*_bbg.npy
+*_bbg.npz
+
+# ===========================================================================
+# DATOS PESADOS Y BYTECODE -- anadido el 2026-09-27 por orden del operador
+# ===========================================================================
+# ⚠⚠⚠ LEER ANTES DE CREER QUE ESTO DESACTIVA ALGO.
+#
+#   Un `.gitignore` gobierna el PROXIMO commit. No destraquea nada, y menos
+#   aun saca nada del HISTORIAL. Medido el 2026-09-27, ANTES de esta tanda:
+#
+#       rastreados Y YA COMMITEADOS en HEAD : 13 507 ficheros, 10.36 GB
+#           telemetria/estacional/           8 827 ficheros,  6.94 GB
+#           telemetria/mmap_*/                  35 ficheros,  2.04 GB
+#           ssa_log/                           235 ficheros,  0.27 GB
+#           cachas/                             20 ficheros,  0.20 GB  <- sacada hoy
+#
+#   Esta tanda saca del INDICE 211 ficheros (cachas/, data/, los 4 de
+#   Bloomberg con niveles OHLC, y 136 `.pyc`). Los otros ~13 300 siguen
+#   rastreados y siguen en la historia.
+#
+#   ⚠ Y hay un hecho que decide la migracion: **5 ficheros rastreados superan
+#   los 100 MB**, que es el limite DURO de GitHub por fichero
+#   (`telemetria/mmap_estacional_1/{t,precio,mid,bid,ask}.npy`, 159.9 MB cada
+#   uno). Un `git push` a GitHub se RECHAZA, no se degrada. Eso explica por si
+#   solo por que nada se ha empujado nunca.
+#
+#   Vaciar la bomba de verdad exige una de dos, y las dos son decision del
+#   operador: (a) no empujar esta rama nunca, o (b) reescribir el historial
+#   (`git filter-repo`) o arrancar una rama huerfana limpia.
+
+# Bytecode: 136 `.pyc` estaban RASTREADOS y generaban 103 ficheros
+# "modificados" en cada `git status` sin que nadie tocara el codigo.
+__pycache__/
+*.pyc
+*.pyo
+
+# Figuras y tablas de exploracion. Su propio README dice que **ninguna
+# respalda un veredicto**, y sus 6 `.csv` son derivados regenerables.
+data/*
+
+# Barrido SSA de una linea REFUTADA (la escalera de la ventana, v3.2).
+ssa_log/*
+
+# Datos en bruto y derivados, en cualquier carpeta.
+# ⚠ `*.csv` y `*.npy` cubren los caches de Bloomberg y el estado intermedio de
+#   `tormenta_khaos` (`_tk_*.npy`), que son datos y se regeneran. Si alguna vez
+#   hace falta versionar uno concreto, la excepcion se pone con `!` y con su
+#   motivo escrito al lado -- no se retira el patron.
+*.parquet
+*.npz
+*.npy
+*.csv
+*.h5
+*.jsonl
+
+# Candados y escrituras parciales de procesos vivos. NUNCA se versionan: un
+# `.lock` commiteado hace que la siguiente instancia crea que hay otra viva.
+*.lock
+*.tmp
+_pid_*
+
+# ===========================================================================
+# ⚠⚠ MEMORIA DE ANTIGRAVITY -- COPIA DE TRANSITO, NUNCA SE COMMITEA
+# ===========================================================================
+# Copiada el 2026-09-28 desde `C:\Users\Usuario\.gemini\antigravity` para que
+# viaje en la USB con el proyecto (Protocolo de Exodo, paso 2). 1 425 ficheros,
+# 120.2 MB.
+#
+#   ⚠ Contiene 26 MB de `.jsonl` de CONVERSACIONES y 52 MB de SQLite con
+#     resumenes de conversacion. El `origin` de este repo es PUBLICO y un
+#     fichero commiteado sobrevive en el historial aunque despues se borre.
+#     No hay ningun fichero con nombre de credencial -- comprobado al copiar --
+#     pero el contenido de las conversaciones no se ha leido ni se leera, asi
+#     que se trata como sensible por defecto.
+#
+#   Es una copia de TRANSITO: cuando el proyecto este en el Reactor ARK, esta
+#   carpeta se restaura a su sitio (`~/.gemini/antigravity`) y se BORRA de aqui.
+memoria_antigravity_backup/
+
+# ⚠ La plantilla del terminal. Los patrones `*Bloomberg*.xlsx` de arriba NO la
+#   cogen: un patron sin `/` se compara contra el NOMBRE del fichero, y aqui
+#   «Bloomberg» esta en la CARPETA, no en el nombre. Por eso hace falta la ruta.
+Bloomberg y modelo Macro/*.xlsx
+
+# ⚠ NO se ignoran `*.json` ni `*.txt`: son las actas y los resultados, que son
+#   el ENTREGABLE del proyecto y llevan estadisticos, no niveles.
+
+# ===========================================================================
+# LA EXCEPCION: los README de las carpetas ignoradas
+# ===========================================================================
+# ⚠ Los patrones de arriba se escriben `<dir>/*` y NO `<dir>/`, y el motivo es
+#   una regla de git que no se puede rodear: **no se puede reincluir un fichero
+#   si su directorio padre esta excluido** -- git no desciende a un directorio
+#   excluido, asi que un `!` dentro no se evalua nunca. Con `<dir>/*` el
+#   directorio si se recorre y la excepcion funciona.
+#
+#   Hace falta porque `MAPA_DEL_REPO.md` afirma que las 25 carpetas con
+#   contenido tienen su README, y sin esto cuatro de ellos no se podrian
+#   commitear nunca: el mapa quedaria contradiciendo al repo.
+!cachas/README.md
+!data/README.md
+!ssa_log/README.md
+!datos_bloomberg/README.md
+
+# Reactor ARK: entorno local y ruedas descargadas (2026-09-28). Nunca al repo publico.
+.venv_ark/
+dependencias/
+
+# Puente de Telegram del operador: lleva TOKEN y CHAT_ID en claro. NUNCA al repo (origin publico).
+telemetria/telegram_bot.py
+KILL_SWITCH.txt
+centinela_dual_estado.txt
+telemetria/centinela_vigia/
+
+# Catalogo descriptivo de CABALLERO (2026-09-29, orden del operador: «pueden versionarse»). Es un
+# DERIVADO de la captura publica de Binance BTCUSDT (sin Bloomberg), no un cache de proveedor; el
+# `*.csv` de arriba sigue en pie para todo lo demas.
+!boveda_fase1/resultados_json/catalogo_caballero.csv
+# 2026-09-30: deposito del Comandante con los libros de 1 min de Bloomberg (niveles; ~223 MB). La carpeta
+# quedo en la raiz con el nombre literal de la directiva y NO bajo cachas/, asi que hay que ignorarla aparte.
+cachasbloomberg_vix/
+*.xlsx
+
+# motor_diario.py (OT1, 2026-10-01): salida estandar y errores del proceso en reposo
+telemetria/motor_diario_salida.log
+telemetria/motor_diario_error.log
+telemetria/_motor_pid_*.tmp
+
+# Datos personales del bot de finanzas (ingresos, saldos, CDT, prestamos): NUNCA al repo publico
+telemetria/finanzas/
+
+# 2026-10-07, orden del Comandante: ideas locas, agenda de viaje y registro de cagadas van al gitignore; son lo mas
+# valioso y no pueden salir. Rutas exactas de las copias que existen hoy, y patrones para las que se creen despues.
+# OJO: ignorar NO saca un fichero de los commits que ya lo contienen (los 448 sin empujar del 2026-10-07 si lo hacen).
+/BITACORA DE VIAJE.md
+/boveda_fase1/actas/bitacora_viaje.txt
+/REGISTRO CAGADAS.md
+/mensajes/REGISTRO CAGADAS.md
+/Órdenes de trabajo y Prerregistros/REGISTRO_CAGADAS.md
+/Órdenes de trabajo y Prerregistros/IDEAS_LOCAS.md
+*CAGADAS*
+*IDEAS_LOCAS*
+*IDEAS LOCAS*
+*BITACORA*VIAJE*
+*bitacora_viaje*
+*AGENDA*VIAJE*
+
+# hpc_cxx: artefactos de compilacion y el fichero de referencia del banco C0 (se regenera con referencia_python.py)
+hpc_cxx/build/
+hpc_cxx/tests/data/
+
+# literatura primaria de terceros (PDF con derechos de autor; el origin es publico): se guarda, no se versiona (7d12b70, 2026-10-17)
+boveda_fase1/literatura/primarias/
+
+# Bucle del capturador de Uniswap v3 (estado y consola en tiempo de ejecucion; el dato vive en cachas/uniswap_v3/)
+telemetria/uniswap_v3/
+
+# Salidas redirigidas de la reproduccion de Argon en la auditoria de Eka (no se versionan)
+telemetria/auditoria_eka_lotka_volterra_repro/
+
+# ARK 1.0 (C++): binarios, referencias grandes y estado de ejecucion (diario y libros de papel: registro privado de operaciones)
+ark_cxx/build/
+ark_cxx/tests/data/
+ark_cxx/tests/data_referencia.log
+telemetria/ark/salud/
+telemetria/ark/papel/
+telemetria/ark/diario.jsonl
+telemetria/ark/ark.log
+telemetria/ark/ark_consola.log
+telemetria/ark/latido.json
+telemetria/ark/salud_estado.json
+telemetria/ark/AUTORIZACION_MAINNET.json
+
+# 2026-11-17, orden del Comandante: Carpeta del Comandante y binarios de pruebas piloto/base auditada nunca al repo
+/Carpeta del Comandante/
+ark_cxx/base_auditada/tests/build/
+ARQUITECTO DE DATOS/Pruebas del Operador de Lilyth_Correcciones Piloto/build/
+JEFE DE ARQUITECTOS DE CODIGO/PRUEBAS_JEFE/**/build/
+*.exe
+*.obj
+*.pdb
+*.ilk

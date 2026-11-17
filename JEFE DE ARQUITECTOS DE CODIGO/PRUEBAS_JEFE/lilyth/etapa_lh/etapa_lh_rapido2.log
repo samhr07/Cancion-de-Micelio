@@ -1,0 +1,45 @@
+﻿      R1: AR(1) phi 0.88 con choques Poisson SIN replicas, 4 semillas
+         [ 0] est=2 alarmas=165 rho_aux=0.279 it=0 conv=0 rho=nan [nan, nan] p_lr=0.4437 N_mismo=nan [nan, nan] N_contr=nan [nan, nan] bib=75/64 LH=0 p_iid=0.001 p_ons=0.8990 p_lh=nan ev=21/0 cortes real 0/21 nulo 0/0
+         [ 1] est=2 alarmas=156 rho_aux=0.234 it=0 conv=0 rho=nan [nan, nan] p_lr=0.2500 N_mismo=nan [nan, nan] N_contr=nan [nan, nan] bib=55/72 LH=0 p_iid=0.001 p_ons=0.0730 p_lh=nan ev=27/0 cortes real 0/27 nulo 0/0
+         [ 2] est=1 alarmas=196 rho_aux=0.263 it=2 conv=1 rho=0.013 [-0.127, 0.121] p_lr=0.0500 N_mismo=0.013 [-0.138, 0.139] N_contr=0.000 [0.000, inf] bib=85/75 LH=1 p_iid=0.001 p_ons=0.0835 p_lh=0.0105 ev=26/18 cortes real 0/26 nulo 0/157
+         [ 3] est=2 alarmas=175 rho_aux=0.240 it=0 conv=0 rho=nan [nan, nan] p_lr=0.3000 N_mismo=nan [nan, nan] N_contr=nan [nan, nan] bib=69/74 LH=0 p_iid=0.001 p_ons=0.6715 p_lh=nan ev=30/0 cortes real 0/30 nulo 0/0
+      R1: DECIDIBLE 1/4 (banda 0.9); familia de 6 con p_LH = 1 en 3/4; Onsager rechaza 0/4
+[FALLA] R1   sin replicas el ajuste no pasa su nulo (<= alfa + banda) y L+H entra en Holm con p = 1
+      R2: replicas de mismo signo n = 0.3, 4 semillas
+         [ 0] est=1 alarmas=205 rho_aux=0.410 it=3 conv=1 rho=0.217 [0.129, 0.307] p_lr=0.0063 N_mismo=0.217 [0.105, 0.319] N_contr=0.000 [0.000, inf] bib=98/65 LH=1 p_iid=0.001 p_ons=0.5570 p_lh=0.6600 ev=23/14 cortes real 0/23 nulo 0/119
+         [ 1] est=1 alarmas=214 rho_aux=0.365 it=2 conv=1 rho=0.104 [0.014, 0.199] p_lr=0.0063 N_mismo=0.104 [-0.022, 0.204] N_contr=0.000 [0.000, inf] bib=81/86 LH=1 p_iid=0.001 p_ons=0.9300 p_lh=0.9500 ev=26/19 cortes real 0/26 nulo 0/152
+         [ 2] est=1 alarmas=257 rho_aux=0.423 it=2 conv=1 rho=0.162 [0.066, 0.263] p_lr=0.0063 N_mismo=0.162 [0.035, 0.286] N_contr=0.000 [-0.000, 0.000] bib=92/96 LH=1 p_iid=0.001 p_ons=0.1605 p_lh=0.0135 ev=36/30 cortes real 0/36 nulo 0/243
+         [ 3] est=1 alarmas=212 rho_aux=0.441 it=2 conv=1 rho=0.195 [0.118, 0.267] p_lr=0.0063 N_mismo=0.195 [0.099, 0.285] N_contr=0.000 [0.000, inf] bib=87/76 LH=1 p_iid=0.001 p_ons=0.5920 p_lh=0.2595 ev=22/16 cortes real 0/22 nulo 0/135
+      R2 n=0.3 (verdad por choque): DECIDIBLE 4/4; converge 4/4; contrario compatible con 0 4/4; L+H rechaza 1/4 (banda 0.9); Onsager rechaza 0/4
+[FALLA] R2a  replicas de mismo signo: pasa su nulo, la inferencia converge, cruzada ~ 0 y L+H con tamano <= alfa
+      R2: replicas de mismo signo n = 0.6, 4 semillas
+         [ 0] est=1 alarmas=420 rho_aux=0.663 it=3 conv=1 rho=0.220 [0.173, 0.271] p_lr=0.0063 N_mismo=0.220 [0.152, 0.284] N_contr=19735471.030 [19735471.030, 19735471.030] bib=120/126 LH=1 p_iid=0.001 p_ons=0.0005 p_lh=0.0350 ev=48/24 cortes real 0/48 nulo 0/263
+         [ 1] est=1 alarmas=434 rho_aux=0.692 it=3 conv=1 rho=0.233 [0.191, 0.292] p_lr=0.0063 N_mismo=0.233 [0.182, 0.305] N_contr=0.000 [0.000, inf] bib=123/112 LH=1 p_iid=0.001 p_ons=0.0520 p_lh=0.0075 ev=31/22 cortes real 0/31 nulo 0/197
+         [ 2] est=1 alarmas=274 rho_aux=0.603 it=2 conv=1 rho=0.280 [0.208, 0.366] p_lr=0.0063 N_mismo=0.280 [0.185, 0.389] N_contr=104301152340182272385988165632.000 [104295494677211550984798470144.000, 104301152340182272385988165632.000] bib=114/70 LH=1 p_iid=0.001 p_ons=0.1700 p_lh=0.1920 ev=36/29 cortes real 0/39 nulo 0/245
+         [ 3] est=1 alarmas=299 rho_aux=0.585 it=2 conv=1 rho=0.112 [0.055, 0.163] p_lr=0.0063 N_mismo=0.112 [0.049, 0.168] N_contr=0.000 [0.000, inf] bib=78/102 LH=1 p_iid=0.001 p_ons=0.0770 p_lh=0.9055 ev=32/19 cortes real 0/32 nulo 0/192
+      R2 n=0.6 (verdad por choque): DECIDIBLE 4/4; converge 4/4; contrario compatible con 0 2/4; L+H rechaza 2/4 (banda 0.9); Onsager rechaza 1/4
+[FALLA] R2b' replicas de mismo signo: pasa su nulo, la inferencia converge, cruzada ~ 0 y L+H con tamano <= alfa
+      R2 (reporte): Onsager rechaza en n = 0.6 en 1 de 4 semillas (S1 lo vio en una)
+      R2b: replicas de signo contrario n = 0.4, 4 semillas
+         [ 0] est=1 alarmas=184 rho_aux=0.372 it=2 conv=1 rho=0.438 [0.277, 0.564] p_lr=0.0063 N_mismo=0.160 [0.023, 0.267] N_contr=0.529 [0.354, 0.673] bib=69/85 LH=1 p_iid=0.001 p_ons=0.9955 p_lh=0.7875 ev=34/25 cortes real 0/34 nulo 0/231
+         [ 1] est=1 alarmas=192 rho_aux=0.320 it=2 conv=1 rho=0.193 [0.083, 0.296] p_lr=0.0125 N_mismo=0.175 [0.051, 0.282] N_contr=0.051 [0.000, inf] bib=77/87 LH=1 p_iid=0.001 p_ons=0.2060 p_lh=0.8090 ev=31/20 cortes real 0/31 nulo 0/195
+         [ 2] est=1 alarmas=215 rho_aux=0.324 it=2 conv=1 rho=0.339 [0.185, 0.486] p_lr=0.0187 N_mismo=0.002 [-0.156, 0.125] N_contr=0.288 [0.166, 0.379] bib=92/87 LH=1 p_iid=0.001 p_ons=0.3430 p_lh=0.4130 ev=49/35 cortes real 0/50 nulo 0/316
+         [ 3] est=1 alarmas=194 rho_aux=0.347 it=2 conv=1 rho=0.344 [0.208, 0.475] p_lr=0.0250 N_mismo=0.073 [-0.054, 0.214] N_contr=0.391 [0.292, 0.482] bib=85/92 LH=1 p_iid=0.001 p_ons=0.9100 p_lh=0.7665 ev=38/26 cortes real 0/38 nulo 0/229
+      R2b: DECIDIBLE 4/4; cruzada estructural que excluye el 0 3/4; cortados reales 0/153 = 0.000, en el nulo L+H 0/971 = 0.000 (banda +-0.000)
+[FALLA] R2b  replicas de signo contrario: la cruzada estructural excluye el 0 y cortes del nulo L+H = cortes reales en su banda
+      R3: TAR con replicas de mismo signo n = 0.5, 4 semillas
+         [ 0] est=3 alarmas=313 rho_aux=0.344 it=3 conv=1 rho=0.978 [0.866, 1.079] p_lr=0.0063 N_mismo=0.978 [0.849, 1.089] N_contr=0.000 [0.000, inf] bib=165/148 LH=0 p_iid=0.001 p_ons=0.0005 p_lh=nan ev=284/0 cortes real 0/292 nulo 0/0
+         [ 1] est=3 alarmas=298 rho_aux=0.354 it=3 conv=1 rho=0.954 [0.839, 1.063] p_lr=0.0063 N_mismo=0.954 [0.816, 1.092] N_contr=0.000 [0.000, inf] bib=141/157 LH=0 p_iid=0.001 p_ons=0.0005 p_lh=nan ev=335/0 cortes real 0/357 nulo 0/0
+         [ 2] est=1 alarmas=309 rho_aux=0.333 it=3 conv=1 rho=0.885 [0.781, 0.995] p_lr=0.0063 N_mismo=0.885 [0.762, 1.014] N_contr=0.000 [0.000, inf] bib=164/145 LH=1 p_iid=0.001 p_ons=0.0005 p_lh=0.0005 ev=287/154 cortes real 0/303 nulo 0/1556
+         [ 3] est=3 alarmas=290 rho_aux=0.330 it=5 conv=1 rho=1.152 [1.006, 1.336] p_lr=0.0063 N_mismo=1.152 [0.980, 1.357] N_contr=0.000 [0.000, inf] bib=131/159 LH=0 p_iid=0.001 p_ons=0.0005 p_lh=nan ev=293/0 cortes real 0/312 nulo 0/0
+      R3: L+H rechaza 1/1, con S > 0 en 1
+[OK   ] R3   TAR con replicas: L+H rechaza en la mayoria de semillas (la no linealidad no se la come la autoexcitacion)
+      R6: estado 1, rho 0.212, biblioteca 105/110; cerradas en los dos tramos 40 y 46
+[OK   ] R6   la ficha de replicas y las marcas son las de calibrar y no dependen del tramo medido
+      R7: 40 inyecciones aisladas con hijas: hijas 187, solapes 26, previas 26, reaperturas posteriores 28, admitidas 10
+[OK   ] R7   las hijas son parte de su inyeccion: solapes = aperturas previas y las reaperturas posteriores no contaminan
+      R8: via (b) Onsager 8 eventos en 10 intentos; L+H con a = 0 8 en 10
+[OK   ] R8   con a = 0 la via (b) L+H es la de Onsager bit a bit
+      D-ARFIMA: modelo valido d=0.30, ceros exactos despues de 16 384: 0 de 23616
+[OK   ] D-AR la via (a) ARFIMA con calibracion larga no deja la cola en cero
+FALLA: 4 fallas

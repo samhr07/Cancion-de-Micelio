@@ -1,0 +1,41 @@
+﻿[OK   ] K1   identidad del operador delta con y sin Lilyth y cero reservas en paso
+      P1: T_max=2 (ref 2) med_delta_iid=-0.50 p_iid=0.261 p_ons=0.708
+[OK   ] P1   ruido iid: tau_rest ~1 paso, Delta_tau_iid compatible con 0 y excedencia/PIT/T_max = referencia
+      P2:  T_max=9 (ref 9) med_delta_iid=4.00 (p=0.0005) med_delta_ons=2.50 (p=0.132) semivida_a=3.00
+      P2b: semivida_b=3.00 (dif=0.00) med_delta_ons=2.50 (p=0.132)
+[OK   ] P2   AR(1) phi=0.8: Delta_tau_iid > 0 (p < alfa), Delta_tau_Onsager compatible con 0 y excedencia = ref
+[OK   ] P2b  mismo mundo forzando via (b): nulo_por_inyeccion = true y semivida de (b) coincide con la de (a)
+      P3a: TAR med_delta_ons=2.00 S_ons=0.377 p_ons=0.0005
+[OK   ] P3a  TAR no lineal con la misma ACF de calma: Delta_tau_Onsager > 0 con p < alfa
+      P3b: AR(1) max_z=1.43 (n=6) | AR(2) max_z=1.97 (n=18)
+[OK   ] P3b  AR(1) y AR(2): eta_barra(tau) sigue la ACF de la calma dentro de la banda de bootstrap
+      P10: T_max=120 raiz_unitaria=1 med_delta_ons=14.50 p_ons=0.264
+[OK   ] P10  paseo aleatorio en NIVEL: T_max = W_ancla (120) marcado como raiz unitaria y Delta_tau_Onsager ~ 0
+[OK   ] P12  BLOQUES se rechaza en calibrar; FASE_ALEATORIZADA_FFT cae al modelo generativo y la ficha lo marca
+      N1 (208 semillas validas): tasa_rechazo_iid=0.005, tasa_rechazo_ons=0.005 (cota 0.088)
+[OK   ] N1   tamano bajo el nulo (>= 200 semillas): las dos pruebas rechazan a tasa <= alfa + su error de Monte Carlo
+[OK   ] N2   independencia de realizaciones: 1 hilo y 4 hilos producen poblaciones nulas identicas bit a bit
+      N3: B=5 n_nueva=214 (modulo=214) n_reuso=132 casa=1 difiere=1
+[OK   ] N3   Regla 7: cada realizacion parte de una copia nueva del operador delta (= ref bit a bit, distinto de reusar PurgaDiurna)
+         [S1 n=0.0] cont=7/7 rep=2/2 cif=0.000/0.000 p_ons=0.684 p_det=0.98 comp=16/16
+         [S1 n=0.3] cont=8/8 rep=13/13 cif=0.143/0.143 p_ons=0.809 p_det=0.95 comp=18/10
+         [S1 n=0.6] cont=15/15 rep=12/12 cif=0.135/0.135 p_ons=0.005 p_det=0.97 comp=17/10
+         [PREEXPECTATIVA S1(iii) NO CUMPLIDA] n=0.6: p_Onsager=0.0050 < alfa
+      S1: CIF_rep(n=0,0.3,0.6)=(0.000, 0.143, 0.135) p_ons=(0.684, 0.809, 0.005) p_det=(0.98, 0.95, 0.97)
+[OK   ] S1   Hawkes n in {0, 0.3, 0.6}: E1.21 = verdad, CIF_replica dentro de banda y p_det estable (Onsager: preexpectativa aparte)
+      S2: dist_min=266 geo=1 | sub(sol=2, adm=0) borde(sol=2, adm=0) sup(sol=0, adm=2)
+      S2 contaminacion: con guarda 80 de 40 pares descartados (2 por par); sin guarda segunda inyeccion tau_med=19.5 (n=40) contra aislada 27.0 (n=39)
+      S2 propias: aisladas con solape=1, con apertura previa=1, con reapertura posterior=1 (no cuenta) | S2c destino=1
+[OK   ] S2   ventanas solapadas: subcritica y borde se descartan, supercritica entra; sin guarda la contaminacion cambia tau
+      S3: p_det=0 -> intentos=8 sin_nulo_b=1 | umbral -> p_det_prom=0.57 int_prom=13.7 (NB=14.1) truncadas=16/40
+[OK   ] S3   integridad de la parada: p_det=0 para en m_min con sin_nulo_b; p_det intermedio respeta ceil(m_min/p_det_inicial)
+      D1: iid (a=0 b=19 sin=0) Onsager (a=0 b=13 sin=6) | nulos en (a): iid=0 lineal=11 | bajo m_min=0 excedencia mal=0 | p_iid=0.0010 p_ons=0.0020
+[OK   ] D1   sin relleno: ningun nulo con < m_min, excedencia exacta en (a), via (b) sin memoria ejercida y Delta_tau_iid > 0 se ve
+      D1b: fuerte n_b=8 intentos=8 tau<=l en 8 | invisible n_b=0 intentos=8 sin_nulo_b=1
+[OK   ] D1b  via (b) sin memoria: perfil fuerte se detecta y la serie no responde; perfil invisible queda sin nulo (sin fabricar)
+      D7: espejo vs PurgaDiurna 0 difs en 6600 | ida y vuelta max_rel=1.87e-16 (3000 validos, sin_factor=0) | Lilyth PURGADA calibra=1 discrepancias=0 nulos(a): iid=0 lin=20
+[OK   ] D7   purga en los nulos: espejo = PurgaDiurna bit a bit, ida y vuelta exacta y la rama PURGADA calibra sus nulos
+      D1c: pool 120 nulos -> 88 PIT (referencia 88)
+[OK   ] D1c  pool del Monte Carlo = PIT contra la excedencia sin el mismo, solo con m_min (= referencia)
+
+PASA: 0 fallas

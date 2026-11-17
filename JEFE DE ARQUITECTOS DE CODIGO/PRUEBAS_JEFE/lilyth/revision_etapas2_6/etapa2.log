@@ -1,0 +1,22 @@
+﻿      L1: K=7 p=4 max_err_phi=2.78e-17 max_err_kappa=6.94e-18 err_sigma2=0.00e+00
+[OK   ] L1   Levinson-Durbin = eliminacion de Gauss directa sobre la Toeplitz (phi, kappa y sigma2_innov a <= 1e-12)
+      L2: p=2 phi1=0.6033 (0.6, 2ee=0.0149) phi2=-0.3015 (-0.3) radio=0.5491 burn_in=61 var_t0/sd2=0.994
+[OK   ] L2   AR(2) conocido (phi 0.6, -0.3): phi dentro de 2 ee, p = 2 y burn_in calienta la varianza en t = 0
+      L2b: K=18 p=18 kappa1=0.502 kappa2=-0.010 (<= 0.015) kappa3=0.398
+[OK   ] L2b  Quenouille elige el ULTIMO kappa significativo (p >= 3 aunque kappa_2 no sea significativo)
+[OK   ] L3   ruido iid: p = 0, phi vacio, radio_max = 0 y burn_in = 0
+      L4: max_dif (AR y ARFIMA) = 4.44e-15
+[OK   ] L4   ida y vuelta: simular con innovaciones fijas -> innovaciones = las mismas a <= 1e-12
+      L5: p=1 max_dif con historia previa = 3.55e-15
+[OK   ] L5   filtro inverso reconstruye las innovaciones de un AR(1) a mitad de serie usando su historia previa (<= 1e-12)
+      L6: p=0 burn_in=4096 acf1(x_sim)=0.4344 acf1(Delta^d x_sim)=0.0025 (cota 0.0469)
+[OK   ] L6   ARFIMA(0, 0.3, 0): simular genera memoria larga (acf1 > 0.25) y al diferenciar con d = 0.3 vuelve a ruido blanco
+      L7 motivos: sin_d='ARFIMA sin d_externa finita' | d=0.5='ARFIMA con |d_externa| >= 0.5 (no estacionario o no invertible)' | rw='raiz unitaria: la ACF no entra en la banda del nulo en n/4 rezagos'
+[OK   ] L7   ARFIMA sin d o con |d| >= 0.5, y paseo aleatorio (raiz unitaria) dan valido = false con su motivo
+[OK   ] L8   FASE_ALEATORIZADA_FFT marca cayo_a_generativo = true y usa AR_LEVINSON_DURBIN (E1.19)
+[OK   ] L9   los residuos se calculan con t >= p dentro de cada segmento y nunca cruzan el corte entre segmentos
+[OK   ] L10  cero reservas de memoria dinamica en innovaciones y simular (AR y ARFIMA)
+      P8: t_a=504 l*=5 tau_serie_fija=1.0 (esperado 1.0), tau_modelo_generativo=4.0 (esperado >= 3.0)
+[OK   ] P8   contra ObservadorSaltos real: inyeccion en serie fija restituye en tau = 1; el modelo generativo se propaga (tau >= 3)
+
+PASA: 0 fallas

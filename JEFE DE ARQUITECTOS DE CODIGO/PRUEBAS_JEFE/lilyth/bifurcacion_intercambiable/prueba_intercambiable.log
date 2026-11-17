@@ -1,0 +1,10 @@
+﻿Bifurcacion del contraste del resumen de Lilyth: controles con verdad conocida (XB.1, EXB.v), B = 1999, alfa = 0.05
+[PASA] XB.1a p_min distinto de la enumeracion 0/20; p de Monte Carlo a > 4 sd 0/20 (peor 2.50107 sd)
+[PASA] XB.1b tasa de rechazo de la intercambiable (techo 0.0625734): K 1: 0; K 3: 0.038; K 10: 0.046; 
+[NO SE CUMPLE] EXB.v rama vieja en las mismas replicas: K 1: 0.0285; K 3: 0.04; K 10: 0.048; (se esperaba > 0.0625734 con K = 1)
+[PASA] XB.1c p_min 0.222222, resoluble 0, p 0.235 (rama vieja: p 0.135)
+[PASA] XB.1d rechazo 0.928 (>= 0.8)
+[PASA] XB.1e S 0, p 1, p_min 1
+[FALLA] XB.1f 99 nulos: p_min 0.02 resoluble 0; 50 nulos: p_min 0.0392157 resoluble 0
+[DATO] XB.1f' (posterior): p_min con 199 / 159 / 158 nulos = 0.01 / 0.0125 / 0.0125786; resoluble 1 / 1 / 0 (umbral alfa/4 = 0.0125)
+1 fallas
