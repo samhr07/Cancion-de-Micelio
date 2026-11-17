@@ -1,0 +1,42 @@
+HORIZONTE: CUANTIL_ALFA (E1.9 de Argon)
+== POOL DERIVADO (EC6): mundo lineal AR(1) phi 0.82, tormenta 12 en t = 200, 400 replicas por caso ==
+  tamano M_MIN       ok 400, familia valida 330; K: 0:400 1:0 2:0 3:0 4:0 5+:0; resolubles 11; llegan a n* 330; rechazo Onsager 0/330 = 0.0000 [0.0000, 0.0115], por lenta 0
+[PASA] condicion EC6m (mecanica, anadida antes de los mutantes): tamano M_MIN: series con objetivo, K o via (b) incoherentes con el diseno A2: 0; omision M_MIN: si
+[PASA] condicion ET1 (mecanica): tamano M_MIN: T_max distinto del recalculo independiente: 0; T_max menor que el de E1.9: 0; raiz unitaria (no comparada): 0; T_max p10/p50/p90 = 6.0000/9.0000/14.0000; tormentas reales evaluadas censuradas 19/306
+  tamano DERIVADO    ok 400, familia valida 346; K: 0:52 1:313 2:35 3:0 4:0 5+:0; resolubles 206; llegan a n* 221; rechazo Onsager 5/346 = 0.0145 [0.0062, 0.0334], por lenta 4
+[PASA] condicion EC6m (mecanica, anadida antes de los mutantes): tamano DERIVADO: series con objetivo, K o via (b) incoherentes con el diseno A2: 0; omision M_MIN: si
+[PASA] condicion ET1 (mecanica): tamano DERIVADO: T_max distinto del recalculo independiente: 0; T_max menor que el de E1.9: 0; raiz unitaria (no comparada): 0; T_max p10/p50/p90 = 6.0000/9.0000/14.0000; tormentas reales evaluadas censuradas 20/319
+[FALLA] condicion EC6a (tamano): series con resoluble distinto de prod(n_k+1) >= 160: 104; con un evento evaluado bajo m_min: 0; resolubles con p_min > alfa/4: 0
+[NO SE CUMPLE] expectativa EC6a' DECLARADO TRAS SELLAR, RETIRADO (tamano): de las 104 discrepancias, explicadas por un empate del real en su extremo: 19; resolubles con prod < 160: 46 (el atajo tambien era falso: con extremos asimetricos p_min = 1/prod)
+[PASA] condicion EC6a'' DECLARADO TRAS SELLAR (tamano): p_min de la cabecera = enumeracion completa independiente (<= 1e-12) y resoluble = (p_min <= alfa/4): fallan 0 de 346 series enumerables
+  potencia M_MIN     ok 400, familia valida 383; K: 0:400 1:0 2:0 3:0 4:0 5+:0; resolubles 17; llegan a n* 383; rechazo Onsager 1/383 = 0.0026 [0.0005, 0.0146], por lenta 1
+[PASA] condicion EC6m (mecanica, anadida antes de los mutantes): potencia M_MIN: series con objetivo, K o via (b) incoherentes con el diseno A2: 0; omision M_MIN: si
+[PASA] condicion ET1 (mecanica): potencia M_MIN: T_max distinto del recalculo independiente: 0; T_max menor que el de E1.9: 0; raiz unitaria (no comparada): 0; T_max p10/p50/p90 = 6.0000/9.0000/14.0000; tormentas reales evaluadas censuradas 47/370
+  potencia DERIVADO  ok 400, familia valida 390; K: 0:5 1:340 2:55 3:0 4:0 5+:0; resolubles 242; llegan a n* 348; rechazo Onsager 27/390 = 0.0692 [0.0480, 0.0989], por lenta 26
+[PASA] condicion EC6m (mecanica, anadida antes de los mutantes): potencia DERIVADO: series con objetivo, K o via (b) incoherentes con el diseno A2: 0; omision M_MIN: si
+[PASA] condicion ET1 (mecanica): potencia DERIVADO: T_max distinto del recalculo independiente: 0; T_max menor que el de E1.9: 0; raiz unitaria (no comparada): 0; T_max p10/p50/p90 = 6.0000/9.0000/14.0000; tormentas reales evaluadas censuradas 47/371
+[FALLA] condicion EC6a (potencia): series con resoluble distinto de prod(n_k+1) >= 160: 122; con un evento evaluado bajo m_min: 0; resolubles con p_min > alfa/4: 0
+[NO SE CUMPLE] expectativa EC6a' DECLARADO TRAS SELLAR, RETIRADO (potencia): de las 122 discrepancias, explicadas por un empate del real en su extremo: 36; resolubles con prod < 160: 16 (el atajo tambien era falso: con extremos asimetricos p_min = 1/prod)
+[PASA] condicion EC6a'' DECLARADO TRAS SELLAR (potencia): p_min de la cabecera = enumeracion completa independiente (<= 1e-12) y resoluble = (p_min <= alfa/4): fallan 0 de 390 series enumerables
+[PASA] condicion EC6b: DERIVADO, tamano en la referencia Onsager: 5/346 = 0.0145 [0.0062, 0.0334] (Wilson inferior <= 0.05)
+[NO SE CUMPLE] expectativa EC6c: potencia por lenta, DERIVADO 26/390 = 0.0667 [0.0459, 0.0959] (>= 50 %), M_MIN 1/383 = 0.0026 [0.0005, 0.0146] (0 %)
+== M0 solo agrupamiento: pasada 1 del bufer: 100 tormentas, 91 medidas; posterior 17, previo 0; tasa de apertura en calma 0.0023 por paso (1/ARL0 = 0.0040) ==
+  CALMA     T_max medio 4.6500, n_fuente medio 5640.0000; Onsager rechaza por lenta 36/37 = 0.9730 [0.8618, 0.9952]; sin memoria por lenta 37; u_pit Onsager medio: sin z 0.9995 (n 482), con z nan (n 0)
+  VIENTO    T_max medio 20.1750, n_fuente medio 360.0000; Onsager rechaza por lenta 0/40 = 0.0000 [0.0000, 0.0876]; sin memoria por lenta 15; u_pit Onsager medio: sin z 0.6496 (n 178), con z nan (n 0)
+  COMPLETA  T_max medio 12.6250, n_fuente medio 6000.0000; Onsager rechaza por lenta 12/40 = 0.3000 [0.1807, 0.4543]; sin memoria por lenta 40; u_pit Onsager medio: sin z 0.9458 (n 238), con z nan (n 0)
+== M1 mecanismo universal: pasada 1 del bufer: 100 tormentas, 88 medidas; posterior 19, previo 0; tasa de apertura en calma 0.0023 por paso (1/ARL0 = 0.0040) ==
+  CALMA     T_max medio 6.8250, n_fuente medio 5600.0000; Onsager rechaza por lenta 35/40 = 0.8750 [0.7389, 0.9454]; sin memoria por lenta 40; u_pit Onsager medio: sin z nan (n 0), con z 0.9997 (n 402)
+  VIENTO    T_max medio 23.5250, n_fuente medio 400.0000; Onsager rechaza por lenta 0/40 = 0.0000 [0.0000, 0.0876]; sin memoria por lenta 0; u_pit Onsager medio: sin z nan (n 0), con z 0.6727 (n 216)
+  COMPLETA  T_max medio 18.5500, n_fuente medio 6000.0000; Onsager rechaza por lenta 1/40 = 0.0250 [0.0044, 0.1288]; sin memoria por lenta 40; u_pit Onsager medio: sin z nan (n 0), con z 0.9043 (n 207)
+== M2 mecanismo en 1 de 4: pasada 1 del bufer: 100 tormentas, 87 medidas; posterior 16, previo 0; tasa de apertura en calma 0.0027 por paso (1/ARL0 = 0.0040) ==
+  CALMA     T_max medio 5.5750, n_fuente medio 5660.0000; Onsager rechaza por lenta 39/40 = 0.9750 [0.8712, 0.9956]; sin memoria por lenta 40; u_pit Onsager medio: sin z 0.9989 (n 341), con z 1.0000 (n 113)
+  VIENTO    T_max medio 20.2000, n_fuente medio 340.0000; Onsager rechaza por lenta 0/40 = 0.0000 [0.0000, 0.0876]; sin memoria por lenta 7; u_pit Onsager medio: sin z 0.5825 (n 152), con z 0.7038 (n 65)
+  COMPLETA  T_max medio 14.6000, n_fuente medio 6000.0000; Onsager rechaza por lenta 6/40 = 0.1500 [0.0706, 0.2907]; sin memoria por lenta 40; u_pit Onsager medio: sin z 0.8956 (n 168), con z 0.9699 (n 54)
+[PASA] condicion EC8: n_fuente = muestras validas en la mascara: si; mascara de unos = vacia bit a bit: si; historia y operacion disjuntas: si; segmentos = tramos de la mascara (anadido antes de los mutantes): si
+[SE CUMPLE] expectativa EC1: M0 VIENTO 0/40 = 0.0000 [0.0000, 0.0876] (Wilson inferior <= 0.05)
+[SE CUMPLE] expectativa EC2: M0 CALMA 36/37 = 0.9730 [0.8618, 0.9952] (Wilson inferior > 0.05)
+[SE CUMPLE] expectativa EC1b: M0 COMPLETA 0.3000 entre VIENTO 0.0000 y CALMA 0.9730
+[NO SE CUMPLE] expectativa EC3: M1 CALMA 0.8750, COMPLETA 0.0250 (>= 0.80); VIENTO 0/40 = 0.0000 [0.0000, 0.0876] (Wilson inferior <= 0.05)
+[SE CUMPLE] expectativa EC4: M2 u_pit Onsager medio: VIENTO sin z 0.5825 (en [0.4, 0.6]), con z 0.7038 (mayor); CALMA sin z 0.9989 (> 0.6)
+[SE CUMPLE] expectativa EC9: bufer previo M0/M1/M2 = 0/0/0 (0); posterior M1 19 > M0 17
+FALLAS DE CONDICIONES: 2

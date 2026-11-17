@@ -1,0 +1,12 @@
+M0   testigo: unidad rc 1 fallas ('XB.1f',); nueva == previa True; XB.0c ['28', '0', '0', '4', '5']
+M1   real fuera del estrato en el Monte Carlo           CAZADO (U 1 ('XB.1a', 'XB.1b', 'XB.1f'); X0c ['28', '0', '0', '4', '5'])
+M2   Monte Carlo del pool global (estrato al azar)      CAZADO (U 1 ('XB.1a', 'XB.1f'); X0c ['28', '0', '0', '4', '5'])
+M3   p sin el +1                                        CAZADO (X0c ['28', '0', '0', '4', '5'])
+M4   p_min sin la cola inferior                         CAZADO (U 1 ('XB.1a',); X0c ['28', '0', '0', '4', '5'])
+M5   resoluble con alfa en vez de alfa/4                CAZADO (X0c ['28', '0', '0', '4', '5'])
+M6   omision invertida (INTERCAMBIABLE por omision)     CAZADO (X0; X0b; X0c ['28', '0', '0', '4', '5'])
+M7   sobrepaso por evento sin bifurcar                  CAZADO (X0b; X0c ['28', '0', '0', '4', '5'])
+M8   contraste_iid_pool_loo sin llenar                  CAZADO (X0b; X0c ['28', '0', '0', '4', '5'])
+M9   u del real contra el estrato que lo incluye        CAZADO (U 1 ('XB.1a', 'XB.1f'); X0c ['28', '0', '0', '4', '5'])
+M10  Holm de 4 con el p viejo en INTERCAMBIABLE         CAZADO (X0c ['28', '0', '0', '4', '8'])
+10/10 cazados

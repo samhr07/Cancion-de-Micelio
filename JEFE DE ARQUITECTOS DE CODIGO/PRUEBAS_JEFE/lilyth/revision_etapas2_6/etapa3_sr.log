@@ -1,0 +1,30 @@
+﻿[OK   ] K1   identidad del operador delta con y sin Lilyth y cero reservas en paso
+      P1: T_max=2 (ref 2) med_delta_iid=0.00 p_iid=0.364 p_ons=0.704
+[OK   ] P1   ruido iid: tau_rest ~1 paso, Delta_tau_iid compatible con 0 y excedencia/PIT/T_max = referencia
+      P2:  T_max=12 (ref 12) med_delta_iid=nan (p=nan) med_delta_ons=1.75 (p=0.174) semivida_a=3.50
+      P2b: semivida_b=3.50 (dif=0.00) med_delta_ons=1.50 (p=0.080)
+[FALLA] P2   AR(1) phi=0.8: Delta_tau_iid > 0 (p < alfa), Delta_tau_Onsager compatible con 0 y excedencia = ref
+[OK   ] P2b  mismo mundo forzando via (b): nulo_por_inyeccion = true y semivida de (b) coincide con la de (a)
+      P3a: TAR med_delta_ons=3.00 S_ons=0.382 p_ons=0.0020
+[OK   ] P3a  TAR no lineal con la misma ACF de calma: Delta_tau_Onsager > 0 con p < alfa
+      P3b: AR(1) max_z=1.46 (n=6) | AR(2) max_z=2.10 (n=18)
+[OK   ] P3b  AR(1) y AR(2): eta_barra(tau) sigue la ACF de la calma dentro de la banda de bootstrap
+      P10: T_max=120 raiz_unitaria=1 med_delta_ons=46.00 p_ons=0.084
+[OK   ] P10  paseo aleatorio en NIVEL: T_max = W_ancla (120) marcado como raiz unitaria y Delta_tau_Onsager ~ 0
+[OK   ] P12  BLOQUES se rechaza en calibrar; FASE_ALEATORIZADA_FFT cae al modelo generativo y la ficha lo marca
+      N1 (208 semillas validas): tasa_rechazo_iid=0.000, tasa_rechazo_ons=0.038 (cota 0.088)
+[OK   ] N1   tamano bajo el nulo (>= 200 semillas): las dos pruebas rechazan a tasa <= alfa + su error de Monte Carlo
+[OK   ] N2   independencia de realizaciones: 1 hilo y 4 hilos producen poblaciones nulas identicas bit a bit
+      N3: B=2 n_nueva=95 (modulo=95) n_reuso=90 casa=1 difiere=1
+[OK   ] N3   Regla 7: cada realizacion parte de una copia nueva del operador delta (= ref bit a bit, distinto de reusar PurgaDiurna)
+         [S1 n=0.0] cont=8/8 rep=2/2 cif=0.000/0.000 p_ons=0.474 p_det=0.64 comp=14/14
+         [S1 n=0.3] cont=8/8 rep=15/15 cif=0.143/0.143 p_ons=0.454 p_det=0.67 comp=6/6
+         [S1 n=0.6] cont=15/15 rep=14/14 cif=0.135/0.135 p_ons=0.126 p_det=0.75 comp=7/7
+      S1: CIF_rep(n=0,0.3,0.6)=(0.000, 0.143, 0.135) p_ons=(0.474, 0.454, 0.126) p_det=(0.64, 0.67, 0.75)
+[FALLA] S1   Hawkes n in {0, 0.3, 0.6}: E1.21 = verdad, CIF_replica dentro de banda, Delta_tau_Onsager ~ 0 y p_det estable
+      S2: dist_min=266 | sub(sol=2, adm=0) borde(sol=2, adm=0) sup(sol=1, adm=1) | med_limpia=6.0 vs contam=3.0
+[FALLA] S2   ventanas solapadas: subcritica y borde se descartan (solapes=2, adm=0); supercritica entra (solapes=0, adm=2)
+      S3: p_det=0 -> intentos=8 sin_nulo_b=1 | umbral -> p_det_prom=0.57 int_prom=13.7 (NB=14.1) truncadas=16/40
+[OK   ] S3   integridad de la parada: p_det=0 para en m_min con sin_nulo_b; p_det intermedio respeta ceil(m_min/p_det_inicial)
+
+FALLA: 3 fallas

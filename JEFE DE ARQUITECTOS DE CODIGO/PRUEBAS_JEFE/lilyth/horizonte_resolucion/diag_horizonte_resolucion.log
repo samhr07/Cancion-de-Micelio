@@ -1,0 +1,5 @@
+nulos lineales de la via (a) por serie p10/p50/p90 = 5/11/17 (cuantil 1 - alfa/8 pide >= 160); censurados en 64 p50 0.0000
+series 400; T_max p10/p50/p90 = 6/10/18
+tormentas lentas evaluadas 371: censuradas en T_max 42 (0.113); u_pit > 0.9: 170; censuradas que empatan con nulos censurados 35
+fraccion de nulos censurados en el estrato del real p10/p50/p90 = 0.0000/0.0000/0.0566 (alfa/8 = 0.0063)
+series resolubles 247 (de ellas con el real censurado 17); rechazan por lenta 28

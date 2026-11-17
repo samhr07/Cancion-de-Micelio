@@ -1,0 +1,21 @@
+[OK ] M0   testigo: sin cambio: testigo PASA
+[OK ] M1   abre con cualquier alarma (sin espejo del evento abierto): CAZADO por espejo:,el,espejo
+[OK ] M2   guarda del ancla 0: CAZADO por FLUJO,,eta_barra(tau),NIVEL,HIST_MAX
+[OK ] M3   el ancla llega hasta t_cambio: CAZADO por FLUJO,,eta_barra(tau),NIVEL,HIST_MAX
+[OK ] M4   W_ancla con la memoria del GLR (det.L) en vez de N_REG: CAZADO por FLUJO,,eta_barra(tau),NIVEL,HIST_MAX
+[OK ] M5   dY a la mitad: CAZADO por FLUJO,,eta_barra(tau),NIVEL,HIST_MAX
+[OK ] M6   sin la guarda del signo de dY: CAZADO por FLUJO,,eta_barra(tau),HIST_MAX
+[OK ] M7   el consolidado ignora el calor: CAZADO por FLUJO,,el,HIST_MAX
+[OK ] M8   la replica no cierra las ramas ya consolidadas (Argon): CAZADO por FLUJO,,eta_barra(tau),NIVEL,HIST_MAX
+[OK ] M9   espejo de la purga sin la historia de calibracion: CAZADO por NIVEL
+[OK ] M10  el corte de la reintegracion no abre segmento: CAZADO por NIVEL
+[OK ] M11  origen del nivel purgado en x(t) en vez de x(t - 1): CAZADO por NIVEL
+[OK ] M12  Aalen-Johansen sin S(tau - 1): CAZADO por Aalen-Johansen
+[OK ] M13  tau_fin de la replica uno de mas: CAZADO por FLUJO,,NIVEL,HIST_MAX
+[OK ] M14  sin la guarda del reloj del operador delta: CAZADO por configuracion:
+[OK ] M15  horizonte uno de mas: CAZADO por FLUJO,,NIVEL,HIST_MAX
+[OK ] M16  sin la guarda de memoria del ancla: CAZADO por HIST_MAX
+[OK ] M17  PURGADA y CRUDA invertidas: CAZADO por FLUJO,,NIVEL,HIST_MAX
+[OK ] M18  el espejo se cierra con eventos de temperatura: CAZADO por espejo
+
+18/18 mutantes cazados; testigo PASA

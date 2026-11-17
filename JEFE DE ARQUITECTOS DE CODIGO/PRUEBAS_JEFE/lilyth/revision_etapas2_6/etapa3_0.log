@@ -1,0 +1,47 @@
+﻿[OK   ] K1   identidad del operador delta con y sin Lilyth (6000 pasos, salida por escala)
+      eventos de canal 0: 23, de canal 1: 0, espejo Lilyth: 23 (aperturas=22, continuaciones=1, replicas=15)
+[OK   ] K2   espejo: cada evento de canal 0 casa con una apertura del espejo (aperturas + continuaciones), 0 inconsistentes
+[OK   ] K3   disparo en la alarma: t_apertura = alarma.t (el primer pulso abre en 1000-1010, no en su clasificacion)
+      t_a= 1000 t_cambio= 1000 j=0 signo=+1 dY=  4.825 Y*= -0.102 primer=   1 consolidado= 151 RESTITUIDA tau_fin=151
+      t_a= 1195 t_cambio= 1193 j=0 signo=+1 dY=  0.475 Y*=  2.793 primer=   2 consolidado=   2 RESTITUIDA tau_fin=2
+      t_a= 2502 t_cambio= 2500 j=0 signo=+1 dY=  5.415 Y*=  0.014 primer=   1 consolidado=   1 RESTITUIDA tau_fin=1
+      t_a= 2567 t_cambio= 2564 j=1 signo=+1 dY=  2.479 Y*=  0.411 primer=   3 consolidado=   3 RESTITUIDA tau_fin=3
+      t_a= 2699 t_cambio= 2696 j=2 signo=+1 dY=  1.643 Y*=  0.887 primer=   1 consolidado=   1 RESTITUIDA tau_fin=1
+      t_a= 3302 t_cambio= 3300 j=0 signo=+1 dY=  5.192 Y*= -0.110 primer=   1 consolidado= nan CORTADA_POR_REPLICA tau_fin=65
+      t_a= 3367 t_cambio= 3366 j=1 signo=-1 dY= -3.099 Y*=  0.012 primer=   1 consolidado= nan CORTADA_POR_REPLICA tau_fin=129
+      t_a= 3496 t_cambio= 3496 j=0 signo=+1 dY=  8.649 Y*= -0.101 primer=   1 consolidado=   4 RESTITUIDA tau_fin=4
+      t_a= 3561 t_cambio= 3559 j=0 signo=+1 dY=  3.517 Y*= -0.267 primer=   1 consolidado=   1 RESTITUIDA tau_fin=1
+      t_a= 3574 t_cambio= 3573 j=0 signo=+1 dY=  6.074 Y*= -0.358 primer=   2 consolidado=   2 RESTITUIDA tau_fin=2
+      t_a= 3639 t_cambio= 3638 j=1 signo=+1 dY=  0.450 Y*= -0.034 primer=   2 consolidado=   2 RESTITUIDA tau_fin=2
+      t_a= 3649 t_cambio= 3649 j=0 signo=+1 dY=  5.272 Y*= -0.017 primer=   1 consolidado=   1 RESTITUIDA tau_fin=1
+      t_a= 3655 t_cambio= 3655 j=0 signo=+1 dY=  8.223 Y*= -0.017 primer=   1 consolidado=   1 RESTITUIDA tau_fin=1
+      t_a= 3661 t_cambio= 3654 j=1 signo=+1 dY=  3.791 Y*=  0.024 primer=   2 consolidado=   2 RESTITUIDA tau_fin=2
+      t_a= 4001 t_cambio= 4000 j=1 signo=+1 dY=  3.356 Y*=  0.053 primer=   6 consolidado=   6 RESTITUIDA tau_fin=6
+      t_a= 4134 t_cambio= 4132 j=0 signo=+1 dY=    nan Y*=    nan primer= nan consolidado= nan NO_MEDIDA_SIGNO_INCONSISTENTE tau_fin=0
+      t_a= 4199 t_cambio= 4197 j=0 signo=+1 dY=  1.221 Y*=  2.972 primer=   1 consolidado=   1 RESTITUIDA tau_fin=1
+      t_a= 5001 t_cambio= 5000 j=0 signo=+1 dY=  2.844 Y*= -0.172 primer=   1 consolidado=   1 RESTITUIDA tau_fin=1
+      t_a= 5070 t_cambio= 5065 j=0 signo=+1 dY=  1.300 Y*=  1.635 primer=   1 consolidado=   1 RESTITUIDA tau_fin=1
+      t_a= 5135 t_cambio= 5132 j=2 signo=+1 dY=  2.398 Y*=  0.466 primer=   4 consolidado=   4 RESTITUIDA tau_fin=4
+      t_a= 5392 t_cambio= 5391 j=0 signo=+1 dY=  0.659 Y*=  2.656 primer=   2 consolidado=   2 RESTITUIDA tau_fin=2
+      t_a= 5457 t_cambio= 5456 j=1 signo=+1 dY=  0.585 Y*=  2.489 primer=   3 consolidado=   3 RESTITUIDA tau_fin=3
+      ranuras comparadas 22, cortadas por replica 2, continuaciones 1, replicas 15
+[OK   ] K4   FLUJO, rama cruda: aperturas, continuaciones, replicas, ancla, dY, eta, desenlace y tau_fin = referencia bit a bit
+[OK   ] K4b  el calor separa: primer toque dentro del calor y consolidado despues (pulso de 1000)
+      K5 (mundo de pulsos +3 sd, informativo): continuaciones=1 replicas=15 cortadas=2 ranuras_en_pulso_1000=2 unico=0 replica_tras_restituir_5300=1
+      K5: ranuras por pulso (1, 1, 1) continuaciones=8 replicas=1 cortadas por signo contrario=0 ref=1
+[OK   ] K5   E1.21 con pulsos fuertes: una ranura por pulso y sus reaperturas son continuaciones (= referencia; el signo contrario lo cubren K4 y K5c)
+[OK   ] K5b  eta_barra(tau) = media de las trayectorias de referencia (1e-12)
+[OK   ] K5c  4 combinaciones a mano (+/no rest, +/rest, -/no rest, -/rest), ranura mas reciente y signo inconsistente
+      eventos de canal 0: 232, de canal 1: 32, espejo Lilyth: 232 (aperturas=116, continuaciones=116)
+[OK   ] K2b  espejo con eventos de temperatura en medio (historia 2^20, varianza x9): 0 inconsistentes, cierres = eventos de canal 0
+      ranuras comparadas 8, con ancla insuficiente por corte de segmento 2, continuaciones 3
+[OK   ] K6   NIVEL + purga: espejo de la purga, reintegracion por segmentos y E1.21 = referencia independiente (bit a bit)
+[OK   ] K6b  un corte de la reintegracion dentro de la ventana del ancla da NO_MEDIDA_ANCLA_INSUFICIENTE en la purgada
+[OK   ] K7   HIST_MAX 128: W_ancla + guarda fuera del anillo da NO_MEDIDA_ANCLA_FUERA_DE_MEMORIA (= referencia)
+      eventos en Aalen-Johansen 21, RMST 46.190
+[OK   ] K8   Aalen-Johansen de la corrida = referencia independiente de Argon (CIF, S + CIF = 1, RMST)
+[OK   ] K9   causalidad por truncado: el estado de Lilyth en t < 3000 es el mismo con la serie cortada en 3000
+[OK   ] K10  cero reservas de memoria en paso (6000 pasos)
+[OK   ] K11  configuracion: rechaza NINGUNO, BLOQUES y T_max sin fijar; un paso desalineado se cuenta y no se mide
+
+PASA: 0 fallas

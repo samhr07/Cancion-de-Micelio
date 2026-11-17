@@ -1,0 +1,20 @@
+[3] testigo rc=0 fallas=[]
+C01_via_a_acepta_menos_de_m_min: CAZADO rc=1 nuevas=['D1', 'FALLA: 1 fallas']
+C02_via_b_acepta_menos_de_m_min: CAZADO rc=1 nuevas=['D1', 'FALLA: 1 fallas']
+C03_pool_loo_sin_m_min: CAZADO rc=1 nuevas=['D1c', 'FALLA: 1 fallas']
+C04_iid_por_innovaciones_lineales: CAZADO rc=1 nuevas=['FALLA: 2 fallas', 'P1', 'P2']
+C05_aperturas_posteriores_son_ajenas: CAZADO rc=1 nuevas=['FALLA: 1 fallas', 'S2']
+C06_cortada_cuenta_como_admitida: CAZADO rc=1 nuevas=['FALLA: 1 fallas', 'S2']
+C07_crudo_sin_despurgar: CAZADO rc=1 nuevas=['D7', 'FALLA: 1 fallas']
+C08_espejo_sin_comprometer_el_dia: CAZADO rc=1 nuevas=['D7', 'FALLA: 1 fallas']
+C09_B_con_factor_2: CAZADO rc=1 nuevas=['FALLA: 1 fallas', 'N3']
+C10_excedencia_en_pool_sin_omitir: CAZADO rc=1 nuevas=['D1c', 'FALLA: 1 fallas']
+[4] testigo rc=0 fallas=[]
+C11_armonico_real_sobre_todas_las_ranuras: CAZADO rc=1 nuevas=['P5']
+C12_armonico_sobrepaso_con_pool_iid: NO CAZADO rc=0 nuevas=[]
+11/12 cazados
+
+# Repeticion de C11 y C12 tras anadir la mediana del nulo al control P5 emparejado (mismas cabeceras):
+C11_armonico_real_sobre_todas_las_ranuras: CAZADO rc=1 nuevas=[P5]
+C12_armonico_sobrepaso_con_pool_iid: CAZADO rc=1 nuevas=[P5]
+12/12 cazados

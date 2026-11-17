@@ -1,0 +1,3 @@
+EXPECTATIVAS_HORIZONTE.md
+sha256 269b1f53e418af803f575da72649801c14a286e18bc90e626e011162668d34e4
+sellado 2026-11-16 16:42Z, antes de escribir codigo (orden del Comandante: enmienda de E1.9)
