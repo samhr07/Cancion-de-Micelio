@@ -1,0 +1,13 @@
+﻿====================================================================================================
+ PUNTO 7 (CN1.6): CAZA DE MUTANTES REALES SOBRE COPIA DE CABECERA (mutaciones_nivel1.py)
+====================================================================================================
+MN1.0  testigo: sin cambio                                        TESTIGO PASA (0 fallas)
+MN1.1  MERCADO_QUIETO tratado como invalido en NIVEL              CAZADO: CN1.3: En M3 (q=2% mercado quieto), PROTOCOLO tiene 0 cortes (dCens=0) y ACTUAL pierde >50%; FRONTERA_ESTRUCTURAL corta limpio
+MN1.2  comprimir reloj tau en RELOJ_FISICO_TOPE_R (avanzar)       CAZADO: CN1.5: Invariantes estructurales a priori (cota_ESTRICTO <= cota_DULCE en toda zona y |sesgo_reloj| < |sesgo_comprime| en Z3a)
+MN1.3  no excluir CENSURADA_DATO_INVALIDO en evaluar_nulos_representacion CAZADO: CN1.1: Volcado hexadecimal (%a) en M1, M2 y M3 (limpios y con huecos) identico bit a bit a observador_lilyth_original.hpp; CN1.4: Exclusion limpia de 25% Z2 corrupto (eval_z2=0) y 50% Z3 censurado (eval_z3=134) con Wilson lo=0.170033 <= 0.05
+MN1.4  ignorar FRONTERA_ESTRUCTURAL (valido=true en cierre de sesion) CAZADO: CN1.3: En M3 (q=2% mercado quieto), PROTOCOLO tiene 0 cortes (dCens=0) y ACTUAL pierde >50%; FRONTERA_ESTRUCTURAL corta limpio
+MN1.5  omision invertida en PoliticaZ3Piloto (RELOJ_FISICO por omision) CAZADO: CN1.1: Volcado hexadecimal (%a) en M1, M2 y M3 (limpios y con huecos) identico bit a bit a observador_lilyth_original.hpp
+MN1.6  ignorar bloqueo de Z2 corrupto en la via (b)               CAZADO: CN1.4: Exclusion limpia de 25% Z2 corrupto (eval_z2=31) y 50% Z3 censurado (eval_z3=0) con Wilson lo=0.004661 <= 0.05
+----------------------------------------------------------------------------------------------------
+RESULTADO CN1.6: 6 de 6 mutantes cazados (condicion sellada: >= 5 de 6)
+====================================================================================================

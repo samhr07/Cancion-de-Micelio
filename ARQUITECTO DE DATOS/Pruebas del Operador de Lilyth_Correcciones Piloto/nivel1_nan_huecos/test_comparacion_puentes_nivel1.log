@@ -1,0 +1,54 @@
+﻿====================================================================================================
+ FASE 4: COMPARACION UNIFICADA DE PUENTES (B0..B4) Y REGRESION INTEGRAL (R=200, Hilos=32)
+====================================================================================================
+[PASA] CF4.P1: Identidad bit a bit (%a) contra observador_lilyth_original.hpp intacta tras Fases 1-3
+
+--- [P2a] NIVEL M3 + PurgaDiurna: Micro-cortes r=4 fuera de choques reales (K_ref=14, S0=0.0804) ---
+ Competidor              | Alm_Niv_Esp | Alm_Tmp_Esp | K_eval | |dS|/ee | err_Anc_RNG | Notas
+-------------------------+-------------+-------------+--------+---------+-------------+---------------------------
+ B0_BASE_ACTUAL          |           8 |           0 |     11 |  0.3965 |    0.00e+00 | rec=0 chq=0 pau=0
+ B1_ARGON_VIVO           |           8 |           0 |     11 |  0.3965 |    0.00e+00 | rec=0 chq=0 pau=0
+ B1b_ARRASTRE_NIVEL      |           9 |           0 |     12 |  0.3366 |    0.00e+00 | rec=0 chq=0 pau=0
+ B2_LINEAL_2BORDES       |           9 |           0 |     14 |  0.1615 |    0.00e+00 | rec=12 chq=0 pau=0
+ B3_ITO_SIN_FILTRO       |           9 |           0 |     14 |  0.0000 |    2.44e-15 | rec=12 chq=0 pau=0
+ B4_PROPUESTA_UNIFICADA  |           9 |           0 |     14 |  0.0000 |    2.44e-15 | rec=12 chq=0 pau=0
+[PASA] CF4.P2a: En NIVEL M3 con micro-cortes r=4, B4 mantiene ds_ee <= 0.25 y alarmas de temperatura menores o iguales que LINEAL
+  [Detalle P2b salto oculto +12s en r=2] Z_hueco=3.70 | reconstruido=0 | FLAG_CHOQUE_EN_HUECO=1
+[PASA] CF4.P2b: Llave de amplitud |Z_hueco| > z_max bloquea puente ante salto oculto +12s en micro-corte r=2
+
+--- [P3] M2 ARFIMA (8 semillas, d_med=0.2692, S0_med=0.2252, ee_med=0.0742) con INTERCAMBIABLE unificado ---
+ Politica Z1b (dt=2, r=3) | RMSE(e)/sd | |E[dS]|/ee_S | ESTRICTO | DULCE
+--------------------------+------------+--------------+----------+-------
+ B0_COMPRESION_BASE       |     0.0221 |       0.0413 | PASA     | PASA 
+ B0b_CORTE_SUFIJO         |     0.0955 |       0.3644 | FALLA    | PASA 
+ B1_PUENTE_CAUSAL_1B      |     0.0180 |       0.1053 | PASA     | PASA 
+ B2_LINEAL_2BORDES        |     0.0190 |       0.0948 | PASA     | PASA 
+ B4_PUENTE_ITO_MEDIA_2B   |     0.0181 |       0.1138 | PASA     | PASA 
+ B4_PUENTE_ITO_RNG16      |     0.0241 |       0.0805 | PASA     | PASA   (sd_1RNG/ee=0.3956, ee_RNG16/ee=0.0989, err_anc=1.78e-15)
+[PASA] CF4.P3: En M2 ARFIMA (8 semillas), B4_ITO_MEDIA logra minima RMSE y B4_ITO_RNG16 pasa ESTRICTO (|E[dS]|/ee<=0.25, ee_RNG16<=0.15, anc<1e-10)
+[PASA] CF4.P4: Corte largo r=12 > r_max=3 mantiene EN_PAUSA_DURA exacta (9 pasos) y corta segmento al reconectar
+[PASA] CF4.P6: Blindaje obligatorio de FLAG_PUENTE_ITO en Z2 y Z3 dentro de ObservadorLilyth
+
+--- [P5] COMPARATIVA MONTE CARLO (R = 200, q = 2%, r = 2) EN M1_H0, M2_H0 (ARFIMA) Y M1_H1 ---
+ Escenario | Politica               | Validas | K_eval | FalsoRech_H0 [Wilson 95%]      | RetPot_H1 | AlmTmp/rep | ESTRICTO | DULCE
+-----------+------------------------+---------+--------+--------------------------------+-----------+------------+----------+-------
+ LIMPIO q0 | M1_H0 BASE             |     198 |    8.6 |   8/198 = 0.040 [0.021, 0.078] |         - |       0.00 | PASA     | PASA 
+ LIMPIO q0 | M2_H0 ARFIMA BASE      |     197 |    8.5 |   3/197 = 0.015 [0.005, 0.044] |         - |       0.00 | PASA     | PASA 
+ LIMPIO q0 | M1_H1 BASE (Potencia)  |     198 |   14.0 | Pot = 122/198 = 0.616          |      1.00 |       0.00 | PASA     | PASA 
+-----------+------------------------+---------+--------+--------------------------------+-----------+------------+----------+-------
+ M1 q2 r2  | B0_BASE_ACTUAL         |     198 |    7.6 |   8/198 = 0.040 [0.021, 0.078] |      1.06 |       0.00 | FALLA    | PASA 
+ M2 q2 r2  | B0_BASE_ACTUAL         |     197 |    7.6 |   6/197 = 0.030 [0.014, 0.065] |         - |       0.00 | PASA     | PASA 
+ M1 q2 r2  | B1_ARGON_VIVO          |     198 |    7.8 |   6/198 = 0.030 [0.014, 0.065] |      1.12 |       0.00 | PASA     | PASA 
+ M2 q2 r2  | B1_ARGON_VIVO          |     195 |    7.6 |   7/195 = 0.036 [0.017, 0.072] |         - |       0.00 | PASA     | PASA 
+  [diag B1_ARGON_VIVO M1] dcens=0.096 | |dS|/ee=0.145 | vetoZ2/rep=0.68 | [M2] vetoZ2/rep=1.29
+ M1 q2 r2  | B2_LINEAL_2BORDES      |     198 |    8.6 |   6/198 = 0.030 [0.014, 0.065] |      1.04 |       0.00 | PASA     | PASA 
+ M2 q2 r2  | B2_LINEAL_2BORDES      |     197 |    8.4 |   5/197 = 0.025 [0.011, 0.058] |         - |       0.00 | PASA     | PASA 
+ M1 q2 r2  | B3_ITO_SIN_FILTRO      |     198 |    8.5 |   6/198 = 0.030 [0.014, 0.065] |      1.08 |       0.00 | PASA     | PASA 
+ M2 q2 r2  | B3_ITO_SIN_FILTRO      |     197 |    8.4 |   7/197 = 0.036 [0.017, 0.072] |         - |       0.00 | PASA     | PASA 
+ M1 q2 r2  | B4_PROPUESTA_UNIFICADA |     198 |    7.8 |   7/198 = 0.035 [0.017, 0.071] |      1.13 |       0.00 | PASA     | PASA 
+ M2 q2 r2  | B4_PROPUESTA_UNIFICADA |     195 |    7.5 |   7/195 = 0.036 [0.017, 0.072] |         - |       0.00 | PASA     | PASA 
+  [diag B4_PROPUESTA_UNIFICADA M1] dcens=0.100 | |dS|/ee=0.128 | vetoZ2/rep=0.68 | [M2] vetoZ2/rep=1.28
+[PASA] CF4.P5: Comparativa R replicas en M1_H0, M2_H0 y M1_H1 (B4 pasa ESTRICTO y conserva tamano nominal en ARFIMA)
+====================================================================================================
+ FALLAS FASE 4: 0
+====================================================================================================

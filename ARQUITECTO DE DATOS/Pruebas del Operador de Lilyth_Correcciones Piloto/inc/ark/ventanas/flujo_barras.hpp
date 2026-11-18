@@ -46,6 +46,8 @@ struct BarraIntrinsecaCxx {
     uint64_t t_disponible_ms = 0;   // maxima disponibilidad de sus filas (B5)
     size_t fase = 0;                // de la purga (calendario si la fuente lo activa; si no, 0)
     int64_t dia = 0;
+    uint8_t flags_hueco = 0;        // OR de flags_hueco de las filas de la barra (bits de tipos_dataset.hpp)
+    bool solo_mercado_quieto = false; // true si imputada == true pero todas las filas imputadas fueron MERCADO_QUIETO sin corrupcion ni omitidas
 };
 
 // delta_nu efectivo de una fuente: el declarado o el nu medio por fila de la historia.
@@ -97,6 +99,8 @@ public:
         b.fronteras = v_.fronteras_barra[0];
         b.t_cierre_ms = v_.t_cierre_ms;
         b.t_disponible_ms = v_.t_actual;
+        b.flags_hueco = v_.flags_hueco[0];
+        b.solo_mercado_quieto = v_.solo_mercado_quieto[0];
         if (fuente_.fase.activa) {
             const auto fd = ark::dataset::fase_de(fuente_.fase, static_cast<int64_t>(b.t_cierre_ms));
             b.fase = fd.fase;

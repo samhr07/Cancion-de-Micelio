@@ -6,9 +6,11 @@
 // Especificacion: JEFE DE ARQUITECTOS DE CODIGO/PRUEBAS_JEFE/lilyth/README_OPERADOR_LILYTH.md (secciones 1-9, E1.1-E1.22).
 #pragma once
 
+#include "ark/dataset/tipos_dataset.hpp"
 #include "ark/lilyth/modelo_lineal_nulo.hpp"
 #include "ark/lilyth/armonico_lilyth.hpp"
 #include "ark/lilyth/fin_calor_lilyth.hpp"
+#include "ark/lilyth/puente_historico_ito.hpp"
 #include "ark/lilyth/reloj_marea_lilyth.hpp"
 #include "ark/lilyth/nulo_lilyth.hpp"
 #include "ark/metrologia/escalera_diadica.hpp"
@@ -67,15 +69,18 @@ enum class DesenlaceRanura : std::uint8_t {
     NO_MEDIDA_PURGA_INMADURA = 6,         // la purga no estaba madura (dias_minimos por fase) en t_a, o el operador delta no purga
     NO_MEDIDA_ANCLA_INSUFICIENTE = 7,     // no hay ancla: historia anterior al inicio, sin muestras validas o con un corte de segmento
     NO_MEDIDA_ANCLA_FUERA_DE_MEMORIA = 8, // Code: W_ancla + guarda no cabe en HIST_MAX (antes se truncaba en silencio)
-    NO_MEDIDA_SIGNO_INCONSISTENTE = 9     // Code: dY = Y(t_a) - Y* no tiene el signo de la alarma (antes se contaba como ancla insuficiente)
+    NO_MEDIDA_SIGNO_INCONSISTENTE = 9,    // Code: dY = Y(t_a) - Y* no tiene el signo de la alarma (antes se contaba como ancla insuficiente)
+    NO_MEDIDA_PERFIL_CORRUPTO = 10        // Piloto Nivel 1: perfil [t_cambio, t_a] con racha invalida > r_max_z2_piloto
 };
-inline constexpr std::array<const char*, 10> NOMBRE_DESENLACE{
+inline constexpr std::array<const char*, 11> NOMBRE_DESENLACE{
     "INACTIVA", "ABIERTA", "RESTITUIDA", "CORTADA_POR_REPLICA", "CENSURADA_HORIZONTE", "CENSURADA_DATO_INVALIDO",
-    "NO_MEDIDA_PURGA_INMADURA", "NO_MEDIDA_ANCLA_INSUFICIENTE", "NO_MEDIDA_ANCLA_FUERA_DE_MEMORIA", "NO_MEDIDA_SIGNO_INCONSISTENTE"};
+    "NO_MEDIDA_PURGA_INMADURA", "NO_MEDIDA_ANCLA_INSUFICIENTE", "NO_MEDIDA_ANCLA_FUERA_DE_MEMORIA", "NO_MEDIDA_SIGNO_INCONSISTENTE",
+    "NO_MEDIDA_PERFIL_CORRUPTO"};
 
 [[nodiscard]] constexpr bool es_no_medida(DesenlaceRanura d) noexcept {
     return d == DesenlaceRanura::NO_MEDIDA_PURGA_INMADURA || d == DesenlaceRanura::NO_MEDIDA_ANCLA_INSUFICIENTE ||
-           d == DesenlaceRanura::NO_MEDIDA_ANCLA_FUERA_DE_MEMORIA || d == DesenlaceRanura::NO_MEDIDA_SIGNO_INCONSISTENTE;
+           d == DesenlaceRanura::NO_MEDIDA_ANCLA_FUERA_DE_MEMORIA || d == DesenlaceRanura::NO_MEDIDA_SIGNO_INCONSISTENTE ||
+           d == DesenlaceRanura::NO_MEDIDA_PERFIL_CORRUPTO;
 }
 
 // Configuracion de Lilyth (E1.13, E1.14, E1.15). Code: la integracion y la purga NO estan aqui: salen de la ConfiguracionObservador
@@ -109,6 +114,20 @@ struct ConfiguracionLilyth {
     PoolNuloLilyth pool_nulo = PoolNuloLilyth::M_MIN;
     // Code (2026-11-16, orden del Comandante): horizonte T_max (enmienda de E1.9; ver nulo_lilyth.hpp). Por omision el de Argon.
     HorizonteLilyth horizonte = HorizonteLilyth::CUANTIL_ALFA;
+
+    // Piloto Nivel 1 (Huecos y cotas por zona Z1, Z2, Z3; por omision 0 = comportamiento base bit a bit):
+    enum class PoliticaZ1Piloto : std::uint8_t { COMPRESION_BASE = 0, CORTE_SUFIJO = 1, PUENTE_CAUSAL = 2, PUENTE_ITO_HISTORICO = 3 };
+    enum class PoliticaZ2Piloto : std::uint8_t { COMPRESION_BASE = 0, PUENTE_CAUSAL = 1, RECHAZAR_SI_CORRUPTO = 2 };
+    enum class PoliticaZ3Piloto : std::uint8_t { CORTA_AL_PRIMERO = 0, MUTANTE_COMPRIME_TAU = 1, RELOJ_FISICO_TOPE_R = 2 };
+
+    PoliticaZ1Piloto politica_z1_piloto = PoliticaZ1Piloto::COMPRESION_BASE;
+    std::size_t r_max_z1_piloto = 0;
+    PoliticaZ2Piloto politica_z2_piloto = PoliticaZ2Piloto::COMPRESION_BASE;
+    std::size_t r_max_z2_piloto = 0;
+    PoliticaZ3Piloto politica_z3_piloto = PoliticaZ3Piloto::CORTA_AL_PRIMERO;
+    std::size_t r_max_z3_piloto = 0;
+    double z_max_hueco_piloto = 3.5;
+    bool usar_protocolo_filas_piloto = false;
 };
 
 [[nodiscard]] constexpr bool configuracion_lilyth_nulo_valida(const ConfiguracionLilyth& cfg) noexcept {
@@ -152,6 +171,8 @@ struct RamaTrayectoriaLilyth {
     double min_eta_desde_2 = NaN;
     std::size_t tau_min_eta = 0;
     bool armonico_sospechoso = false;
+    std::size_t racha_invalida_z3 = 0;
+    std::size_t pasos_validos_z3 = 0;
 
     std::array<double, T_MAX> eta{};      // eta(tau), indice tau - 1
 
@@ -170,6 +191,8 @@ struct RamaTrayectoriaLilyth {
         min_eta_desde_2 = NaN;
         tau_min_eta = 0;
         armonico_sospechoso = false;
+        racha_invalida_z3 = 0;
+        pasos_validos_z3 = 0;
         eta.fill(NaN);
         nulo_iid = ReferenciaNuloEvento{};
         nulo_onsager = ReferenciaNuloEvento{};
@@ -201,6 +224,7 @@ struct RanuraLilyth {
     // Etapa 3: perfil estacionario [t_cambio, t_a] y su historia previa guardados en pila al abrir (para la via (b) fuera del ciclo caliente).
     std::size_t n_hist_prev_cruda = 0, n_perfil_cruda = 0;
     std::size_t n_hist_prev_purgada = 0, n_perfil_purgada = 0;
+    bool perfil_corrupto_z2_cruda = false, perfil_corrupto_z2_purgada = false;
     std::array<double, MAX_PERFIL_EVENTO_LILYTH> hist_prev_cruda_est{}, perfil_cruda_est{};
     std::array<double, MAX_PERFIL_EVENTO_LILYTH> hist_prev_purgada_est{}, perfil_purgada_est{};
 
@@ -219,6 +243,7 @@ struct RanuraLilyth {
         cruda.limpiar();
         delta_tau_marea_primer_toque = delta_tau_marea_consolidado = NaN;
         n_hist_prev_cruda = n_perfil_cruda = n_hist_prev_purgada = n_perfil_purgada = 0;
+        perfil_corrupto_z2_cruda = perfil_corrupto_z2_purgada = false;
     }
     [[nodiscard]] bool alguna_rama_abierta() const noexcept {
         return purgada.desenlace == DesenlaceRanura::ABIERTA || cruda.desenlace == DesenlaceRanura::ABIERTA;
@@ -344,6 +369,7 @@ private:
     std::array<double, HIST_MAX> hist_est_cruda_{}, hist_est_purgada_{};
     std::array<std::uint8_t, HIST_MAX> hist_val_cruda_{}, hist_val_purgada_{};
     std::array<std::uint8_t, HIST_MAX> hist_val_est_cruda_{}, hist_val_est_purgada_{};
+    std::array<std::uint8_t, HIST_MAX> hist_flags_hueco_{};
     std::array<std::uint32_t, HIST_MAX> hist_seg_purgada_{};
     std::array<std::array<double, N_CAPA1>, HIST_MAX> hist_capa1_{};
     std::array<double, HIST_MAX> scratch_{};
@@ -353,6 +379,7 @@ private:
     // estado de representacion
     double x_prev_ = NaN;
     bool hay_prev_ = false;
+    std::uint8_t flags_prev_ = 0;
     double nivel_purgado_ = NaN;
     bool purgado_vivo_ = false;
     std::uint32_t seg_purgado_ = 0;
@@ -633,7 +660,7 @@ public:
 
     void reiniciar_flujo() noexcept {
         n_hist_ = 0; t_ = -1;
-        x_prev_ = NaN; hay_prev_ = false;
+        x_prev_ = NaN; hay_prev_ = false; flags_prev_ = 0;
         nivel_purgado_ = NaN; purgado_vivo_ = false; seg_purgado_ = 0;
         nu_acum_ = 0.0; hay_reloj_ = false; pared_ = NaN;
         calor_activo_ = false;
@@ -690,7 +717,7 @@ public:
 
     // Ciclo caliente. Cero reservas de memoria.
     SalidaPaso paso(const SalidaDelta& s, double x, bool valido, double d_nu = NaN, std::size_t fase = 0, std::int64_t dia = 0,
-                    double pared = NaN, const std::array<double, N_CAPA1>& capa1 = {}) noexcept {
+                    double pared = NaN, const std::array<double, N_CAPA1>& capa1 = {}, std::uint8_t flags_hueco = 0) noexcept {
         SalidaPaso out{};
         if (!lista_) return out;
         ++cont_.pasos;
@@ -710,11 +737,14 @@ public:
         bool ok_cruda = ok_x;
         double y_rep = NaN;
         bool ok_rep = false;
+        std::uint8_t flags_est = flags_hueco;
         if (integracion_ == Integracion::NIVEL) {
             ok_rep = ok_x && hay_prev_;
             y_rep = ok_rep ? x - x_prev_ : NaN;
+            if (ok_rep) flags_est |= flags_prev_;
             hay_prev_ = ok_x;
-            if (ok_x) x_prev_ = x;
+            if (ok_x) { x_prev_ = x; flags_prev_ = flags_hueco; }
+            else { flags_prev_ = 0; }
         } else {
             ok_rep = ok_x;
             y_rep = ok_rep ? x : NaN;
@@ -743,7 +773,7 @@ public:
                 y_purg = ok_purg ? yp : NaN;
             }
         }
-        guardar(y_cruda, ok_cruda, y_purg, ok_purg, y_rep, ok_rep, yp_est, ok_yp_est, std::isfinite(d_nu) ? d_nu : 0.0, capa1);
+        guardar(y_cruda, ok_cruda, y_purg, ok_purg, y_rep, ok_rep, yp_est, ok_yp_est, std::isfinite(d_nu) ? d_nu : 0.0, capa1, flags_est);
 
         // 2. apertura: la regla de ObservadorSaltos::paso (primera alarma de nivel, de fina a gruesa, con el evento de nivel cerrado)
         bool abre = false;
@@ -763,14 +793,16 @@ public:
 
         // 3. avanzar las ranuras vivas en tau = t_ - r.t_apertura (si en este mismo paso abre una replica de signo opuesto,
         //    el cruce hacia el signo opuesto es la replica que corta la ranura, no una restitucion consolidada previa)
+        // Fase 3: si la barra viene etiquetada con FLAG_PUENTE_ITO (reconstruida por RNG), Z3 NO la toma como cruce real medido
+        const bool veto_z3_ito = ((flags_hueco & ark::dataset::FLAG_PUENTE_ITO) != 0u);
         const bool guarda_calor_prev = calor_activo_;
         const bool calor_detectado = gestor_calor_.calor_activo();
         for (auto& r : ranuras_) {
             if (!r.ocupada || t_ <= r.t_apertura) continue;
             const std::size_t tau = static_cast<std::size_t>(t_ - r.t_apertura);
             calor_activo_ = guarda_calor_prev || calor_detectado || (abre && a_abre.signo != r.signo);
-            avanzar(r.purgada, tau, y_purg, ok_purg && hist_seg_actual_ok(r), true, r.w_ancla);
-            avanzar(r.cruda, tau, y_cruda, ok_cruda, false, r.w_ancla);
+            avanzar(r.purgada, tau, y_purg, !veto_z3_ito && ok_purg && hist_seg_actual_ok(r), true, r.w_ancla);
+            avanzar(r.cruda, tau, y_cruda, !veto_z3_ito && ok_cruda, false, r.w_ancla);
             calor_activo_ = guarda_calor_prev;
             if (!r.alguna_rama_abierta()) cerrar(r, out);
         }
@@ -825,8 +857,11 @@ public:
                           const std::array<double, N_CAPA1>& capa1 = {}) noexcept {
         if (!sf.barra_cerrada) return SalidaPaso{};
         const auto& b = sf.barra;
-        return paso(sf.delta, b.valor, !b.imputada, b.nu, fase_de_barra ? b.fase : fase, fase_de_barra ? b.dia : dia,
-                    static_cast<double>(b.t_cierre_ms), capa1);
+        const bool ok_barra = cfg_.usar_protocolo_filas_piloto
+            ? ((!b.imputada || b.solo_mercado_quieto) && ((b.flags_hueco & (2u | 64u | 128u)) == 0u))
+            : (!b.imputada);
+        return paso(sf.delta, b.valor, ok_barra, b.nu, fase_de_barra ? b.fase : fase, fase_de_barra ? b.dia : dia,
+                    static_cast<double>(b.t_cierre_ms), capa1, b.flags_hueco);
     }
 
     // Etapa 3 (seccion 3.6): evalua fuera del ciclo caliente todas las ranuras cerradas contra los nulos (a) y (b),
@@ -910,6 +945,13 @@ private:
         if (!cfg_.forzar_via_b && esp.size() >= umbral) {
             usar_via_a(sin_memoria ? "via (a) sin memoria: excedencia suficiente" : "via (a): excedencia espontanea suficiente");
         } else {
+            const bool z2_corrupto = es_purgada ? r.perfil_corrupto_z2_purgada : r.perfil_corrupto_z2_cruda;
+            if (z2_corrupto) {
+                ref.sin_nulo_b = true;
+                ref.evaluado = false;
+                ref.motivo = "via (b): perfil Z2 corrupto";
+                return;
+            }
             const std::span<const double> hp = es_purgada
                 ? std::span<const double>(r.hist_prev_purgada_est.data(), r.n_hist_prev_purgada)
                 : std::span<const double>(r.hist_prev_cruda_est.data(), r.n_hist_prev_cruda);
@@ -1253,12 +1295,13 @@ private:
     }
 
     void guardar(double yc, bool okc, double yp, bool okp, double y_est_c, bool ok_est_c, double y_est_p, bool ok_est_p,
-                 double dnu, const std::array<double, N_CAPA1>& c1) noexcept {
+                 double dnu, const std::array<double, N_CAPA1>& c1, std::uint8_t flags_est = 0) noexcept {
         const std::size_t pos = static_cast<std::size_t>(t_) % HIST_MAX;
         hist_cruda_[pos] = yc; hist_val_cruda_[pos] = okc ? 1u : 0u;
         hist_purgada_[pos] = yp; hist_val_purgada_[pos] = okp ? 1u : 0u;
         hist_est_cruda_[pos] = y_est_c; hist_val_est_cruda_[pos] = ok_est_c ? 1u : 0u;
         hist_est_purgada_[pos] = y_est_p; hist_val_est_purgada_[pos] = ok_est_p ? 1u : 0u;
+        hist_flags_hueco_[pos] = flags_est;
         hist_seg_purgada_[pos] = seg_purgado_;
         hist_dnu_[pos] = dnu;
         hist_capa1_[pos] = c1;
@@ -1324,36 +1367,220 @@ private:
         rama.muestras_ancla = n;
     }
 
+    // Prediccion causal a 1 paso sin reservas dinamicas (pila) usando el ModeloLinealNulo calibrado
+    double predecir_un_paso_causal(const ModeloLinealNulo& m, const double* buf, std::size_t n_buf) const noexcept {
+        if (!m.valido || n_buf == 0) return m.valido && std::isfinite(m.mu) ? m.mu : 0.0;
+        if (m.modo_usado != ModoNuloLineal::ARFIMA_WHITTLE || m.d == 0.0) {
+            double pred = m.mu;
+            for (std::size_t i = 1; i <= m.p && i <= n_buf; ++i) {
+                pred += m.phi[i - 1] * (buf[n_buf - i] - m.mu);
+            }
+            return pred;
+        }
+        std::array<double, MAX_PERFIL_EVENTO_LILYTH * 2> pi_loc{};
+        std::array<double, MAX_PERFIL_EVENTO_LILYTH * 2> u_loc{};
+        const std::size_t n_ef = std::min(n_buf + 1, pi_loc.size());
+        ark::metrologia::elw::coeficientes(m.d, n_ef, pi_loc.data());
+        for (std::size_t t = 0; t < n_buf && t < u_loc.size(); ++t) {
+            double s = 0.0;
+            for (std::size_t k = 0; k <= t && k < n_ef; ++k) s += pi_loc[k] * buf[t - k];
+            u_loc[t] = s;
+        }
+        double u_pred = m.mu;
+        for (std::size_t i = 1; i <= m.p && i <= n_buf; ++i) {
+            u_pred += m.phi[i - 1] * (u_loc[n_buf - i] - m.mu);
+        }
+        double cola = 0.0;
+        for (std::size_t k = 1; k <= n_buf && k < n_ef; ++k) {
+            cola += pi_loc[k] * buf[n_buf - k];
+        }
+        return u_pred - cola;
+    }
+
     void copiar_perfil_estacionario(Ranura& r) noexcept {
         const std::int64_t tc = std::max<std::int64_t>(0, std::min(r.t_cambio, r.t_apertura));
         const std::size_t l_raw = static_cast<std::size_t>(r.t_apertura - tc + 1);
         const std::size_t l = std::min<std::size_t>(l_raw, MAX_PERFIL_EVENTO_LILYTH);
         const std::int64_t t_ini_perf = r.t_apertura - static_cast<std::int64_t>(l) + 1;
-
-        r.n_perfil_cruda = r.n_perfil_purgada = 0;
-        for (std::int64_t t = t_ini_perf; t <= r.t_apertura; ++t) {
-            std::size_t idx = 0;
-            if (!indice(t, idx)) continue;
-            if (hist_val_est_cruda_[idx] != 0u && std::isfinite(hist_est_cruda_[idx])) {
-                r.perfil_cruda_est[r.n_perfil_cruda++] = hist_est_cruda_[idx];
-            }
-            if (hist_val_est_purgada_[idx] != 0u && std::isfinite(hist_est_purgada_[idx])) {
-                r.perfil_purgada_est[r.n_perfil_purgada++] = hist_est_purgada_[idx];
-            }
-        }
-
         const std::int64_t t_prev_ini = std::max<std::int64_t>(0, t_ini_perf - static_cast<std::int64_t>(MAX_PERFIL_EVENTO_LILYTH));
-        r.n_hist_prev_cruda = r.n_hist_prev_purgada = 0;
-        for (std::int64_t t = t_prev_ini; t < t_ini_perf; ++t) {
-            std::size_t idx = 0;
-            if (!indice(t, idx)) continue;
-            if (hist_val_est_cruda_[idx] != 0u && std::isfinite(hist_est_cruda_[idx]) && r.n_hist_prev_cruda < MAX_PERFIL_EVENTO_LILYTH) {
-                r.hist_prev_cruda_est[r.n_hist_prev_cruda++] = hist_est_cruda_[idx];
+
+        // Camino por omision (COMPRESION_BASE en Z1 y Z2): identico linea por linea al original
+        if (cfg_.politica_z1_piloto == ConfiguracionLilyth::PoliticaZ1Piloto::COMPRESION_BASE &&
+            cfg_.politica_z2_piloto == ConfiguracionLilyth::PoliticaZ2Piloto::COMPRESION_BASE) {
+            r.n_perfil_cruda = r.n_perfil_purgada = 0;
+            for (std::int64_t t = t_ini_perf; t <= r.t_apertura; ++t) {
+                std::size_t idx = 0;
+                if (!indice(t, idx)) continue;
+                if (hist_val_est_cruda_[idx] != 0u && std::isfinite(hist_est_cruda_[idx])) {
+                    r.perfil_cruda_est[r.n_perfil_cruda++] = hist_est_cruda_[idx];
+                }
+                if (hist_val_est_purgada_[idx] != 0u && std::isfinite(hist_est_purgada_[idx])) {
+                    r.perfil_purgada_est[r.n_perfil_purgada++] = hist_est_purgada_[idx];
+                }
             }
-            if (hist_val_est_purgada_[idx] != 0u && std::isfinite(hist_est_purgada_[idx]) && r.n_hist_prev_purgada < MAX_PERFIL_EVENTO_LILYTH) {
-                r.hist_prev_purgada_est[r.n_hist_prev_purgada++] = hist_est_purgada_[idx];
+
+            r.n_hist_prev_cruda = r.n_hist_prev_purgada = 0;
+            for (std::int64_t t = t_prev_ini; t < t_ini_perf; ++t) {
+                std::size_t idx = 0;
+                if (!indice(t, idx)) continue;
+                if (hist_val_est_cruda_[idx] != 0u && std::isfinite(hist_est_cruda_[idx]) && r.n_hist_prev_cruda < MAX_PERFIL_EVENTO_LILYTH) {
+                    r.hist_prev_cruda_est[r.n_hist_prev_cruda++] = hist_est_cruda_[idx];
+                }
+                if (hist_val_est_purgada_[idx] != 0u && std::isfinite(hist_est_purgada_[idx]) && r.n_hist_prev_purgada < MAX_PERFIL_EVENTO_LILYTH) {
+                    r.hist_prev_purgada_est[r.n_hist_prev_purgada++] = hist_est_purgada_[idx];
+                }
             }
+            return;
         }
+
+        // Politica instrumentada para una representacion (cruda o purgada): primero Z1 (hist_prev), luego Z2 (perfil)
+        auto copiar_rep = [&](const std::array<double, HIST_MAX>& h_est,
+                              const std::array<std::uint8_t, HIST_MAX>& h_val,
+                              const ModeloLinealNulo& mod,
+                              std::array<double, MAX_PERFIL_EVENTO_LILYTH>& out_prev,
+                              std::size_t& n_prev,
+                              std::array<double, MAX_PERFIL_EVENTO_LILYTH>& out_perf,
+                              std::size_t& n_perf,
+                              bool& flag_corrupto_z2) noexcept {
+            n_prev = 0;
+            n_perf = 0;
+            flag_corrupto_z2 = false;
+
+            // 1. Z1: hist_prev_est en [t_prev_ini, t_ini_perf)
+            if (cfg_.politica_z1_piloto == ConfiguracionLilyth::PoliticaZ1Piloto::COMPRESION_BASE) {
+                for (std::int64_t t = t_prev_ini; t < t_ini_perf; ++t) {
+                    std::size_t idx = 0;
+                    if (!indice(t, idx)) continue;
+                    if (h_val[idx] != 0u && std::isfinite(h_est[idx]) && n_prev < MAX_PERFIL_EVENTO_LILYTH) {
+                        out_prev[n_prev++] = h_est[idx];
+                    }
+                }
+            } else if (cfg_.politica_z1_piloto == ConfiguracionLilyth::PoliticaZ1Piloto::CORTE_SUFIJO) {
+                std::int64_t t_corte = t_prev_ini;
+                for (std::int64_t t = t_prev_ini; t < t_ini_perf; ++t) {
+                    std::size_t idx = 0;
+                    if (!indice(t, idx) || h_val[idx] == 0u || !std::isfinite(h_est[idx])) {
+                        t_corte = t + 1;
+                    }
+                }
+                for (std::int64_t t = t_corte; t < t_ini_perf; ++t) {
+                    std::size_t idx = 0;
+                    if (indice(t, idx) && h_val[idx] != 0u && std::isfinite(h_est[idx]) && n_prev < MAX_PERFIL_EVENTO_LILYTH) {
+                        out_prev[n_prev++] = h_est[idx];
+                    }
+                }
+            } else if (cfg_.politica_z1_piloto == ConfiguracionLilyth::PoliticaZ1Piloto::PUENTE_CAUSAL) {
+                // PUENTE_CAUSAL en Z1 hasta r_max_z1_piloto; si excede r_max_z1_piloto, corta al sufijo posterior
+                std::size_t racha_inv = 0;
+                for (std::int64_t t = t_prev_ini; t < t_ini_perf; ++t) {
+                    std::size_t idx = 0;
+                    const bool ok_t = indice(t, idx) && h_val[idx] != 0u && std::isfinite(h_est[idx]);
+                    if (ok_t) {
+                        racha_inv = 0;
+                        if (n_prev < MAX_PERFIL_EVENTO_LILYTH) out_prev[n_prev++] = h_est[idx];
+                    } else {
+                        ++racha_inv;
+                        if (racha_inv <= cfg_.r_max_z1_piloto && n_prev > 0 && n_prev < MAX_PERFIL_EVENTO_LILYTH) {
+                            const double zp = predecir_un_paso_causal(mod, out_prev.data(), n_prev);
+                            out_prev[n_prev++] = zp;
+                        } else if (racha_inv > cfg_.r_max_z1_piloto) {
+                            n_prev = 0;
+                        }
+                    }
+                }
+            } else {
+                // PUENTE_ITO_HISTORICO en Z1: usa puente condicionado de 2 bordes con doble llave (r <= r_max && |Z_hueco| <= z_max)
+                // cuando ambos bordes del hueco están dentro de Z1 (< t_ini_perf), y predicción causal en el borde t_ini_perf - 1
+                std::int64_t t = t_prev_ini;
+                while (t < t_ini_perf) {
+                    std::size_t idx = 0;
+                    const bool ok_t = indice(t, idx) && h_val[idx] != 0u && std::isfinite(h_est[idx]);
+                    if (ok_t) {
+                        if (n_prev < MAX_PERFIL_EVENTO_LILYTH) out_prev[n_prev++] = h_est[idx];
+                        ++t;
+                        continue;
+                    }
+                    // Medir longitud de la racha inválida dentro de Z1 [t, t_ini_perf)
+                    std::int64_t t_fin_gap = t;
+                    while (t_fin_gap + 1 < t_ini_perf) {
+                        std::size_t idx_sig = 0;
+                        if (indice(t_fin_gap + 1, idx_sig) && h_val[idx_sig] != 0u && std::isfinite(h_est[idx_sig])) break;
+                        ++t_fin_gap;
+                    }
+                    const std::size_t r_gap = static_cast<std::size_t>(t_fin_gap - t + 1);
+                    if (n_prev == 0 || r_gap > cfg_.r_max_z1_piloto) {
+                        n_prev = 0;
+                        t = t_fin_gap + 1;
+                        continue;
+                    }
+                    if (t_fin_gap + 1 < t_ini_perf) {
+                        // Hueco interior Z1b: ambos bordes pertenecen a la historia previa en calma (< t_ini_perf)
+                        std::size_t idx_der = 0;
+                        (void)indice(t_fin_gap + 1, idx_der);
+                        const double x_ini = out_prev[n_prev - 1];
+                        const double x_fin = h_est[idx_der];
+                        piloto::ConfiguracionPuenteHistoricoIto cfg_ito{};
+                        cfg_ito.integracion = Integracion::FLUJO; // h_est ya está en representación estacionaria
+                        cfg_ito.r_max = cfg_.r_max_z1_piloto;
+                        cfg_ito.z_max_hueco = cfg_.z_max_hueco_piloto;
+                        cfg_ito.n_semillas_rng = 0; // En copiar_perfil_estacionario usamos la esperanza condicional exacta
+                        const auto res_ito = piloto::evaluar_y_reconstruir_hueco_ito(
+                            cfg_ito, mod, std::span<const double>(out_prev.data(), n_prev), x_ini, x_fin, r_gap);
+                        if (res_ito.reconstruido) {
+                            for (std::size_t k = 0; k < r_gap && n_prev < MAX_PERFIL_EVENTO_LILYTH; ++k) {
+                                out_prev[n_prev++] = res_ito.x_media_cond[k];
+                            }
+                        } else {
+                            n_prev = 0; // Falló la llave de amplitud |Z_hueco| <= z_max: corte limpio al sufijo
+                        }
+                    } else {
+                        // Hueco en el borde inmediato Z1a (t_fin_gap == t_ini_perf - 1): no usa t_ini_perf para no filtrar el choque Z2
+                        for (std::size_t k = 0; k < r_gap && n_prev < MAX_PERFIL_EVENTO_LILYTH; ++k) {
+                            const double zp = predecir_un_paso_causal(mod, out_prev.data(), n_prev);
+                            out_prev[n_prev++] = zp;
+                        }
+                    }
+                    t = t_fin_gap + 1;
+                }
+            }
+
+            // 2. Z2: perfil_est en [t_ini_perf, t_apertura]
+            // Fase 3: cualquier barra con FLAG_PUENTE_ITO o FLAG_CHOQUE_EN_HUECO en Z2 también cuenta como perfil corrupto
+            std::size_t racha_inv_z2 = 0;
+            std::size_t max_racha_z2 = 0;
+            for (std::int64_t t = t_ini_perf; t <= r.t_apertura; ++t) {
+                std::size_t idx = 0;
+                const bool tiene_idx = indice(t, idx);
+                const bool veto_ito_z2 = tiene_idx && ((hist_flags_hueco_[idx] & (ark::dataset::FLAG_PUENTE_ITO | ark::dataset::FLAG_CHOQUE_EN_HUECO | ark::dataset::FLAG_PAUSA_UMBRAL | ark::dataset::FLAG_CORRUPCION_CAIDA)) != 0u);
+                const bool ok_t = tiene_idx && !veto_ito_z2 && h_val[idx] != 0u && std::isfinite(h_est[idx]);
+                if (ok_t) {
+                    racha_inv_z2 = 0;
+                    if (n_perf < MAX_PERFIL_EVENTO_LILYTH) out_perf[n_perf++] = h_est[idx];
+                } else {
+                    ++racha_inv_z2;
+                    if (racha_inv_z2 > max_racha_z2) max_racha_z2 = racha_inv_z2;
+                    if (cfg_.politica_z2_piloto == ConfiguracionLilyth::PoliticaZ2Piloto::PUENTE_CAUSAL &&
+                        racha_inv_z2 <= cfg_.r_max_z2_piloto && n_perf < MAX_PERFIL_EVENTO_LILYTH) {
+                        std::array<double, MAX_PERFIL_EVENTO_LILYTH * 2> concat_loc{};
+                        std::size_t n_c = 0;
+                        for (std::size_t k = 0; k < n_prev && n_c < concat_loc.size(); ++k) concat_loc[n_c++] = out_prev[k];
+                        for (std::size_t k = 0; k < n_perf && n_c < concat_loc.size(); ++k) concat_loc[n_c++] = out_perf[k];
+                        out_perf[n_perf++] = predecir_un_paso_causal(mod, concat_loc.data(), n_c);
+                    }
+                }
+            }
+            if (cfg_.politica_z2_piloto == ConfiguracionLilyth::PoliticaZ2Piloto::RECHAZAR_SI_CORRUPTO &&
+                max_racha_z2 > cfg_.r_max_z2_piloto) {
+                flag_corrupto_z2 = true;
+            }
+        };
+
+        copiar_rep(hist_est_cruda_, hist_val_est_cruda_, nulo_cruda_.modelo_lineal,
+                   r.hist_prev_cruda_est, r.n_hist_prev_cruda,
+                   r.perfil_cruda_est, r.n_perfil_cruda, r.perfil_corrupto_z2_cruda);
+        copiar_rep(hist_est_purgada_, hist_val_est_purgada_, nulo_purgada_.modelo_lineal,
+                   r.hist_prev_purgada_est, r.n_hist_prev_purgada,
+                   r.perfil_purgada_est, r.n_perfil_purgada, r.perfil_corrupto_z2_purgada);
     }
 
     void abrir(const EventoAlarma& a, int j, double yc, bool okc, double yp, bool okp, SalidaPaso& out) noexcept {
@@ -1407,17 +1634,48 @@ private:
     void avanzar(RamaTrayectoriaLilyth<T_MAX>& rama, std::size_t tau, double y, bool ok, bool purgada, std::size_t w_anc = 120) noexcept {
         if (rama.desenlace != DesenlaceRanura::ABIERTA) return;
         if (!ok || !std::isfinite(y)) {
-            rama.desenlace = std::isfinite(rama.tau_rest_consolidado) ? DesenlaceRanura::RESTITUIDA : DesenlaceRanura::CENSURADA_DATO_INVALIDO;
-            rama.tau_fin = std::isfinite(rama.tau_rest_consolidado) ? static_cast<std::size_t>(rama.tau_rest_consolidado) : rama.pasos_observados;
+            if (cfg_.politica_z3_piloto == ConfiguracionLilyth::PoliticaZ3Piloto::CORTA_AL_PRIMERO) {
+                rama.desenlace = std::isfinite(rama.tau_rest_consolidado) ? DesenlaceRanura::RESTITUIDA : DesenlaceRanura::CENSURADA_DATO_INVALIDO;
+                rama.tau_fin = std::isfinite(rama.tau_rest_consolidado) ? static_cast<std::size_t>(rama.tau_rest_consolidado) : rama.pasos_observados;
+                return;
+            }
+            if (cfg_.politica_z3_piloto == ConfiguracionLilyth::PoliticaZ3Piloto::MUTANTE_COMPRIME_TAU) {
+                // Salta el paso invalido comprimiendo el indice de tau en los pasos siguientes; cierra si se alcanza el horizonte fisico
+                if (tau >= cfg_.t_max_efectivo) {
+                    const bool rest = std::isfinite(rama.tau_rest_consolidado);
+                    rama.desenlace = rest ? DesenlaceRanura::RESTITUIDA : DesenlaceRanura::CENSURADA_HORIZONTE;
+                    rama.tau_fin = rest ? static_cast<std::size_t>(rama.tau_rest_consolidado) : rama.pasos_observados;
+                }
+                return;
+            }
+            // RELOJ_FISICO_TOPE_R: mantiene el reloj fisico tau = t - t_a sin comprimir
+            ++rama.racha_invalida_z3;
+            if (rama.racha_invalida_z3 > cfg_.r_max_z3_piloto) {
+                rama.desenlace = std::isfinite(rama.tau_rest_consolidado) ? DesenlaceRanura::RESTITUIDA : DesenlaceRanura::CENSURADA_DATO_INVALIDO;
+                rama.tau_fin = std::isfinite(rama.tau_rest_consolidado) ? static_cast<std::size_t>(rama.tau_rest_consolidado) : rama.pasos_observados;
+                return;
+            }
+            rama.eta[tau - 1] = NaN;
+            rama.pasos_observados = tau;
+            if (tau >= cfg_.t_max_efectivo) {
+                const bool rest = std::isfinite(rama.tau_rest_consolidado);
+                rama.desenlace = rest ? DesenlaceRanura::RESTITUIDA : DesenlaceRanura::CENSURADA_HORIZONTE;
+                rama.tau_fin = rest ? static_cast<std::size_t>(rama.tau_rest_consolidado) : tau;
+            }
             return;
         }
+        rama.racha_invalida_z3 = 0;
+        ++rama.pasos_validos_z3;
+        const std::size_t tau_ef = (cfg_.politica_z3_piloto == ConfiguracionLilyth::PoliticaZ3Piloto::MUTANTE_COMPRIME_TAU)
+                                       ? rama.pasos_validos_z3
+                                       : tau;
         const double eta = (y - rama.y_ancla) / rama.dy;
-        rama.eta[tau - 1] = eta;
-        rama.pasos_observados = tau;
-        if (purgada) { suma_eta_purgada_[tau - 1] += eta; ++cuenta_eta_purgada_[tau - 1]; }
-        else { suma_eta_cruda_[tau - 1] += eta; ++cuenta_eta_cruda_[tau - 1]; }
-        if (tau >= 2) {
-            if (!std::isfinite(rama.min_eta_desde_2) || eta < rama.min_eta_desde_2) { rama.min_eta_desde_2 = eta; rama.tau_min_eta = tau; }
+        rama.eta[tau_ef - 1] = eta;
+        rama.pasos_observados = tau_ef;
+        if (purgada) { suma_eta_purgada_[tau_ef - 1] += eta; ++cuenta_eta_purgada_[tau_ef - 1]; }
+        else { suma_eta_cruda_[tau_ef - 1] += eta; ++cuenta_eta_cruda_[tau_ef - 1]; }
+        if (tau_ef >= 2) {
+            if (!std::isfinite(rama.min_eta_desde_2) || eta < rama.min_eta_desde_2) { rama.min_eta_desde_2 = eta; rama.tau_min_eta = tau_ef; }
             if (eta < 0.0) rama.armonico_sospechoso = true;
         }
         if (eta <= 0.5) {
@@ -1426,22 +1684,22 @@ private:
             const double nu_p_movil = nu_punto_ventana_reciente(w_anc);
             const double nu_p_ef = detalle_reloj_marea::seleccionar_nu_punto_ancla(rama.nu_punto_ancla, nu_p_movil);
             if (!std::isfinite(rama.tau_rest_primer_toque)) {
-                rama.tau_rest_primer_toque = static_cast<double>(tau);
+                rama.tau_rest_primer_toque = static_cast<double>(tau_ef);
                 rama.delta_nu_primer_toque = dnu;
-                if (nu_p_ef > 0.0) rama.tau_act_primer_toque = detalle_reloj_marea::calcular_tau_actividad(dnu, nu_p_ef, tau);
+                if (nu_p_ef > 0.0) rama.tau_act_primer_toque = detalle_reloj_marea::calcular_tau_actividad(dnu, nu_p_ef, tau_ef);
                 rama.pared_primer_toque = dp;
             }
             if (!calor_activo_ && !std::isfinite(rama.tau_rest_consolidado)) {
-                rama.tau_rest_consolidado = static_cast<double>(tau);
+                rama.tau_rest_consolidado = static_cast<double>(tau_ef);
                 rama.delta_nu_consolidado = dnu;
-                if (nu_p_ef > 0.0) rama.tau_act_consolidado = detalle_reloj_marea::calcular_tau_actividad(dnu, nu_p_ef, tau);
+                if (nu_p_ef > 0.0) rama.tau_act_consolidado = detalle_reloj_marea::calcular_tau_actividad(dnu, nu_p_ef, tau_ef);
                 rama.pared_consolidado = dp;
             }
         }
         if (tau >= cfg_.t_max_efectivo) {
             const bool rest = std::isfinite(rama.tau_rest_consolidado);
             rama.desenlace = rest ? DesenlaceRanura::RESTITUIDA : DesenlaceRanura::CENSURADA_HORIZONTE;
-            rama.tau_fin = rest ? static_cast<std::size_t>(rama.tau_rest_consolidado) : tau;
+            rama.tau_fin = rest ? static_cast<std::size_t>(rama.tau_rest_consolidado) : tau_ef;
         }
     }
 

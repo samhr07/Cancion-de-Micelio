@@ -73,7 +73,10 @@ public:
                 if (!b) continue;
                 x.push_back(b->valor);
                 den.push_back(b->nu);
-                ok.push_back(b->imputada ? 0 : 1);
+                const bool ok_b = cfg.usar_protocolo_huecos
+                    ? ((!b->imputada || b->solo_mercado_quieto) && ((b->flags_hueco & (2u | 64u | 128u)) == 0u))
+                    : (!b->imputada);
+                ok.push_back(ok_b ? 1 : 0);
                 fs.push_back(f.fase.activa ? b->fase : (fase.empty() ? 0 : fase[i]));
                 ds.push_back(f.fase.activa ? b->dia : (dia.empty() ? 0 : dia[i]));
             }
@@ -92,7 +95,10 @@ public:
         s.barra_cerrada = true;
         s.barra = *b;
         const bool cal = flujo_.fuente().fase.activa;
-        s.delta = obs_.paso(b->valor, b->nu, !b->imputada, cal ? b->fase : fase, cal ? b->dia : dia);
+        const bool ok_b = cfg_.usar_protocolo_huecos
+            ? ((!b->imputada || b->solo_mercado_quieto) && ((b->flags_hueco & (2u | 64u | 128u)) == 0u))
+            : (!b->imputada);
+        s.delta = obs_.paso(b->valor, b->nu, ok_b, cal ? b->fase : fase, cal ? b->dia : dia);
         return s;
     }
 };

@@ -75,6 +75,7 @@ struct EntradaPasoCxx {
     double volumen{0.0};
     double trades{0.0};
     double nocional{0.0};
+    uint8_t flags_hueco{0};            // bits de flags_control / ontologia de hueco (0 = sin etiqueta adicional)
 };
 
 // Ultima fila ADMITIDA por la aduana (lectura; 2026-11-04, Jefe de Arquitectos): la usa el motor de reloj intrinseco como compuerta
@@ -88,6 +89,7 @@ struct FilaAdmitidaCxx {
     bool con_sesion{true};
     double d_nu{0.0};                // incremento del reloj intrinseco de esta fila
     uint32_t omitidas{0};            // barras omitidas entre la fila anterior y esta
+    uint8_t flags_hueco{0};          // bits de flags_control / ontologia de hueco propagados desde la entrada
 };
 
 namespace detalle {
@@ -285,7 +287,11 @@ public:
         ring_disp_.push(disp_k);
         ring_disp_decl_.push(disp_decl);
         ring_gaps_.push(gap_barras_k);
-        ultima_ = FilaAdmitidaCxx{ts_k, disp_k, disp_decl, val_k, mask_k, e.con_sesion, d_nu, gap_barras_k};
+        uint8_t flags_k = e.flags_hueco;
+        if (e.con_sesion && !std::isfinite(e.valor)) {
+            flags_k |= 128u; // FLAG_CORRUPCION_CAIDA cuando la entrada en sesion era NaN/Inf
+        }
+        ultima_ = FilaAdmitidaCxx{ts_k, disp_k, disp_decl, val_k, mask_k, e.con_sesion, d_nu, gap_barras_k, flags_k};
 
         if (!emite) {
             ++cursor_global_;

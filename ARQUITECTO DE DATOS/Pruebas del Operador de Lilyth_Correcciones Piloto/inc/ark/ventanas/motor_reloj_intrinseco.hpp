@@ -80,6 +80,8 @@ struct VentanaIntrinsecaCxx {
     uint32_t filas{0};                          // filas con sesion en la ventana
     TipoRelojVentana tipo_reloj{TipoRelojVentana::PARED};
     double delta_nu{0.0};
+    std::array<uint8_t, W_MAX> flags_hueco{};       // OR de flags_hueco de las filas con sesion que forman cada barra
+    std::array<bool, W_MAX> solo_mercado_quieto{};  // true si la barra es imputada pero todas sus filas imputadas son MERCADO_QUIETO sin corrupcion ni omitidas
 };
 
 struct PasoIntrinsecoCxx {
@@ -102,12 +104,14 @@ class MotorVentanasIntrinsecoCxx {
     RingBufferEspejoCxx<double, W_MAX> r_nu_{};
     RingBufferEspejoCxx<uint32_t, W_MAX> r_filas_{}, r_imp_{}, r_omit_{}, r_gap0_{}, r_front_{};
     RingBufferEspejoCxx<uint64_t, W_MAX> r_disp_{}, r_cierre_{};
-    RingBufferEspejoCxx<bool, W_MAX> r_decl_{};
+    RingBufferEspejoCxx<bool, W_MAX> r_decl_{}, r_quieto_{};
+    RingBufferEspejoCxx<uint8_t, W_MAX> r_flags_{};
 
     // barra en curso
     double a_nu_ = 0.0, a_val_ = 0.0, a_pond_ = 0.0;
     bool a_mask_ = false, a_decl_ = true, a_vacia_ = true;
-    uint32_t a_filas_ = 0, a_imp_ = 0, a_omit_ = 0, a_gap0_ = 0;
+    uint32_t a_filas_ = 0, a_imp_ = 0, a_imp_quieto_ = 0, a_omit_ = 0, a_gap0_ = 0;
+    uint8_t a_flags_ = 0;
     uint64_t a_disp_ = 0, a_cierre_ = 0;
     double credito_ = 0.0;   // exceso sobre la ultima frontera cruzada, en [0, delta_nu): nu que ya cuenta para la barra siguiente
 
@@ -118,7 +122,8 @@ class MotorVentanasIntrinsecoCxx {
     void reiniciar_barra() noexcept {
         a_nu_ = a_val_ = a_pond_ = 0.0;
         a_mask_ = false; a_decl_ = true; a_vacia_ = true;
-        a_filas_ = a_imp_ = a_omit_ = a_gap0_ = 0;
+        a_filas_ = a_imp_ = a_imp_quieto_ = a_omit_ = a_gap0_ = 0;
+        a_flags_ = 0;
         a_disp_ = a_cierre_ = 0;
     }
 
@@ -147,7 +152,7 @@ public:
     void reset() noexcept {
         compuerta_.reset();
         r_val_.clear(); r_mask_.clear(); r_nu_.clear(); r_filas_.clear(); r_imp_.clear(); r_omit_.clear(); r_gap0_.clear();
-        r_front_.clear(); r_disp_.clear(); r_cierre_.clear(); r_decl_.clear();
+        r_front_.clear(); r_disp_.clear(); r_cierre_.clear(); r_decl_.clear(); r_quieto_.clear(); r_flags_.clear();
         reiniciar_barra();
         credito_ = 0.0;
         barras_ = 0;
@@ -167,7 +172,14 @@ public:
         if (!f.con_sesion) return p;   // reloj congelado: la fila no entra en ninguna barra
         if (a_vacia_) { a_vacia_ = false; }
         ++a_filas_;
-        if (f.mascara) { ++a_imp_; a_mask_ = true; }
+        a_flags_ |= f.flags_hueco;
+        if (f.mascara) {
+            ++a_imp_;
+            a_mask_ = true;
+            // Es mercado quieto puro si trae FLAG_MERCADO_QUIETO (8) sin FLAG_FILA_VACIA (2), FLAG_PAUSA_UMBRAL (64) ni FLAG_CORRUPCION_CAIDA (128)
+            const bool fila_quieta = ((f.flags_hueco & 8u) != 0u) && ((f.flags_hueco & (2u | 64u | 128u)) == 0u) && std::isfinite(e.valor);
+            if (fila_quieta) ++a_imp_quieto_;
+        }
         a_nu_ += f.d_nu;
         switch (cfg_.agregacion) {
             case AgregacionBarra::ULTIMO: a_val_ = f.valor; break;
@@ -187,8 +199,11 @@ public:
         if (credito_ >= cfg_.delta_nu) credito_ = 0.0;   // no ocurre salvo redondeo en el ultimo bit
         const uint32_t fronteras = k >= 4294967295.0 ? 4294967295u : static_cast<uint32_t>(k);
         const double valor = cfg_.agregacion == AgregacionBarra::MEDIA_NU ? (a_pond_ > 0.0 ? a_val_ / a_pond_ : std::numeric_limits<double>::quiet_NaN()) : a_val_;
+        const bool bar_solo_quieto = a_mask_ && (a_imp_ > 0) && (a_imp_quieto_ == a_imp_) && (a_omit_ == 0) &&
+                                     ((a_flags_ & (2u | 64u | 128u)) == 0u);
         r_val_.push(valor); r_mask_.push(a_mask_); r_nu_.push(a_nu_); r_filas_.push(a_filas_); r_imp_.push(a_imp_);
         r_omit_.push(a_omit_); r_gap0_.push(a_gap0_); r_front_.push(fronteras); r_disp_.push(a_disp_); r_cierre_.push(a_cierre_); r_decl_.push(a_decl_);
+        r_flags_.push(a_flags_); r_quieto_.push(bar_solo_quieto);
         ++barras_;
         reiniciar_barra();
         p.barra_cerrada = true;
@@ -206,12 +221,16 @@ public:
         const uint32_t* fr = r_front_.ventana_actual() + o;
         const uint64_t* dp = r_disp_.ventana_actual() + o;
         const bool* dc = r_decl_.ventana_actual() + o;
+        const uint8_t* fg = r_flags_.ventana_actual() + o;
+        const bool* sq = r_quieto_.ventana_actual() + o;
         out.n = W;
         std::memcpy(out.valores.data(), v, W * sizeof(double));
         std::memcpy(out.mascara.data(), m, W * sizeof(bool));
         std::memcpy(out.nu_barra.data(), nu, W * sizeof(double));
         std::memcpy(out.filas_barra.data(), fl, W * sizeof(uint32_t));
         std::memcpy(out.fronteras_barra.data(), fr, W * sizeof(uint32_t));
+        std::memcpy(out.flags_hueco.data(), fg, W * sizeof(uint8_t));
+        std::memcpy(out.solo_mercado_quieto.data(), sq, W * sizeof(bool));
         uint32_t filas = 0, imp = 0, omit = 0, salt = 0;
         double dnu = 0.0;
         uint64_t td = 0;

@@ -68,9 +68,14 @@ enum class TipoObservableDataset : uint8_t {
 constexpr double NAN_DATASET = std::numeric_limits<double>::quiet_NaN();
 
 // Bits de flags_control
-constexpr uint8_t FLAG_FILA_INSERTADA = 1;   // la fila la inserto la rejilla (la fuente no la trae)
-constexpr uint8_t FLAG_FILA_VACIA = 2;       // la fuente trae la fila pero sin precio valido
-constexpr uint8_t FLAG_FRACCION_NAN = 4;     // sesion reducida sin duracion modelada
+constexpr uint8_t FLAG_FILA_INSERTADA = 1;    // la fila la inserto la rejilla (la fuente no la trae)
+constexpr uint8_t FLAG_FILA_VACIA = 2;        // la fuente trae la fila pero sin precio valido
+constexpr uint8_t FLAG_FRACCION_NAN = 4;      // sesion reducida sin duracion modelada
+constexpr uint8_t FLAG_MERCADO_QUIETO = 8;    // calma legitima en sesion abierta (dY = 0)
+constexpr uint8_t FLAG_PUENTE_ITO = 16;       // dato historico reconstruido entre extremos con puente estocastico (nunca dato medido)
+constexpr uint8_t FLAG_CHOQUE_EN_HUECO = 32;  // desplazamiento neto inicio-fin |X_fin - X_ini| / sigma(dt) > z_max
+constexpr uint8_t FLAG_PAUSA_UMBRAL = 64;     // corte excedio r_max y activo pausa dura hasta reconexion
+constexpr uint8_t FLAG_CORRUPCION_CAIDA = 128;// corrupcion de valor (NaN/Inf) o caida/desconexion de feed
 
 // =======================================================================
 // BarraCausal: estructura fija, trivialmente copiable, sin punteros ni memoria dinamica.

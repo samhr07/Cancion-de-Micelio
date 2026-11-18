@@ -1,0 +1,21 @@
+﻿====================================================================================================
+ BATERIA UNIFICADA NIVEL 1 (CAPA 3) - EXPECTATIVAS SELLADAS (54aa457e...) + ANEXO D1-D5
+ Replicas H0 = 200 | Hilos = 32 | Regimenes: ESTRICTO (alfa=0.05) y DULCE (<50% error)
+====================================================================================================
+[PASA] condicion CN1.1: Volcado hexadecimal (%a) en M1, M2 y M3 (limpios y con huecos) identico bit a bit a observador_lilyth_original.hpp
+[PASA] condicion CN1.3: En M3 (q=2% mercado quieto), PROTOCOLO tiene 0 cortes (dCens=0) y ACTUAL pierde >50%; FRONTERA_ESTRUCTURAL corta limpio
+[PASA] condicion CN1.2: Tamano nominal H0 en q=0: 4/200 [Wilson lo=0.007804 <= 0.05]
+[PASA] condicion CN1.4: Exclusion limpia de 25% Z2 corrupto (eval_z2=0) y 50% Z3 censurado (eval_z3=0) con Wilson lo=0.002954 <= 0.05
+[PASA] condicion CN1.5: Invariantes estructurales a priori (cota_ESTRICTO <= cota_DULCE en toda zona y |sesgo_reloj| < |sesgo_comprime| en Z3a)
+
+====================================================================================================
+ COTAS MONOTONAS DERIVADAS DESDE LA MALLA MEDIDA (r in {1,2,3}, q in {0.5%..10%}):
+  1. MERCADO_QUIETO (M3 trayectoria):       q_max_ESTRICTO = 10.0% | q_max_DULCE = 10.0%
+  2. ZONA Z1a (Borde inmediato t_cambio-1): r_max_ESTRICTO = 0     | r_max_DULCE = 3 (malla r<=3)
+  3. ZONA Z1b (Interior t <= t_cambio-2):   r_max_ESTRICTO = 3     | r_max_DULCE = 3 (malla r<=3)
+  4. ZONA Z2  (Perfil choque [t_cambio,t_a]):r_max_ESTRICTO = 0     | r_max_DULCE = 0 (malla r<=3)
+  5. ZONA Z3a (Avanzar fuera de tau_rest):  r_max_ESTRICTO = 3     | r_max_DULCE = 3 (malla r<=3)
+  6. ZONA Z3b (Avanzar encima de tau_rest): r_max_ESTRICTO = 0     | r_max_DULCE = 0 (malla r<=3)
+====================================================================================================
+ FALLAS DE CONDICIONES: 0
+====================================================================================================

@@ -318,3 +318,7 @@ telemetria/ark/AUTORIZACION_MAINNET.json
 ark_cxx/base_auditada/tests/build/
 ARQUITECTO DE DATOS/Pruebas del Operador de Lilyth_Correcciones Piloto/build/
 JEFE DE ARQUITECTOS DE CODIGO/PRUEBAS_JEFE/**/build/
+*.exe
+*.obj
+*.pdb
+*.ilk

@@ -65,6 +65,7 @@ struct ConfiguracionObservador {
     // RAMA (2026-11-14, paso 2; decision del Comandante: presupuesto SEPARADO por canal): ARL0 propio del canal de temperatura.
     // 0 (omision) = el mismo que el de nivel, lo de siempre. Se reparte entre escalas igual que el de nivel (arl0 2J / 2^j).
     double arl0_temperatura_pasos_nativos = 0.0;
+    bool usar_protocolo_huecos = false; // Fase 3: si true en ObservadorSaltosFilas, admite solo_mercado_quieto como valido
 };
 
 template <std::size_t J_MAX = 24, std::size_t L = 120, std::size_t N_REG = 120, std::size_t B_MAX = 1440, std::size_t EV_MAX = 8>
