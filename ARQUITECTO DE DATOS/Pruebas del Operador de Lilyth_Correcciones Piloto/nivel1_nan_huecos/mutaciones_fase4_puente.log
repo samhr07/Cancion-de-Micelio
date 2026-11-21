@@ -1,9 +1,11 @@
 ﻿====================================================================================================
- FASE 4: CAZA DE MUTANTES DE ETIQUETAS E ITO (mutaciones_fase4_puente.py)
+ FASE 4 SELLADA: CAZA DE MUTANTES (MF4.0 + MN1.7-MN1.10, R=200 fijo)
 ====================================================================================================
-MF4.0  testigo: sin cambio (Fase 4)                                       TESTIGO PASA (0 fallas)
-MN1.7  ignorar FLAG_PUENTE_ITO en Z2 y Z3 dentro de observador_lilyth.hpp CAZADO: CF4.P6: Blindaje obligatorio de FLAG_PUENTE_ITO en Z2 y Z3 dentro de ObservadorLilyth
-MN1.8  ignorar llave de amplitud |Z_hueco| > z_max en puente_historico_ito.hpp CAZADO: CF4.P2b: Llave de amplitud |Z_hueco| > z_max bloquea puente ante salto oculto +12s en micro-corte r=2; CF4.P5: Comparativa R replicas en M1_H0, M2_H0 y M1_H1 (B4 pasa ESTRICTO y conserva tamano nominal en ARFIMA)
+MF4.0  testigo: sin cambio (Fase 4 sellada)                                         TESTIGO FALLA: ['[FALLA] CF4.P2b: Matriz 4x5 choque oculto (K=20, hist=64): bloqueo >=80% en Delta>=Delta_min y 100% en +12s r=1..2']
+MN1.7  ignorar FLAG_PUENTE_ITO en Z2 y Z3 dentro de observador_lilyth.hpp           CAZADO: CF4.P2b: Matriz 4x5 choque oculto (K=20, hist=64): bloqueo >=80% en Delta>=Delta_min y 100% en +12s r=1..2; CF4.P6: Blindaje obligatorio de FLAG_PUENTE_ITO en Z2 && Z3 dentro de ObservadorLilyth
+MN1.8  ignorar llave de amplitud |Z_hueco| > z_max_ef en puente_historico_ito.hpp   CAZADO: CF4.P2b: Matriz 4x5 choque oculto (K=20, hist=64): bloqueo >=80% en Delta>=Delta_min y 100% en +12s r=1..2; CF4.P2c: Discriminacion efectiva: B2 colapsa varianza intra-hueco (<0.10), B4 la preserva [0.60,1.40] y bloquea >=8/10 choques +10s vs 0/10 de B3
+MN1.9  colapsar varianza entre imputaciones B_M = 0 en combinar_rubin (imputacion unica) CAZADO: CF4.P2b: Matriz 4x5 choque oculto (K=20, hist=64): bloqueo >=80% en Delta>=Delta_min y 100% en +12s r=1..2; CF4.P3: M2 ARFIMA (16 semillas ciegas, Rubin M=16 por serie): B4_RUBIN16 pasa ESTRICTO y gamma en (1e-6, 0.25]
+MN1.10 inyectar deriva cero (0.0) en valor_z0_imputado bajo FLUJO cuando mu != 0    CAZADO: CF4.P2b: Matriz 4x5 choque oculto (K=20, hist=64): bloqueo >=80% en Delta>=Delta_min y 100% en +12s r=1..2
 ----------------------------------------------------------------------------------------------------
-RESULTADO FASE 4 MUTANTES: 2 de 2 cazados
+RESULTADO FASE 4 MUTANTES: 4 de 4 mutantes cazados | Testigo MF4.0: FALLA (4 de 5 controles)
 ====================================================================================================

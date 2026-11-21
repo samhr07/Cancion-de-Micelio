@@ -1,0 +1,75 @@
+﻿====================================================================================================
+ FASE 4 SELLADA (EXPECTATIVAS_FASE4.md): alfa_hueco=0.01 (z_max=2.5758), M_fino=16, M_mc=5, R=200, Hilos=32
+====================================================================================================
+[PASA] CF4.P1: Identidad bit a bit REAL (%a) contra volcado_orig.txt (observador_lilyth_original.hpp) intacta
+
+--- [P2a] NIVEL M3 + PurgaDiurna (semilla ciega 20261119, micro-cortes r=4, K_ref=12, S0=-0.0052) ---
+ Competidor              | Alm_Niv_Esp | Alm_Tmp_Esp | K_eval | |dS|/ee | err_Anc_RNG | Notas
+-------------------------+-------------+-------------+--------+---------+-------------+-----------------------------
+ B0_BASE_ACTUAL          |           5 |           0 |      9 |  0.2480 |    0.00e+00 | rec=0 chq=0 pau=0
+ B1_ARGON_VIVO           |           5 |           0 |      9 |  0.2480 |    0.00e+00 | rec=0 chq=0 pau=0
+ B1b_ARRASTRE_NIVEL      |           7 |           0 |     14 |  0.4134 |    0.00e+00 | rec=0 chq=0 pau=0
+ B2_LINEAL_2BORDES       |           5 |           0 |     12 |  0.0000 |    0.00e+00 | rec=12 chq=0 pau=0
+ B3_ITO_SIN_FILTRO       |           5 |           0 |     11 |  0.0075 |    2.66e-15 | rec=12 chq=0 pau=0
+ B4_RUBIN16              |           5 |           0 |   11.1 |  0.0062 |    2.66e-15 | rec=12 chq=0 pau=0 gamma=0.0000
+[PASA] CF4.P2a: NIVEL M3 (semilla ciega) micro-cortes r=4 bajo Rubin M=16 (|dS|/ee_Rubin<=0.25, AlmTmp<=B2, anc<=1e-10)
+
+--- [P2b] Matriz choque oculto NIVEL M3 (alfa_hueco=0.01, z_max=2.5758, hist=64, K=20 posiciones) ---
+ r | Delta_min(80%) |    +4s (bloq)   |    +6s (bloq)   |    +8s (bloq)   |   +10s (bloq)   |   +12s (bloq)
+---+----------------+-----------------+-----------------+-----------------+-----------------+-----------------
+ 1 |          6.61s |  2.18 ( 35.0%) |  3.21 ( 70.0%) |  4.24 ( 95.0%) |  5.28 (100.0%) |  6.31 (100.0%) |
+ 2 |          9.72s |  1.35 ( 15.0%) |  2.06 ( 30.0%) |  2.76 ( 50.0%) |  3.46 ( 75.0%) |  4.17 ( 90.0%) |
+ 3 |         12.64s |  1.03 ( 10.0%) |  1.57 ( 15.0%) |  2.11 ( 35.0%) |  2.65 ( 40.0%) |  3.19 ( 65.0%) |
+ 4 |         15.35s |  0.91 (  5.0%) |  1.36 ( 15.0%) |  1.80 ( 30.0%) |  2.25 ( 40.0%) |  2.69 ( 55.0%) |
+[FALLA] CF4.P2b: Matriz 4x5 choque oculto (K=20, hist=64): bloqueo >=80% en Delta>=Delta_min y 100% en +12s r=1..2
+
+--- [P2c] Discriminante Calmas Inventadas (K=24 r=4) y Choques Ocultos +10s (K=10 r=2) ---
+  Varianza intra-hueco / fisica : B2_LINEAL = 0.0000 | B4_ITO_RNG = 0.7952 (rango [0.60, 1.40])
+  Telemetria continua s^2(temp) : LIMPIO=1.2278 | B1b=1.3214 (1.08x) | B2=1.2092 (0.98x) | B4=1.2738 (1.04x)
+  Choques ocultos +10s (r=2)    : B3 bloquea 0/10 (K_eval=11) | B4 bloquea 8/10 (K_eval=9)
+[PASA] CF4.P2c: Discriminacion efectiva: B2 colapsa varianza intra-hueco (<0.10), B4 la preserva [0.60,1.40] y bloquea >=8/10 choques +10s vs 0/10 de B3
+
+--- [P3] M2 ARFIMA (16/16 semillas ciegas, d_med=0.2712, S0_med=0.2555, ee0=0.0799, ee_Rubin=0.0848) ---
+ Politica Z1b (dt=2, r=3) | RMSE(e)/sd | |E[dS]|/ee   | ESTRICTO | DULCE
+--------------------------+------------+--------------+----------+-------
+ B0_COMPRESION_BASE       |     0.0356 |       0.0489 | PASA     | PASA 
+ B0b_CORTE_SUFIJO         |     0.1153 |       0.7695 | FALLA    | PASA 
+ B1_PUENTE_CAUSAL_1B      |     0.0260 |       0.1172 | PASA     | PASA 
+ B2_LINEAL_2BORDES        |     0.0208 |       0.0398 | PASA     | PASA 
+ B4_PUENTE_ITO_MEDIA_2B   |     0.0367 |       0.0926 | PASA     | PASA 
+ B4_PUENTE_ITO_RUBIN16    |     0.0220 |       0.0988 | PASA     | PASA   (gamma_med=0.0988, err_anc=1.78e-15)
+[PASA] CF4.P3: M2 ARFIMA (16 semillas ciegas, Rubin M=16 por serie): B4_RUBIN16 pasa ESTRICTO y gamma en (1e-6, 0.25]
+[PASA] CF4.P4: Corte largo r=12 > r_max=3 mantiene EN_PAUSA_DURA exacta (9 pasos) y corta segmento al reconectar
+[PASA] CF4.P6: Blindaje obligatorio de FLAG_PUENTE_ITO en Z2 && Z3 dentro de ObservadorLilyth
+  [Detalle P7 deriva FLUJO mu=3.800 (cal=3.771)] huecos_rec=12 | alarmas_neg_en_hueco=0
+[PASA] CF4.P7: Deriva no nula en FLUJO (mu=+5s) via valor_z0_imputado: 0 alarmas negativas espurias en 12 huecos r=2
+
+--- [P5] BLOQUE CIEGO MONTE CARLO (R=200, q=2%, r=2, M_rubin=5 + Holm) | l_bar_Z2(M1)=13.49 -> cota_cens=0.152 ---
+ Escenario | Politica               | Validas | K_eval | FalsoRech_H0 [Wilson 95%]      | RetPot_H1 | |dS|/ee | AlmTmp | ESTRICTO
+-----------+------------------------+---------+--------+--------------------------------+-----------+---------+--------+---------
+ LIMPIO q0 | M1_H0 BASE             |     200 |    8.3 |   3/200 = 0.015 [0.005, 0.043] |         - |   0.000 |   0.00 | PASA    
+ LIMPIO q0 | M2_H0 ARFIMA BASE      |     200 |    8.8 |   8/200 = 0.040 [0.020, 0.077] |         - |   0.000 |   0.00 | PASA    
+ LIMPIO q0 | M3_H0 NIVEL BASE       |     200 |    8.5 |   6/200 = 0.030 [0.014, 0.064] |         - |   0.000 |   0.00 | PASA    
+ LIMPIO q0 | M1_H1 BASE (Potencia)  |     200 |   13.9 | Pot = 123/200 = 0.615          |      1.00 |       - |   0.00 | PASA    
+-----------+------------------------+---------+--------+--------------------------------+-----------+---------+--------+---------
+ M1 q2 r2  | B0_BASE_ACTUAL         |     200 |    7.6 |   4/200 = 0.020 [0.008, 0.050] |      0.97 |   0.079 |   0.00 | PASA    
+ M2 q2 r2  | B0_BASE_ACTUAL         |     199 |    8.0 |   5/199 = 0.025 [0.011, 0.057] |         - |   0.099 |   0.00 | PASA    
+ M3 q2 r2  | B0_BASE_ACTUAL         |     165 |    1.5 |   6/165 = 0.036 [0.017, 0.077] |         - |   0.225 |   0.00 | PASA    
+ M1 q2 r2  | B1_ARGON_VIVO          |     200 |    7.7 |   3/200 = 0.015 [0.005, 0.043] |      1.05 |   0.017 |   0.00 | PASA    
+ M2 q2 r2  | B1_ARGON_VIVO          |     199 |    8.1 |   4/199 = 0.020 [0.008, 0.051] |         - |   0.096 |   0.00 | PASA    
+ M3 q2 r2  | B1_ARGON_VIVO          |     165 |    1.5 |   6/165 = 0.036 [0.017, 0.077] |         - |   0.220 |   0.00 | PASA    
+  [diag B1_ARGON_VIVO] M1: dcens=0.070 (cota=0.152) vz=0.66 gam=0.0000 | M2: vz=1.31 gam=0.0000 | M3: vz=0.00 gam=0.0000
+ M1 q2 r2  | B2_LINEAL_2BORDES      |     200 |    8.3 |   4/200 = 0.020 [0.008, 0.050] |      1.02 |   0.051 |   0.00 | PASA    
+ M2 q2 r2  | B2_LINEAL_2BORDES      |     199 |    8.8 |   4/199 = 0.020 [0.008, 0.051] |         - |   0.054 |   0.00 | PASA    
+ M3 q2 r2  | B2_LINEAL_2BORDES      |     200 |    8.6 |   5/200 = 0.025 [0.011, 0.057] |         - |   0.010 |   0.00 | PASA    
+ M1 q2 r2  | B3_ITO_SIN_FILTRO      |     200 |    8.3 |   2/200 = 0.010 [0.003, 0.036] |      1.02 |   0.009 |   0.00 | PASA    
+ M2 q2 r2  | B3_ITO_SIN_FILTRO      |     200 |    8.9 |   2/200 = 0.010 [0.003, 0.036] |         - |   0.054 |   0.00 | PASA    
+ M3 q2 r2  | B3_ITO_SIN_FILTRO      |     200 |    8.5 |   8/200 = 0.040 [0.020, 0.077] |         - |   0.019 |   0.00 | PASA    
+ M1 q2 r2  | B4_RUBIN5_HOLM         |     200 |    7.7 |   3/200 = 0.015 [0.005, 0.043] |      1.07 |   0.036 |   0.00 | PASA    
+ M2 q2 r2  | B4_RUBIN5_HOLM         |     199 |    8.1 |   3/199 = 0.015 [0.005, 0.043] |         - |   0.109 |   0.00 | PASA    
+ M3 q2 r2  | B4_RUBIN5_HOLM         |     200 |    7.7 |   6/200 = 0.030 [0.014, 0.064] |         - |   0.009 |   0.00 | PASA    
+  [diag B4_RUBIN5_HOLM] M1: dcens=0.072 (cota=0.152) vz=0.65 gam=0.0080 | M2: vz=1.27 gam=0.0195 | M3: vz=0.78 gam=0.0541
+[PASA] CF4.P5: Bloque ciego R=200 bajo Rubin M=5 + ark::holm() en M1_H0, M2_H0, M3_H0 y M1_H1
+====================================================================================================
+ FALLAS FASE 4: 1
+====================================================================================================

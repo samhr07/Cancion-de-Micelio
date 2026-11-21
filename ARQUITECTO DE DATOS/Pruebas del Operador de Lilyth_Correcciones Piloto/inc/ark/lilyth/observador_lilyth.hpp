@@ -126,7 +126,8 @@ struct ConfiguracionLilyth {
     std::size_t r_max_z2_piloto = 0;
     PoliticaZ3Piloto politica_z3_piloto = PoliticaZ3Piloto::CORTA_AL_PRIMERO;
     std::size_t r_max_z3_piloto = 0;
-    double z_max_hueco_piloto = 3.5;
+    double alfa_hueco_piloto = 0.01;
+    double z_max_hueco_piloto = ark::metrologia::NaN;
     bool usar_protocolo_filas_piloto = false;
 };
 
@@ -1522,6 +1523,7 @@ private:
                         piloto::ConfiguracionPuenteHistoricoIto cfg_ito{};
                         cfg_ito.integracion = Integracion::FLUJO; // h_est ya está en representación estacionaria
                         cfg_ito.r_max = cfg_.r_max_z1_piloto;
+                        cfg_ito.alfa_hueco = cfg_.alfa_hueco_piloto;
                         cfg_ito.z_max_hueco = cfg_.z_max_hueco_piloto;
                         cfg_ito.n_semillas_rng = 0; // En copiar_perfil_estacionario usamos la esperanza condicional exacta
                         const auto res_ito = piloto::evaluar_y_reconstruir_hueco_ito(
