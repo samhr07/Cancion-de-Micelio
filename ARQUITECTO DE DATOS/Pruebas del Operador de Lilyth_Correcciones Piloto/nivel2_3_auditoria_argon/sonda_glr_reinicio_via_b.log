@@ -1,0 +1,29 @@
+================================================================================
+ SONDA EMPIRICA: DetectorGLR::reiniciar() Y hay_previa EN VIA (b) (AR(1) phi=0.8)
+================================================================================
+Calibracion 4096 barras: t_max_ef=6, p=1, phi_1=0.8036, sd_innov=0.9797, radio_max=0.8036
+Serie operativa 16384 barras: 23 eventos cerrados medibles (l==1: 0, l>=2: 23, l_max=64)
+
+=== DIAGNOSTICO 1A: PERFILES MULTI-BARRA (l >= 2) (K_ev = 12, l_medio = 30.25, N_mc/ev = 500, tot = 6000) ===
+  Disparos prematuros d_local en [t0, t0+l-2] (cualq escala): 2419/6000 (40.32%)
+  Disparos prematuros d_local en escala_real+signo_real     : 2417/6000 (40.28%)
+  Entre prematuros (misma esc+sig), NO re-dispara en t_fin por reiniciar(): 2393/2417 (99.01%)
+  Entre NO prematuros, si dispara en t_fin (misma esc+sig): 720/3581 (20.11%)
+  E[x_{t0-1} * signo] incondicional = -0.0019 | en prematuros = +1.3187
+  V0_BASE_ACTUAL           | p_det=0.5365 (3219/6000) | bloq_hp=437 | tau_med=4.064 | E[x_{t0-1}s]=+0.7392 | S=-0.0143 (n=12)
+  V1_BASE_SIN_HAY_PREVIA   | p_det=0.6093 (3656/6000) | bloq_hp=  0 | tau_med=4.050 | E[x_{t0-1}s]=+0.7133 | S=-0.0121 (n=12)
+  V2_ARGON_3_1_C_LITERAL   | p_det=0.1200 ( 720/6000) | bloq_hp=  0 | tau_med=3.704 | E[x_{t0-1}s]=+0.1584 | S=0.0234 (n=12)
+  V3_OPCION_A_EXACTA_TFIN  | p_det=0.1162 ( 697/6000) | bloq_hp=  0 | tau_med=3.720 | E[x_{t0-1}s]=+0.0803 | S=0.0218 (n=12)
+  V4_OPCION_B_PARADA_TEMP  | p_det=0.4947 (2968/6000) | bloq_hp=  0 | tau_med=3.590 | E[x_{t0-1}s]=+1.0183 | S=0.0406 (n=12)
+
+[DIAGNOSTICO 1B: CONTROL PERFILES 1-BARRA (l == 1)] Sin eventos disponibles.
+
+=== DIAGNOSTICO 2: BANCO MULTI-SEMILLA R1 (AR(1) phi=0.80, 16 semillas x 4096 barras, m_min=8) ===
+  V0_BASE_ACTUAL           | n_sem=16 K_tot= 99 | S_medio=-0.16377 ee=0.02799 z=-5.85 | S<0: 15/16 | p_det=0.4947
+  V1_BASE_SIN_HAY_PREVIA   | n_sem=16 K_tot= 99 | S_medio=-0.15847 ee=0.02651 z=-5.98 | S<0: 15/16 | p_det=0.5776
+  V2_ARGON_3_1_C_LITERAL   | n_sem=16 K_tot= 81 | S_medio=-0.05735 ee=0.03412 z=-1.68 | S<0: 10/16 | p_det=0.1005
+  V3_OPCION_A_EXACTA_TFIN  | n_sem=16 K_tot= 78 | S_medio=-0.03330 ee=0.03970 z=-0.84 | S<0:  9/16 | p_det=0.0947
+  V4_OPCION_B_PARADA_TEMP  | n_sem=16 K_tot= 99 | S_medio=-0.04729 ee=0.03630 z=-1.30 | S<0:  9/16 | p_det=0.4895
+  Descartes exclusivos por hay_previa en V0: 778 / 10329 intentos efectivos (7.53%)
+
+Tiempo total: 43.45 s
