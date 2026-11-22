@@ -1,0 +1,17 @@
+================================================================================
+ TEST T2.6: ESCANEO DINAMICO Z1b, Z1a SEGURO, VETO Z2 Y PRECALCULO e_iny
+================================================================================
+
+  [T1] Pre-centrado puente Ito (mu=50 -> 1050): dif_pred=7.105e-15, dif_Z=6.477e-14, max_dif_x=5.684e-14
+  Base ARFIMA calibrada: n=1500, p=1, m_inv=86 (esp=86), n_hist_req=87, mu_serie=25.604, arena_cap=131072
+  [T2] Puente Z1b r=2: t_c=500 t_a=501 n_disp=87 (req=87) puentes=1 trunc=0 len_pf=2 len_ei=2
+  [T2] Copia ArenaNoCopiableN2: main usados=4 cap=131072 | copia usados=0 cap=0
+  [T3a] Corte duro r=4 [460..463]: t_ini_perf=500 n_disp=36 d_cut=36 trunc=1
+  [T3b] Corte por choque +12*sigma en r=2 [620..621]: t_ini_perf=700 n_disp=78 d_shock=78 puentes=0 trunc=1
+  [T4] NIVEL+purga NaN x[480]: t_ini_perf=520 PURGADA(n=38 d_seg=38 trunc=1) | CRUDA(n=86 req=86 puentes=1)
+  [T6-seg] Z2 cambio hist_seg_purgada_: corrupto=1 sigue_abierta=1
+  [T5] Z1a seguro (t_c=500, hueco 499): ta=(500,500) tb=(500,500) dif_hist=0.000e+00 dif_de0=7.105e-15
+  [T6] Z2 veto r=1 NaN: corrupto=1 sigue_abierta=1 | FLAG_PUENTE_ITO: corrupto=1 sigue_abierta=1
+  [T7] Perfil l=320 (>256): cap_adapt=480 len_pf=320 len_ei=320 news=0 desborde=0 max_dif_einy=0.000e+00
+
+FALLAS T2.6: 0

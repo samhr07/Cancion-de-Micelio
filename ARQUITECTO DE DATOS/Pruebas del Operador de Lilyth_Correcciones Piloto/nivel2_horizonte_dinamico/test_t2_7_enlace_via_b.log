@@ -1,0 +1,11 @@
+================================================================================
+ TEST T2.7: ENLACE EN evaluar_una_referencia(), VETO <p Y BUFFER 2*tot
+================================================================================
+
+  [C1] tam_trab_arf=38048 (esp=38048) tam_trab_ar=22 | cola[16384..17999]: mu=50.451 (mu_serie=50.037), sd=1.449
+  [C2] ARFIMA E2E (Z1b r=2): hay_ev=1 evaluado=1 iny=1 sin_b=0 n_b=8 hist_disp=87 (req=87) puentes=1 trunc=0
+  [C3] Veto hist<p (p=4): n_disp=2 evaluado=0 sin_b=1 trunc=1 motivo='via (b): historia contigua menor que p'
+  [C4] Z2 FLAG_PUENTE_ITO: forzar_b=true(sin_b=1 eval=0 motivo='via (b): perfil Z2 corrupto') | forzar_b=false(eval=1 iny=0 sin_b=0 n_a=16)
+  [C5] Perfil l=280 (>256) via (b): len_ei=280 iny=1 eval=1 intentos=8 n_b=8 hist_disp=3 (req=3) motivo='via (b): completado m_min nulos por inyeccion'
+
+FALLAS T2.7: 0

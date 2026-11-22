@@ -47,6 +47,7 @@ struct ConfiguracionModeloLineal {
     double alfa = NaN;                                    // el de la familia; obligatorio
     InnovacionesNulo innovaciones = InnovacionesNulo::RESIDUOS_REMUESTREADOS;
     double d_externa = NaN;                               // ARFIMA: ResultadoELW.d de la serie modelada
+    bool usar_enmienda_nivel2 = false;                    // Nivel 2 (Regla 6): pre-centrado mu_serie + horizonte Hosking + burn_in derivado
 };
 
 struct ModeloLinealNulo {
@@ -63,6 +64,12 @@ struct ModeloLinealNulo {
     double media_residuos = 0.0;                          // media de `residuos` para centrar en el remuestreo
     double radio_max = NaN;                               // |raiz| mayor de la recurrencia (inversa de las raices de A(z))
     std::size_t burn_in = 0;
+    double mu_serie = NaN;                                // Nivel 2: media muestral de z_t ANTES de diferenciar con (1 - L)^d
+    std::size_t n_hist_req = 0;                           // Nivel 2: p (si d == 0) o p + m_inv_arfima (si d != 0)
+    std::size_t m_inv_arfima = 0;                         // Nivel 2: M_pi_exact(d; eps_Q^2) para innovaciones()
+    std::size_t m_sim_arfima = 0;                         // Nivel 2: M_gauss(-d; eps_Q^2) para simular()
+    bool burn_in_topado = false;                          // Nivel 2: true si M_gauss(-d) excede max_seg en simular()
+    bool enmienda_nivel2 = false;                         // Nivel 2 (Regla 6): bandera guardada del ajuste
 };
 
 namespace detalle_lineal {
@@ -138,6 +145,108 @@ inline double calcular_radio_max(const std::vector<double>& phi) {
     return rmax;
 }
 
+// Evalua MSE relativo exacto de innovacion (Var(e_hat^(M) - eps_t) / sigma_eps^2 = Var(e_hat^(M))/sigma_eps^2 - 1)
+// usando pi[0..M] de (1 - L)^d y la autocovarianza cerrada de Hosking (1981) g[0..M] para ARFIMA(0, d, 0).
+[[nodiscard]] inline double mse_pi_exacto_hosking_precalc(
+    const double* pi, const double* g, std::size_t M) noexcept {
+    if (!pi || !g) return NaN;
+    double sum_sq = 0.0;
+    for (std::size_t k = 0; k <= M; ++k) sum_sq += pi[k] * pi[k];
+    double var = g[0] * sum_sq;
+    for (std::size_t h = 1; h <= M; ++h) {
+        double s = 0.0;
+        for (std::size_t j = 0; j <= M - h; ++j) s += pi[j] * pi[j + h];
+        var += 2.0 * g[h] * s;
+    }
+    return std::max(0.0, var - 1.0);
+}
+
+// Variante autocontenida del MSE relativo exacto de Hosking para un orden de truncamiento M dado.
+[[nodiscard]] inline double mse_pi_exacto_hosking(double d, std::size_t M) {
+    if (!(std::isfinite(d) && std::abs(d) < 0.5)) return NaN;
+    if (d == 0.0) return 0.0;
+    std::vector<double> pi(M + 1, 0.0);
+    std::vector<double> g(M + 1, 0.0);
+    pi[0] = 1.0;
+    const double g1md = std::tgamma(1.0 - d);
+    g[0] = std::tgamma(1.0 - 2.0 * d) / (g1md * g1md);
+    for (std::size_t k = 1; k <= M; ++k) {
+        const double dk = static_cast<double>(k);
+        pi[k] = pi[k - 1] * (dk - 1.0 - d) / dk;
+        g[k] = g[k - 1] * (dk - 1.0 + d) / (dk - d);
+    }
+    return mse_pi_exacto_hosking_precalc(pi.data(), g.data(), M);
+}
+
+// Menor M in [1, m_tope] tal que mse_pi_exacto_hosking(d, M) <= eps_var, via galope exponencial + busqueda binaria.
+[[nodiscard]] inline std::size_t horizonte_inv_arfima_hosking(
+    double d, double eps_var, std::size_t m_tope) {
+    if (m_tope == 0 || !std::isfinite(d) || d == 0.0 || !(std::abs(d) < 0.5) ||
+        !(eps_var > 0.0) || !std::isfinite(eps_var)) {
+        return 0;
+    }
+    std::vector<double> pi{1.0};
+    const double g1md = std::tgamma(1.0 - d);
+    std::vector<double> g{std::tgamma(1.0 - 2.0 * d) / (g1md * g1md)};
+    auto asegurar = [&](std::size_t n_max) {
+        while (pi.size() <= n_max) {
+            const std::size_t k = pi.size();
+            const double dk = static_cast<double>(k);
+            pi.push_back(pi.back() * (dk - 1.0 - d) / dk);
+            g.push_back(g.back() * (dk - 1.0 + d) / (dk - d));
+        }
+    };
+    auto eval = [&](std::size_t M) noexcept -> double {
+        return mse_pi_exacto_hosking_precalc(pi.data(), g.data(), M);
+    };
+
+    asegurar(1);
+    if (eval(1) <= eps_var) return 1;
+
+    std::size_t prev_hi = 1;
+    std::size_t hi = std::min<std::size_t>(2, m_tope);
+    while (true) {
+        asegurar(hi);
+        if (eval(hi) <= eps_var) break;
+        if (hi >= m_tope) return m_tope;
+        prev_hi = hi;
+        const std::size_t sig = (hi <= m_tope / 2) ? (hi * 2) : m_tope;
+        hi = std::max(hi + 1, sig);
+    }
+
+    std::size_t lo = prev_hi + 1;
+    while (lo < hi) {
+        const std::size_t mid = lo + (hi - lo) / 2;
+        if (eval(mid) <= eps_var) hi = mid;
+        else lo = mid + 1;
+    }
+    return lo;
+}
+
+// Menor M <= m_tope tal que la fraccion de energia l2 omitida en (1 - L)^delta <= eps_var (identidad hipergeometrica de Gauss).
+// Usado con delta = -d para el filtro directo (1 - L)^{-d} sobre u_t de memoria corta en simular().
+[[nodiscard]] inline std::size_t horizonte_sim_gauss(
+    double delta, double eps_var, std::size_t m_tope, bool& topado) noexcept {
+    topado = false;
+    if (m_tope == 0 || !std::isfinite(delta) || delta == 0.0 || !(std::abs(delta) < 0.5) ||
+        !(eps_var > 0.0) || !std::isfinite(eps_var)) {
+        return 0;
+    }
+    const double g1 = std::tgamma(1.0 + delta);
+    const double E = std::tgamma(1.0 + 2.0 * delta) / (g1 * g1);
+    double s = 1.0;
+    double pi = 1.0;
+    for (std::size_t k = 1; k <= m_tope; ++k) {
+        if (1.0 - s / E <= eps_var) return k - 1;
+        const double dk = static_cast<double>(k);
+        pi *= (dk - 1.0 - delta) / dk;
+        s += pi * pi;
+    }
+    if (1.0 - s / E <= eps_var) return m_tope;
+    topado = true;
+    return m_tope;
+}
+
 }  // namespace detalle_lineal
 
 // Tamano de buffer externo opcional para `simular` cuando se usa ARFIMA en paralelo (burn_in + n para pi y burn_in + n para u).
@@ -199,18 +308,31 @@ inline ModeloLinealNulo ajustar(const std::vector<std::vector<double>>& segs, co
         return m;
     }
 
+    m.enmienda_nivel2 = cfg.usar_enmienda_nivel2;
+    if (cfg.usar_enmienda_nivel2) {
+        m.mu_serie = ark::metrologia::est::momentos(limpios).mu;
+    }
+
     // Si es ARFIMA(p, d, 0), diferenciar cada segmento con elw::coeficientes(d, ...) truncado al inicio del segmento (tipo II).
     std::vector<std::vector<double>> segs_modelo;
     if (m.modo_usado == ModoNuloLineal::ARFIMA_WHITTLE && m.d != 0.0) {
         std::vector<double> pi(max_seg, 0.0);
         ark::metrologia::elw::coeficientes(m.d, max_seg, pi.data());
+        const bool centrar_n2 = cfg.usar_enmienda_nivel2 && std::isfinite(m.mu_serie);
+        const double mu_pre = centrar_n2 ? m.mu_serie : 0.0;
         segs_modelo.reserve(limpios.size());
         for (const auto& g : limpios) {
             std::vector<double> gd(g.size(), 0.0);
             for (std::size_t t = 0; t < g.size(); ++t) {
                 double s = 0.0;
-                for (std::size_t k = 0; k <= t; ++k) {
-                    s += pi[k] * g[t - k];
+                if (centrar_n2) {
+                    for (std::size_t k = 0; k <= t; ++k) {
+                        s += pi[k] * (g[t - k] - mu_pre);
+                    }
+                } else {
+                    for (std::size_t k = 0; k <= t; ++k) {
+                        s += pi[k] * g[t - k];
+                    }
                 }
                 gd[t] = s;
             }
@@ -311,13 +433,28 @@ inline ModeloLinealNulo ajustar(const std::vector<std::vector<double>>& segs, co
         return m;
     }
 
-    if (m.modo_usado == ModoNuloLineal::ARFIMA_WHITTLE) {
+    const std::size_t b_ar = (m.p > 0 && m.radio_max > 0.0)
+        ? static_cast<std::size_t>(std::ceil(std::log(std::numeric_limits<double>::epsilon()) / std::log(m.radio_max)))
+        : 0;
+    if (cfg.usar_enmienda_nivel2) {
+        if (m.modo_usado == ModoNuloLineal::ARFIMA_WHITTLE && m.d != 0.0) {
+            const double eps_q2 = umbral_q * umbral_q;
+            const std::size_t cap_inv = std::max<std::size_t>(max_seg, 4096);
+            m.m_inv_arfima = detalle_lineal::horizonte_inv_arfima_hosking(m.d, eps_q2, cap_inv);
+            m.m_sim_arfima = detalle_lineal::horizonte_sim_gauss(-m.d, eps_q2, max_seg, m.burn_in_topado);
+            m.n_hist_req = m.p + m.m_inv_arfima;
+            m.burn_in = std::min(max_seg, b_ar + m.m_sim_arfima);
+        } else {
+            m.m_inv_arfima = 0;
+            m.m_sim_arfima = 0;
+            m.burn_in_topado = false;
+            m.n_hist_req = m.p;
+            m.burn_in = b_ar;
+        }
+    } else if (m.modo_usado == ModoNuloLineal::ARFIMA_WHITTLE) {
         m.burn_in = max_seg;
-    } else if (m.p > 0 && m.radio_max > 0.0) {
-        const double eps = std::numeric_limits<double>::epsilon();
-        m.burn_in = static_cast<std::size_t>(std::ceil(std::log(eps) / std::log(m.radio_max)));
     } else {
-        m.burn_in = 0;
+        m.burn_in = b_ar;
     }
 
     // Residuos de la calma: e_t = (x_t - mu) - sum_{i=1}^p phi_i (x_{t-i} - mu), solo con t >= p dentro de cada segmento.
@@ -379,17 +516,33 @@ inline void innovaciones(const ModeloLinealNulo& m, const double* historia, std:
     const std::size_t n_pi = std::min(n_tot, detalle_lineal::BUF_STACK_MAX);
     ark::metrologia::elw::coeficientes(m.d, n_pi, pi_stack.data());
 
+    const bool centrar_n2 = m.enmienda_nivel2 && std::isfinite(m.mu_serie);
+    const double mu_pre = centrar_n2 ? m.mu_serie : 0.0;
+
     auto u_en = [&](std::size_t t) noexcept -> double {
         double s = 0.0;
         const std::size_t lim = std::min(t + 1, n_pi);
-        for (std::size_t k = 0; k < lim; ++k) {
-            s += pi_stack[k] * z_en(t - k);
-        }
-        if (t + 1 > n_pi) {
-            double pik = pi_stack[n_pi - 1];
-            for (std::size_t k = n_pi; k <= t; ++k) {
-                pik *= (static_cast<double>(k) - 1.0 - m.d) / static_cast<double>(k);
-                s += pik * z_en(t - k);
+        if (centrar_n2) {
+            for (std::size_t k = 0; k < lim; ++k) {
+                s += pi_stack[k] * (z_en(t - k) - mu_pre);
+            }
+            if (t + 1 > n_pi) {
+                double pik = pi_stack[n_pi - 1];
+                for (std::size_t k = n_pi; k <= t; ++k) {
+                    pik *= (static_cast<double>(k) - 1.0 - m.d) / static_cast<double>(k);
+                    s += pik * (z_en(t - k) - mu_pre);
+                }
+            }
+        } else {
+            for (std::size_t k = 0; k < lim; ++k) {
+                s += pi_stack[k] * z_en(t - k);
+            }
+            if (t + 1 > n_pi) {
+                double pik = pi_stack[n_pi - 1];
+                for (std::size_t k = n_pi; k <= t; ++k) {
+                    pik *= (static_cast<double>(k) - 1.0 - m.d) / static_cast<double>(k);
+                    s += pik * z_en(t - k);
+                }
             }
         }
         return s;
@@ -508,7 +661,7 @@ inline void simular(const ModeloLinealNulo& m, Rng& rng, const double* e_iny, st
             for (std::size_t k = 0; k <= s; ++k) {
                 suma += pi_ptr[k] * u_ptr[s - k];
             }
-            x_out[t] = suma;
+            x_out[t] = (m.enmienda_nivel2 && std::isfinite(m.mu_serie)) ? (m.mu_serie + suma) : suma;
         }
     }
 }

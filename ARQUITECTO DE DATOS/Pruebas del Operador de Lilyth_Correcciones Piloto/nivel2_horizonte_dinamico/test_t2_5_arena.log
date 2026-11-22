@@ -1,0 +1,10 @@
+================================================================================
+ TEST T2.5: MEMORIA ADAPTABLE Y ARENA CERO-HEAP EN ObservadorLilyth
+================================================================================
+
+  Caso 1a (L=64, J=1, N2=false): cap=64, arena_cap=0, sizeof(Ranura)=11120
+  Caso 1b (L=120, J=3, N2=true): cap=480, arena_cap=983040 (min_esp=983040), sizeof(Ranura)=11120
+  K10 durante 2000 pasos caliente: operator new = 0
+  Post reiniciar_flujo: main arena_cap=983040 | lil_local copia arena_cap=0 usados=0
+
+FALLAS T2.5: 0

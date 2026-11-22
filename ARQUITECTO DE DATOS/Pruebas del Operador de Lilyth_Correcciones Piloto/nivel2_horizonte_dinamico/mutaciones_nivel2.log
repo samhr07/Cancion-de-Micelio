@@ -1,0 +1,10 @@
+====================================================================================================
+ NIVEL 2 SELLADO: CAZA DE MUTANTES (MN2.0 + M_N2_1..M_N2_3 | 0 warnings /W4)
+====================================================================================================
+MN2.0    testigo: sin cambio (Nivel 2 sellado)                                    TESTIGO PASA (0 fallas)
+M_N2_1   omitir restado de mu_serie en innovaciones() (modelo_lineal_nulo.hpp)    CAZADO (NV2.2): NV2.2: Analitico=1 Trasl<=4.82e+03 RT<=1.05e+03 Cola<=7182.48*epsQ (lim=1.15); NV2.3a: Ito=98.4% (>=85%, puentes=133), RMSE=1.6300 (<=0.10), Corte=10.9% (<35%)
+M_N2_2   sustituir horizonte_inv_arfima_hosking por horizonte_sim_gauss(+d) en ajustar() CAZADO (NV2.2): NV2.2: Analitico=0 Trasl<=1.03e-12 RT<=7.11e-15 Cola<=4.36*epsQ (lim=1.15); NV2.3a: Ito=100.0% (>=85%, puentes=2), RMSE=0.1228 (<=0.10), Corte=96.9% (<35%); NV2.3b: 6/6 cortes duros y vetos Z1b/Z1a/Z2/<p exactos
+M_N2_3   ignorar corte por hist_seg_purgada_ en el escaneo Z1b (observador_lilyth.hpp) CAZADO (NV2.3b): NV2.3b: 6/6 cortes duros y vetos Z1b/Z1a/Z2/<p exactos
+----------------------------------------------------------------------------------------------------
+RESULTADO NIVEL 2 MUTANTES: 3 de 3 mutantes cazados | Testigo MN2.0: PASA (4 de 4 controles)
+====================================================================================================

@@ -1,0 +1,22 @@
+================================================================================
+ BATERIA SELLADA NIVEL 2 (EXPECTATIVAS_NIVEL2.md | SEMILLA = 20261123ULL)
+================================================================================
+
+  NV2.1 AR(1): p_fit=1 n_req=1 m_inv=0 m_sim=0 top=0 max|dif|=0.000e+00
+  NV2.1 AR(4): p_fit=4 n_req=4 m_inv=0 m_sim=0 top=0 max|dif|=0.000e+00
+  NV2.1 AR(8): p_fit=8 n_req=8 m_inv=0 m_sim=0 top=0 max|dif|=0.000e+00
+[PASA] NV2.1: AR(1/4/8) Markov exacto con n_hist_req == p, worst_max|dif| = 0.000e+00 <= 1e-15
+  NV2.2(d=-0.35): m_inv=211 top=0 dif_tras=2.408e-12 rt=7.105e-15 | RMSE_exact=0.02983 (0.97*epsQ) < RMSE_M8=0.11351
+  NV2.2(d=+0.25): m_inv=85 top=1 dif_tras=5.058e-13 rt=7.105e-15 | RMSE_exact=0.02721 (0.89*epsQ) < RMSE_M8=0.08956
+  NV2.2(d=+0.35): m_inv=233 top=1 dif_tras=1.605e-13 rt=7.105e-15 | RMSE_exact=0.02145 (0.70*epsQ) < RMSE_M8=0.13351
+[PASA] NV2.2: Analitico=1 Trasl<=2.41e-12 RT<=7.11e-15 Cola<=0.97*epsQ (lim=1.15)
+  NV2.3a (q=2% r=2, n_req=234, 64 vent): surv_Ito=98.4% (63/64) puentes=133 RMSE(vs eps)=0.0253 (vs limpio=0.0033) | surv_Corte=10.9%
+[PASA] NV2.3a: Ito=98.4% (>=85%, puentes=133), RMSE=0.0253 (<=0.10), Corte=10.9% (<35%)
+  NV2.3b(6) detalle: p_fit=9 cer=1 n_disp=2 sin_b=1 eval=0 trunc=1 motivo='via (b): historia contigua menor que p'
+  NV2.3b subcontroles: (1)r=4:1 (2)choque:1 (3)seg_purgada:1 (4)Z1a:1 (5)Z2:1 (6)<p:1
+[PASA] NV2.3b: 6/6 cortes duros y vetos Z1b/Z1a/Z2/<p exactos
+[PASA] NV2.4: news=0 cap=480 len_pf=320 len_ei=320 dif_einy=0.00e+00 sizeof(Ranura)=11120 copia_cap=0
+[PASA] NV2.5: usar_enmienda_nivel2=false por omision y arena_cap=0 (verificacion bit a bit CN1.1 externa)
+
+--------------------------------------------------------------------------------
+FALLAS NIVEL 2: 0

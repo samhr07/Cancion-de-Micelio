@@ -1,0 +1,15 @@
+================================================================================
+ TEST T2.4: PRE-CENTRADO mu_serie E INVERSION EXACTA EN modelo_lineal_nulo.hpp
+================================================================================
+
+--- Check 1: Exactitud Markov AR(p) con usar_enmienda_nivel2 = true ---
+  AR(1): valido=1, p_fit=1, n_hist_req=1, m_inv=0, m_sim=0, top=0, max|dif|=0.000e+00
+  AR(4): valido=1, p_fit=4, n_hist_req=4, m_inv=0, m_sim=0, top=0, max|dif|=0.000e+00
+  AR(8): valido=1, p_fit=8, n_hist_req=8, m_inv=0, m_sim=0, top=0, max|dif|=0.000e+00
+
+--- Check 2: ARFIMA(1, d, 0) mu_serie + Hosking + Ida y Vuelta ---
+  d=-0.35 | p=1 m_inv=211 (esp=211) top=0 (esp=0) | dif_tras(mu+1000)=2.408e-12 | rt50=7.105e-15 rt1050=0.000e+00
+  d=+0.25 | p=1 m_inv=85 (esp=85) top=1 (esp=1) | dif_tras(mu+1000)=5.058e-13 | rt50=7.105e-15 rt1050=0.000e+00
+  d=+0.35 | p=1 m_inv=233 (esp=233) top=1 (esp=1) | dif_tras(mu+1000)=1.605e-13 | rt50=7.105e-15 rt1050=0.000e+00
+
+FALLAS T2.4: 0

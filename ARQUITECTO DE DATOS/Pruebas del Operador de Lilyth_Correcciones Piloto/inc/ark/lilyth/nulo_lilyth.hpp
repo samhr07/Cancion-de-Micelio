@@ -100,6 +100,9 @@ struct ReferenciaNuloEvento {
     double min_nulo = NaN, max_nulo = NaN;                   // recorrido completo al lado
     double delta_tau = NaN;                 // tau_real_efectivo - mediana_nulo
     double u_pit = NaN;                     // PIT de punto medio en [0, 1]
+    std::size_t n_hist_prev_disp = 0;       // Nivel 2: historia contigua/puenteada disponible antes de t_cambio
+    std::size_t n_huecos_puenteados_z1b = 0; // Nivel 2: micro-huecos puenteados en Z1b por Puente de Ito/causal
+    bool hist_prev_truncada_en_corte = false; // Nivel 2: true si Z1b corto antes de completar n_hist_req
     const char* motivo = "";
 };
 
@@ -791,7 +794,8 @@ inline void construir_estacionaria_nula(
     est.assign(n, 0.0);
     if (n == 0 || segs_calma.empty()) return;
     if (es_lineal && m_lin.valido) {
-        std::vector<double> buf(n + m_lin.burn_in + m_lin.p + 16, 0.0);
+        const std::size_t n_buf = std::max<std::size_t>(tamano_trabajo_simular(m_lin, n), m_lin.p + 16);
+        std::vector<double> buf(n_buf, 0.0);
         simular(m_lin, rng, nullptr, 0, 0, est.data(), n, buf.data(), buf.size());
         return;
     }
@@ -985,11 +989,17 @@ inline ResultadoInyeccionesRealizacion<T_MAX> ejecutar_inyecciones_en_realizacio
         if (m_lin.modo_usado == ModoNuloLineal::ARFIMA_WHITTLE && m_lin.d != 0.0) {
             std::vector<double> pi_inv(total, 0.0);
             ark::metrologia::elw::coeficientes(-m_lin.d, total, pi_inv.data());
+            const bool usar_n2_mu = m_lin.enmienda_nivel2 && std::isfinite(m_lin.mu_serie);
             for (std::size_t t = 0; t < n_sim; ++t) {
                 const std::size_t idx = burn + t;
                 double s = 0.0;
-                for (std::size_t k = 0; k <= idx; ++k) s += pi_inv[k] * u[idx - k];
-                x_est[t] = m_lin.mu + s;
+                if (usar_n2_mu) {
+                    for (std::size_t k = 0; k <= idx; ++k) s += pi_inv[k] * (m_lin.mu + u[idx - k]);
+                    x_est[t] = m_lin.mu_serie + s;
+                } else {
+                    for (std::size_t k = 0; k <= idx; ++k) s += pi_inv[k] * u[idx - k];
+                    x_est[t] = m_lin.mu + s;
+                }
             }
         } else {
             for (std::size_t t = 0; t < n_sim; ++t) x_est[t] = m_lin.mu + u[burn + t];
@@ -1168,7 +1178,8 @@ inline void ejecutar_via_b_evento(
     std::uint64_t semilla_evento,
     ReferenciaNuloEvento& ref,
     std::vector<EventoNuloLilyth<T_MAX>>& nulos_b_out,
-    std::size_t& cont_solapes_global) {
+    std::size_t& cont_solapes_global,
+    std::span<const double> e_iny_precalc = {}) {
     nulos_b_out.clear();
     ref.nulo_por_inyeccion = true;
     const std::size_t l = perfil_est.size();
@@ -1178,13 +1189,25 @@ inline void ejecutar_via_b_evento(
         return;
     }
 
-    // Lineal: innovaciones del perfil (filtro inverso). Sin memoria: el perfil se escribe tal cual, no hacen falta.
+    // Lineal: innovaciones del perfil (filtro inverso o precalculadas en arena N2). Sin memoria: el perfil se escribe tal cual.
     std::vector<double> e_iny(sin_memoria ? 0 : l, 0.0);
-    if (!sin_memoria) innovaciones(m_lin, hist_prev_est.data(), hist_prev_est.size(), perfil_est.data(), l, e_iny.data());
-    if (!sin_memoria && !std::isfinite(e_iny[0])) {
-        ref.sin_nulo_b = true;
-        ref.motivo = "via (b): innovaciones no finitas";
-        return;
+    if (!sin_memoria) {
+        if (e_iny_precalc.size() == l) {
+            std::copy(e_iny_precalc.begin(), e_iny_precalc.end(), e_iny.begin());
+        } else {
+            innovaciones(m_lin, hist_prev_est.data(), hist_prev_est.size(), perfil_est.data(), l, e_iny.data());
+        }
+        bool finita = std::isfinite(e_iny[0]);
+        if (finita && m_lin.enmienda_nivel2) {
+            for (std::size_t k = 1; k < l; ++k) {
+                if (!std::isfinite(e_iny[k])) { finita = false; break; }
+            }
+        }
+        if (!finita) {
+            ref.sin_nulo_b = true;
+            ref.motivo = "via (b): innovaciones no finitas";
+            return;
+        }
     }
 
     const std::size_t margen_pre = w_ancla + guarda + 8;

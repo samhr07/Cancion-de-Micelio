@@ -199,7 +199,13 @@ inline void calcular_irf_wold(
     const ModeloLinealNulo& m,
     const double* buf,
     std::size_t n_buf) noexcept {
-    if (!m.valido || n_buf == 0) return (m.valido && std::isfinite(m.mu)) ? m.mu : 0.0;
+    if (!m.valido || n_buf == 0) {
+        if (m.valido && m.enmienda_nivel2 && m.modo_usado == ModoNuloLineal::ARFIMA_WHITTLE &&
+            m.d != 0.0 && std::isfinite(m.mu_serie)) {
+            return m.mu_serie + (std::isfinite(m.mu) ? m.mu : 0.0);
+        }
+        return (m.valido && std::isfinite(m.mu)) ? m.mu : 0.0;
+    }
     if (m.modo_usado != ModoNuloLineal::ARFIMA_WHITTLE || m.d == 0.0) {
         double pred = m.mu;
         for (std::size_t i = 1; i <= m.p && i <= n_buf; ++i) {
@@ -214,10 +220,17 @@ inline void calcular_irf_wold(
     const double* sub = buf + offset;
     const std::size_t n_sub = n_buf - offset;
 
+    const bool centrar_n2 = m.enmienda_nivel2 && std::isfinite(m.mu_serie);
+    const double mu_pre = centrar_n2 ? m.mu_serie : 0.0;
+
     ark::metrologia::elw::coeficientes(m.d, n_ef, pi_loc.data());
     for (std::size_t t = 0; t < n_sub; ++t) {
         double s = 0.0;
-        for (std::size_t k = 0; k <= t && k < n_ef; ++k) s += pi_loc[k] * sub[t - k];
+        if (centrar_n2) {
+            for (std::size_t k = 0; k <= t && k < n_ef; ++k) s += pi_loc[k] * (sub[t - k] - mu_pre);
+        } else {
+            for (std::size_t k = 0; k <= t && k < n_ef; ++k) s += pi_loc[k] * sub[t - k];
+        }
         u_loc[t] = s;
     }
     double u_pred = m.mu;
@@ -225,6 +238,12 @@ inline void calcular_irf_wold(
         u_pred += m.phi[i - 1] * (u_loc[n_sub - i] - m.mu);
     }
     double cola = 0.0;
+    if (centrar_n2) {
+        for (std::size_t k = 1; k <= n_sub && k < n_ef; ++k) {
+            cola += pi_loc[k] * (sub[n_sub - k] - mu_pre);
+        }
+        return mu_pre + u_pred - cola;
+    }
     for (std::size_t k = 1; k <= n_sub && k < n_ef; ++k) {
         cola += pi_loc[k] * sub[n_sub - k];
     }

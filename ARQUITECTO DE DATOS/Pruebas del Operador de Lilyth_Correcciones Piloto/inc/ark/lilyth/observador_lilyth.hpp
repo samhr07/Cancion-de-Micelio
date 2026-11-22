@@ -129,6 +129,9 @@ struct ConfiguracionLilyth {
     double alfa_hueco_piloto = 0.01;
     double z_max_hueco_piloto = ark::metrologia::NaN;
     bool usar_protocolo_filas_piloto = false;
+    // Enmiendas opt-in Nivel 2 y Nivel 3 (Regla 6: false por omision = identidad bit a bit CN1.1 / CF4.P1)
+    bool usar_enmienda_nivel2 = false;
+    bool usar_enmienda_nivel3 = false;
 };
 
 [[nodiscard]] constexpr bool configuracion_lilyth_nulo_valida(const ConfiguracionLilyth& cfg) noexcept {
@@ -226,6 +229,15 @@ struct RanuraLilyth {
     std::size_t n_hist_prev_cruda = 0, n_perfil_cruda = 0;
     std::size_t n_hist_prev_purgada = 0, n_perfil_purgada = 0;
     bool perfil_corrupto_z2_cruda = false, perfil_corrupto_z2_purgada = false;
+    // Nivel 2: metadatos de auditoria de historia dinamica y puenteo Z1b por rama
+    std::size_t n_hist_prev_disp_cruda = 0, n_hist_prev_disp_purgada = 0;
+    std::size_t n_huecos_puenteados_z1b_cruda = 0, n_huecos_puenteados_z1b_purgada = 0;
+    bool hist_prev_truncada_cruda = false, hist_prev_truncada_purgada = false;
+    // Nivel 2: manejadores ligeros sobre arena_perfiles_n2_ (cero arreglos de HIST_MAX en Ranura)
+    std::size_t off_perfil_cruda_n2 = 0, len_perfil_cruda_n2 = 0;
+    std::size_t off_einy_cruda_n2 = 0, len_einy_cruda_n2 = 0;
+    std::size_t off_perfil_purgada_n2 = 0, len_perfil_purgada_n2 = 0;
+    std::size_t off_einy_purgada_n2 = 0, len_einy_purgada_n2 = 0;
     std::array<double, MAX_PERFIL_EVENTO_LILYTH> hist_prev_cruda_est{}, perfil_cruda_est{};
     std::array<double, MAX_PERFIL_EVENTO_LILYTH> hist_prev_purgada_est{}, perfil_purgada_est{};
 
@@ -245,6 +257,13 @@ struct RanuraLilyth {
         delta_tau_marea_primer_toque = delta_tau_marea_consolidado = NaN;
         n_hist_prev_cruda = n_perfil_cruda = n_hist_prev_purgada = n_perfil_purgada = 0;
         perfil_corrupto_z2_cruda = perfil_corrupto_z2_purgada = false;
+        n_hist_prev_disp_cruda = n_hist_prev_disp_purgada = 0;
+        n_huecos_puenteados_z1b_cruda = n_huecos_puenteados_z1b_purgada = 0;
+        hist_prev_truncada_cruda = hist_prev_truncada_purgada = false;
+        off_perfil_cruda_n2 = len_perfil_cruda_n2 = 0;
+        off_einy_cruda_n2 = len_einy_cruda_n2 = 0;
+        off_perfil_purgada_n2 = len_perfil_purgada_n2 = 0;
+        off_einy_purgada_n2 = len_einy_purgada_n2 = 0;
     }
     [[nodiscard]] bool alguna_rama_abierta() const noexcept {
         return purgada.desenlace == DesenlaceRanura::ABIERTA || cruda.desenlace == DesenlaceRanura::ABIERTA;
@@ -351,6 +370,7 @@ public:
         std::size_t espejo_inconsistente = 0;
         std::size_t solapes = 0;              // Etapa 3 (seccion 3.3): inyecciones descartadas por solape de ventana
         std::size_t historico_desbordado = 0; // Code: ranuras cerradas que no cupieron en el historico (tope de memoria)
+        std::size_t arena_perfiles_desbordada = 0; // Nivel 2: tramos largos que excedieron la arena pre-reservada
         std::size_t no_medida[10]{};
     };
 
@@ -419,12 +439,41 @@ private:
     ResumenArmonicoYHolm<T_MAX> armonico_purgada_{}, armonico_cruda_{};
     ResumenMareaLilyth resumen_marea_{};
     std::vector<Ranura> cerradas_historico_{};
+    // Nivel 2: arena pre-reservada adaptable para perfiles largos (l <= cap_perfil_adapt_) y e_iny.
+    // No se copia al clonar ObservadorLilyth dentro de lil_local (0 bytes copiados en via (a) y (b)).
+    struct ArenaNoCopiableN2 {
+        std::vector<double> datos{};
+        ArenaNoCopiableN2() = default;
+        ArenaNoCopiableN2(const ArenaNoCopiableN2&) noexcept : datos() {}
+        ArenaNoCopiableN2& operator=(const ArenaNoCopiableN2& otro) noexcept {
+            if (this != &otro) datos.clear();
+            return *this;
+        }
+        ArenaNoCopiableN2(ArenaNoCopiableN2&&) noexcept = default;
+        ArenaNoCopiableN2& operator=(ArenaNoCopiableN2&&) noexcept = default;
+    };
+    std::size_t cap_perfil_adapt_ = MAX_PERFIL_EVENTO_LILYTH;
+    ArenaNoCopiableN2 arena_perfiles_n2_{};
 
     [[nodiscard]] bool medir_purgada() const noexcept {
         return cfg_.representacion != ModoRepresentacionLilyth::CRUDA;
     }
     [[nodiscard]] bool medir_cruda() const noexcept {
         return cfg_.representacion != ModoRepresentacionLilyth::PURGADA;
+    }
+
+    bool guardar_tramo_arena_n2(const double* datos, std::size_t len, std::size_t& off_out, std::size_t& len_out) noexcept {
+        off_out = 0;
+        len_out = 0;
+        if (!datos || len == 0) return true;
+        if (arena_perfiles_n2_.datos.size() + len > arena_perfiles_n2_.datos.capacity()) {
+            ++cont_.arena_perfiles_desbordada;
+            return false;
+        }
+        off_out = arena_perfiles_n2_.datos.size();
+        len_out = len;
+        for (std::size_t i = 0; i < len; ++i) arena_perfiles_n2_.datos.push_back(datos[i]);
+        return true;
     }
 
 public:
@@ -463,8 +512,16 @@ public:
         purga_calibrada_ = purga_;
         escalas_ = std::min(delta.escalas(), J_MAX);
         for (std::size_t j = 0; j < escalas_; ++j) fichas_[j] = delta.ficha_nivel(j);
+        std::size_t max_m = 1;
+        for (std::size_t j = 0; j < escalas_; ++j) {
+            if (fichas_[j].m > 0) max_m = std::max(max_m, static_cast<std::size_t>(fichas_[j].m));
+        }
+        const std::size_t l_base = std::max<std::size_t>(1, Rasgos::l_glr);
+        const std::size_t prod = (max_m <= HIST_MAX / l_base) ? (l_base * max_m) : HIST_MAX;
+        cap_perfil_adapt_ = std::min<std::size_t>(HIST_MAX, std::max<std::size_t>(1, prod));
         gestor_calor_.calibrar(delta, cfg_.t_max_efectivo, cfg_.alfa, ark::metrologia::familia::m_min(cfg_.alfa));   // Code: m_min(alfa), no 8
         cerradas_historico_.reserve(1024);
+        reservar_arena_nivel2();
         reiniciar_flujo();
         return lista_;
     }
@@ -594,6 +651,7 @@ public:
             cfg_m.alfa = cfg_.alfa;
             cfg_m.modo = cfg_.modo_nulo_lineal;
             cfg_m.d_externa = d_ext;
+            cfg_m.usar_enmienda_nivel2 = cfg_.usar_enmienda_nivel2;
             fr.modelo_lineal = ajustar(fr.segmentos_calma, cfg_m);
             fr.nulo_fft_degradado_a_generativo = fr.modelo_lineal.cayo_a_generativo;
             if (cfg_.modo_nulo_lineal == ModoNuloLineal::ARFIMA_WHITTLE && !fr.modelo_lineal.valido) {
@@ -674,6 +732,7 @@ public:
         cuenta_eta_purgada_.fill(0); cuenta_eta_cruda_.fill(0);
         excluidos_reescalada_purgada_ = excluidos_reescalada_cruda_ = 0;
         cerradas_historico_.clear();
+        arena_perfiles_n2_.datos.clear();
         resumen_marea_ = ResumenMareaLilyth{};
         cont_ = Contadores{};
     }
@@ -682,6 +741,31 @@ public:
         purga_ = purga_calibrada_;
         reiniciar_flujo();
         cerradas_historico_.reserve(1024);
+    }
+
+    void reservar_arena_nivel2() {
+        arena_perfiles_n2_.datos.clear();
+        if (!cfg_.usar_enmienda_nivel2) return;
+        const std::size_t n_canales = (medir_cruda() ? 2u : 0u) + (medir_purgada() ? 2u : 0u);
+        if (n_canales == 0) return;
+        const std::size_t cap_ev = std::max<std::size_t>(1024, cerradas_historico_.capacity());
+        arena_perfiles_n2_.datos.reserve(cap_ev * n_canales * cap_perfil_adapt_);
+    }
+
+    [[nodiscard]] std::size_t cap_perfil_adaptable() const noexcept { return cap_perfil_adapt_; }
+    [[nodiscard]] std::size_t arena_perfiles_capacidad() const noexcept { return arena_perfiles_n2_.datos.capacity(); }
+    [[nodiscard]] std::size_t arena_perfiles_usados() const noexcept { return arena_perfiles_n2_.datos.size(); }
+    [[nodiscard]] std::span<const double> perfil_evento_n2(const Ranura& r, bool purgada) const noexcept {
+        const std::size_t off = purgada ? r.off_perfil_purgada_n2 : r.off_perfil_cruda_n2;
+        const std::size_t len = purgada ? r.len_perfil_purgada_n2 : r.len_perfil_cruda_n2;
+        if (len == 0 || off + len > arena_perfiles_n2_.datos.size()) return {};
+        return std::span<const double>(arena_perfiles_n2_.datos.data() + off, len);
+    }
+    [[nodiscard]] std::span<const double> e_iny_evento_n2(const Ranura& r, bool purgada) const noexcept {
+        const std::size_t off = purgada ? r.off_einy_purgada_n2 : r.off_einy_cruda_n2;
+        const std::size_t len = purgada ? r.len_einy_purgada_n2 : r.len_einy_cruda_n2;
+        if (len == 0 || off + len > arena_perfiles_n2_.datos.size()) return {};
+        return std::span<const double>(arena_perfiles_n2_.datos.data() + off, len);
     }
 
     [[nodiscard]] bool lista() const noexcept { return lista_; }
@@ -934,6 +1018,15 @@ private:
         const auto& pool = sin_memoria ? fn.nulos_sin_memoria : fn.nulos_lineal;
         auto esp = detalle_nulo::filtrar_espontaneos_excedencia<T_MAX>(r.escala_origen, r.signo, r.g_disparo, pool);
         ref.n_nulos_a = esp.size();
+        if (cfg_.usar_enmienda_nivel2) {
+            ref.n_hist_prev_disp = es_purgada ? r.n_hist_prev_disp_purgada : r.n_hist_prev_disp_cruda;
+            ref.n_huecos_puenteados_z1b = es_purgada ? r.n_huecos_puenteados_z1b_purgada : r.n_huecos_puenteados_z1b_cruda;
+            ref.hist_prev_truncada_en_corte = es_purgada ? r.hist_prev_truncada_purgada : r.hist_prev_truncada_cruda;
+            if (!sin_memoria && fn.modelo_lineal.valido && fn.modelo_lineal.d != 0.0 &&
+                ref.n_hist_prev_disp < fn.modelo_lineal.n_hist_req) {
+                ref.hist_prev_truncada_en_corte = true;
+            }
+        }
         std::vector<double> taus;
         auto usar_via_a = [&](const char* motivo) {
             ref.nulo_por_inyeccion = false;
@@ -948,23 +1041,57 @@ private:
         } else {
             const bool z2_corrupto = es_purgada ? r.perfil_corrupto_z2_purgada : r.perfil_corrupto_z2_cruda;
             if (z2_corrupto) {
+                if (cfg_.usar_enmienda_nivel2 && !cfg_.forzar_via_b && esp.size() >= fn.m_min) {
+                    usar_via_a(sin_memoria ? "via (a) sin memoria: perfil Z2 corrupto para via (b)"
+                                           : "via (a): perfil Z2 corrupto para via (b)");
+                    ref.sin_nulo_b = false;
+                    detalle_nulo::llenar_estadisticas_referencia(ref, rama.tau_rest_consolidado, cfg_.t_max_efectivo, taus);
+                    return;
+                }
                 ref.sin_nulo_b = true;
                 ref.evaluado = false;
                 ref.motivo = "via (b): perfil Z2 corrupto";
                 return;
             }
+            if (cfg_.usar_enmienda_nivel2 && !sin_memoria && fn.modelo_lineal.valido &&
+                ref.n_hist_prev_disp < fn.modelo_lineal.p) {
+                if (!cfg_.forzar_via_b && esp.size() >= fn.m_min) {
+                    usar_via_a("via (a): historia previa < p para via (b)");
+                    ref.sin_nulo_b = false;
+                    detalle_nulo::llenar_estadisticas_referencia(ref, rama.tau_rest_consolidado, cfg_.t_max_efectivo, taus);
+                    return;
+                }
+                ref.nulo_por_inyeccion = true;
+                ref.sin_nulo_b = true;
+                ref.evaluado = false;
+                ref.motivo = "via (b): historia contigua menor que p";
+                return;
+            }
             const std::span<const double> hp = es_purgada
                 ? std::span<const double>(r.hist_prev_purgada_est.data(), r.n_hist_prev_purgada)
                 : std::span<const double>(r.hist_prev_cruda_est.data(), r.n_hist_prev_cruda);
-            const std::span<const double> pf = es_purgada
-                ? std::span<const double>(r.perfil_purgada_est.data(), r.n_perfil_purgada)
-                : std::span<const double>(r.perfil_cruda_est.data(), r.n_perfil_cruda);
+            const std::span<const double> pf = cfg_.usar_enmienda_nivel2
+                ? perfil_evento_n2(r, es_purgada)
+                : (es_purgada
+                       ? std::span<const double>(r.perfil_purgada_est.data(), r.n_perfil_purgada)
+                       : std::span<const double>(r.perfil_cruda_est.data(), r.n_perfil_cruda));
+            const std::span<const double> einy_n2 = (cfg_.usar_enmienda_nivel2 && !sin_memoria)
+                ? e_iny_evento_n2(r, es_purgada)
+                : std::span<const double>{};
+            if (cfg_.usar_enmienda_nivel2 && !sin_memoria && !pf.empty() &&
+                einy_n2.size() != pf.size() && ref.n_hist_prev_disp > MAX_PERFIL_EVENTO_LILYTH) {
+                ref.nulo_por_inyeccion = true;
+                ref.sin_nulo_b = true;
+                ref.evaluado = false;
+                ref.motivo = "via (b): arena N2 sin e_iny precalculado";
+                return;
+            }
             std::vector<EventoNuloLilyth<T_MAX>> ev_b;
             const std::uint64_t sal = sin_memoria ? 0x51ED270B27C3A6E5ULL : 0x9E3779B97F4A7C15ULL;
             detalle_nulo::ejecutar_via_b_evento<T_MAX, Rasgos::b_max>(
                 delta_calibrado_, *this, integracion_, es_purgada, sin_memoria, cfg_.nulo_sin_memoria, fn.segmentos_calma,
                 fn.modelo_lineal, ctx_purga_, x0_nivel_, hp, pf, r.signo, r.w_ancla, r.guarda_ancla, umbral, cfg_.t_max_efectivo,
-                cfg_.semilla_nulo ^ (sal * (idx + 1)), ref, ev_b, cont_.solapes);
+                cfg_.semilla_nulo ^ (sal * (idx + 1)), ref, ev_b, cont_.solapes, einy_n2);
             // Code (2026-11-16): con DERIVADO, si la via (b) no llega al objetivo y la excedencia de la via (a) ya llegaba a m_min y no es
             // menor, se queda la via (a): DERIVADO solo agrega nulos, nunca deja sin evaluar un evento que M_MIN evalua.
             if (!cfg_.forzar_via_b && ev_b.size() < umbral && esp.size() >= fn.m_min && esp.size() >= ev_b.size()) {
@@ -1368,37 +1495,286 @@ private:
         rama.muestras_ancla = n;
     }
 
-    // Prediccion causal a 1 paso sin reservas dinamicas (pila) usando el ModeloLinealNulo calibrado
+    // Prediccion causal a 1 paso sin reservas dinamicas usando el ModeloLinealNulo calibrado
     double predecir_un_paso_causal(const ModeloLinealNulo& m, const double* buf, std::size_t n_buf) const noexcept {
-        if (!m.valido || n_buf == 0) return m.valido && std::isfinite(m.mu) ? m.mu : 0.0;
-        if (m.modo_usado != ModoNuloLineal::ARFIMA_WHITTLE || m.d == 0.0) {
-            double pred = m.mu;
-            for (std::size_t i = 1; i <= m.p && i <= n_buf; ++i) {
-                pred += m.phi[i - 1] * (buf[n_buf - i] - m.mu);
+        return piloto::detalle_ito::predecir_estacionario_un_paso(m, buf, n_buf);
+    }
+
+    // Nivel 2: escaneo dinamico hacia atras en Z1b (con puente de Ito r <= r_max y cortes duros), Z1a seguro y veto estricto Z2.
+    void copiar_perfil_dinamico_n2(Ranura& r) noexcept {
+        const std::int64_t tc = std::max<std::int64_t>(0, std::min(r.t_cambio, r.t_apertura));
+        const std::size_t l_raw = static_cast<std::size_t>(r.t_apertura - tc + 1);
+        const std::size_t cap_perf = std::min<std::size_t>(HIST_MAX, std::max<std::size_t>(1, cap_perfil_adapt_));
+        const std::size_t l = std::min<std::size_t>(l_raw, cap_perf);
+        const std::int64_t t_ini_perf = r.t_apertura - static_cast<std::int64_t>(l) + 1;
+        std::size_t idx_ap = 0;
+        const bool tiene_ap = indice(r.t_apertura, idx_ap);
+        const std::uint32_t seg_apertura = tiene_ap ? hist_seg_purgada_[idx_ap] : ~0u;
+        const std::size_t cap_z1_scratch = HIST_MAX - l;
+        double* perf_buf = scratch_.data() + cap_z1_scratch;
+
+        constexpr std::uint8_t FLAGS_VETO_Z2 = ark::dataset::FLAG_PUENTE_ITO |
+                                               ark::dataset::FLAG_CHOQUE_EN_HUECO |
+                                               ark::dataset::FLAG_PAUSA_UMBRAL |
+                                               ark::dataset::FLAG_CORRUPCION_CAIDA;
+        constexpr std::uint8_t FLAGS_BARRERA_Z1 = ark::dataset::FLAG_CHOQUE_EN_HUECO |
+                                                  ark::dataset::FLAG_PAUSA_UMBRAL;
+
+        auto copiar_rep_n2 = [&](bool es_purgada,
+                                 const std::array<double, HIST_MAX>& h_est,
+                                 const std::array<std::uint8_t, HIST_MAX>& h_val,
+                                 const ModeloLinealNulo& mod,
+                                 std::array<double, MAX_PERFIL_EVENTO_LILYTH>& out_prev_leg,
+                                 std::size_t& out_n_prev_leg,
+                                 std::array<double, MAX_PERFIL_EVENTO_LILYTH>& out_perf_leg,
+                                 std::size_t& out_n_perf_leg,
+                                 bool& flag_corrupto_z2,
+                                 std::size_t& out_n_hist_prev_disp,
+                                 std::size_t& out_n_huecos_z1b,
+                                 bool& out_hist_truncada,
+                                 std::size_t& off_perf_n2,
+                                 std::size_t& len_perf_n2,
+                                 std::size_t& off_einy_n2,
+                                 std::size_t& len_einy_n2) noexcept {
+            out_n_prev_leg = 0;
+            out_n_perf_leg = 0;
+            flag_corrupto_z2 = false;
+            out_n_hist_prev_disp = 0;
+            out_n_huecos_z1b = 0;
+            out_hist_truncada = false;
+            off_perf_n2 = len_perf_n2 = 0;
+            off_einy_n2 = len_einy_n2 = 0;
+
+            // Fase A: verificacion estricta en Z2 ([t_ini_perf, t_apertura], r_max_z2 = 0; nunca comprime rezagos)
+            std::size_t n_perf = 0;
+            for (std::int64_t tz = t_ini_perf; tz <= r.t_apertura; ++tz) {
+                std::size_t idx_z = 0;
+                const bool tiene_idx = indice(tz, idx_z);
+                const bool veto_flag = tiene_idx && ((hist_flags_hueco_[idx_z] & FLAGS_VETO_Z2) != 0u);
+                const bool seg_ok = !es_purgada || (tiene_idx && tiene_ap && hist_seg_purgada_[idx_z] == seg_apertura);
+                const bool ok_t = tiene_idx && !veto_flag && seg_ok && h_val[idx_z] != 0u && std::isfinite(h_est[idx_z]);
+                if (ok_t) {
+                    perf_buf[n_perf++] = h_est[idx_z];
+                } else {
+                    flag_corrupto_z2 = true;
+                }
             }
-            return pred;
+            if (n_perf != l) flag_corrupto_z2 = true;
+
+            // Fase B: escaneo dinamico hacia atras y reconstruccion causal en Z1 (t < t_ini_perf)
+            const std::size_t n_objetivo = (calibrada_nulo_ && mod.valido)
+                ? std::min<std::size_t>(cap_z1_scratch, mod.n_hist_req)
+                : std::min<std::size_t>(cap_z1_scratch, std::max<std::size_t>(MAX_PERFIL_EVENTO_LILYTH, cap_perf));
+            const bool permite_puente =
+                (cfg_.politica_z1_piloto == ConfiguracionLilyth::PoliticaZ1Piloto::PUENTE_ITO_HISTORICO ||
+                 cfg_.politica_z1_piloto == ConfiguracionLilyth::PoliticaZ1Piloto::PUENTE_CAUSAL) &&
+                (cfg_.r_max_z1_piloto > 0);
+            const std::size_t r_max_ef = permite_puente ? std::min<std::size_t>(cfg_.r_max_z1_piloto, piloto::MAX_RACHA_PUENTE_ITO) : 0u;
+            const std::size_t margen_warmup = permite_puente
+                ? std::min<std::size_t>(cap_z1_scratch - n_objetivo, std::min<std::size_t>(n_objetivo, 64u))
+                : 0u;
+            const std::size_t max_alcance = n_objetivo + margen_warmup;
+            const std::int64_t t_meta = (t_ini_perf > static_cast<std::int64_t>(n_objetivo))
+                ? (t_ini_perf - static_cast<std::int64_t>(n_objetivo))
+                : 0;
+            const std::int64_t t_lim_warmup = (t_ini_perf > static_cast<std::int64_t>(max_alcance))
+                ? (t_ini_perf - static_cast<std::int64_t>(max_alcance))
+                : 0;
+
+            auto estado_barra_z1 = [&](std::int64_t tb, std::size_t& idx_out, bool& barrera_dura) noexcept -> bool {
+                barrera_dura = false;
+                if (!indice(tb, idx_out)) {
+                    barrera_dura = true;
+                    return false;
+                }
+                if (es_purgada && (!tiene_ap || hist_seg_purgada_[idx_out] != seg_apertura)) {
+                    barrera_dura = true;
+                    return false;
+                }
+                if ((hist_flags_hueco_[idx_out] & FLAGS_BARRERA_Z1) != 0u) {
+                    barrera_dura = true;
+                    return false;
+                }
+                return (h_val[idx_out] != 0u) && std::isfinite(h_est[idx_out]);
+            };
+
+            std::int64_t t_inicio_z1 = t_ini_perf;
+            bool barrera_en_meta = false;
+            if (n_objetivo > 0 && t_ini_perf > 0) {
+                bool hay_hueco_en_meta = false;
+                std::int64_t tbw = t_ini_perf - 1;
+                while (tbw >= t_lim_warmup) {
+                    if (tbw < t_meta && !hay_hueco_en_meta) break;
+                    std::size_t idx_b = 0;
+                    bool bd_b = false;
+                    if (estado_barra_z1(tbw, idx_b, bd_b)) {
+                        t_inicio_z1 = tbw;
+                        if (tbw == 0) break;
+                        --tbw;
+                        continue;
+                    }
+                    if (bd_b || !permite_puente) {
+                        if (tbw >= t_meta) barrera_en_meta = true;
+                        break;
+                    }
+                    std::size_t r_gap_b = 0;
+                    std::int64_t t_scan = tbw;
+                    bool encontro_ancla = false;
+                    while (t_scan >= t_lim_warmup) {
+                        std::size_t idx_s = 0;
+                        bool bd_s = false;
+                        if (estado_barra_z1(t_scan, idx_s, bd_s)) {
+                            encontro_ancla = true;
+                            break;
+                        }
+                        if (bd_s) break;
+                        ++r_gap_b;
+                        if (r_gap_b > r_max_ef || t_scan == 0) break;
+                        --t_scan;
+                    }
+                    if (!encontro_ancla) {
+                        if (tbw >= t_meta) barrera_en_meta = true;
+                        break;
+                    }
+                    if (tbw >= t_meta) hay_hueco_en_meta = true;
+                    t_inicio_z1 = t_scan;
+                    if (t_scan == 0) break;
+                    tbw = t_scan - 1;
+                }
+            }
+
+            std::size_t n_built = 0;
+            std::size_t n_puenteados = 0;
+            bool cortado_en_paso2 = false;
+            if (n_objetivo > 0 && t_inicio_z1 < t_ini_perf) {
+                std::int64_t tfw = t_inicio_z1;
+                while (tfw < t_ini_perf) {
+                    std::size_t idx_f = 0;
+                    bool bd_f = false;
+                    if (estado_barra_z1(tfw, idx_f, bd_f)) {
+                        if (n_built < cap_z1_scratch) scratch_[n_built++] = h_est[idx_f];
+                        ++tfw;
+                        continue;
+                    }
+                    if (bd_f) {
+                        n_built = 0;
+                        n_puenteados = 0;
+                        if (tfw >= t_meta) cortado_en_paso2 = true;
+                        ++tfw;
+                        continue;
+                    }
+                    std::int64_t t_gap_fin = tfw;
+                    while (t_gap_fin + 1 < t_ini_perf) {
+                        std::size_t idx_sig = 0;
+                        bool bd_sig = false;
+                        if (estado_barra_z1(t_gap_fin + 1, idx_sig, bd_sig) || bd_sig) break;
+                        ++t_gap_fin;
+                    }
+                    const std::size_t r_gap = static_cast<std::size_t>(t_gap_fin - tfw + 1);
+                    if (n_built == 0 || !permite_puente || r_gap > r_max_ef) {
+                        n_built = 0;
+                        n_puenteados = 0;
+                        if (t_gap_fin >= t_meta) cortado_en_paso2 = true;
+                        tfw = t_gap_fin + 1;
+                        continue;
+                    }
+                    if (t_gap_fin + 1 < t_ini_perf &&
+                        cfg_.politica_z1_piloto == ConfiguracionLilyth::PoliticaZ1Piloto::PUENTE_ITO_HISTORICO) {
+                        std::size_t idx_der = 0;
+                        bool bd_der = false;
+                        if (!estado_barra_z1(t_gap_fin + 1, idx_der, bd_der)) {
+                            n_built = 0;
+                            n_puenteados = 0;
+                            if (t_gap_fin >= t_meta) cortado_en_paso2 = true;
+                        } else {
+                            piloto::ConfiguracionPuenteHistoricoIto cfg_ito{};
+                            cfg_ito.integracion = Integracion::FLUJO;
+                            cfg_ito.r_max = r_max_ef;
+                            cfg_ito.alfa_hueco = cfg_.alfa_hueco_piloto;
+                            cfg_ito.z_max_hueco = cfg_.z_max_hueco_piloto;
+                            cfg_ito.n_semillas_rng = 0;
+                            const auto res_ito = piloto::evaluar_y_reconstruir_hueco_ito(
+                                cfg_ito, mod, std::span<const double>(scratch_.data(), n_built),
+                                scratch_[n_built - 1], h_est[idx_der], r_gap);
+                            if (res_ito.reconstruido) {
+                                for (std::size_t k_r = 0; k_r < r_gap && n_built < cap_z1_scratch; ++k_r) {
+                                    scratch_[n_built++] = res_ito.x_media_cond[k_r];
+                                }
+                                if (t_gap_fin >= t_meta) ++n_puenteados;
+                            } else {
+                                n_built = 0;
+                                n_puenteados = 0;
+                                if (t_gap_fin >= t_meta) cortado_en_paso2 = true;
+                            }
+                        }
+                    } else {
+                        // Z1a (t_gap_fin == t_ini_perf - 1) o PUENTE_CAUSAL: prediccion estrictamente causal; jamas lee t_ini_perf
+                        for (std::size_t k_r = 0; k_r < r_gap && n_built < cap_z1_scratch; ++k_r) {
+                            scratch_[n_built++] = predecir_un_paso_causal(mod, scratch_.data(), n_built);
+                        }
+                    }
+                    tfw = t_gap_fin + 1;
+                }
+            }
+
+            const std::size_t n_prev = std::min(n_built, n_objetivo);
+            const double* prev_ptr = scratch_.data() + (n_built - n_prev);
+            out_n_hist_prev_disp = n_prev;
+            out_n_huecos_z1b = n_puenteados;
+            out_hist_truncada = barrera_en_meta || cortado_en_paso2 || (n_prev < n_objetivo);
+
+            const std::size_t n_prev_leg = std::min(n_prev, MAX_PERFIL_EVENTO_LILYTH);
+            const std::size_t off_prev_leg = n_prev - n_prev_leg;
+            for (std::size_t k_leg = 0; k_leg < n_prev_leg; ++k_leg) {
+                out_prev_leg[k_leg] = prev_ptr[off_prev_leg + k_leg];
+            }
+            out_n_prev_leg = n_prev_leg;
+
+            // Fase C: guardar perfil completo (l <= cap_perfil_adapt_) y e_iny precalculado en arena (cero heap)
+            if (!flag_corrupto_z2 && n_perf == l && l > 0) {
+                const std::size_t n_perf_leg = std::min(l, MAX_PERFIL_EVENTO_LILYTH);
+                for (std::size_t k_leg = 0; k_leg < n_perf_leg; ++k_leg) {
+                    out_perf_leg[k_leg] = perf_buf[k_leg];
+                }
+                out_n_perf_leg = n_perf_leg;
+
+                if (arena_perfiles_n2_.datos.capacity() > 0) {
+                    if (guardar_tramo_arena_n2(perf_buf, l, off_perf_n2, len_perf_n2)) {
+                        if (calibrada_nulo_ && mod.valido && n_prev >= mod.p) {
+                            const double* perf_arena = arena_perfiles_n2_.datos.data() + off_perf_n2;
+                            innovaciones(mod, prev_ptr, n_prev, perf_arena, l, perf_buf);
+                            (void)guardar_tramo_arena_n2(perf_buf, l, off_einy_n2, len_einy_n2);
+                        }
+                    }
+                }
+            }
+        };
+
+        if (medir_cruda()) {
+            copiar_rep_n2(false, hist_est_cruda_, hist_val_est_cruda_, nulo_cruda_.modelo_lineal,
+                          r.hist_prev_cruda_est, r.n_hist_prev_cruda,
+                          r.perfil_cruda_est, r.n_perfil_cruda,
+                          r.perfil_corrupto_z2_cruda,
+                          r.n_hist_prev_disp_cruda, r.n_huecos_puenteados_z1b_cruda, r.hist_prev_truncada_cruda,
+                          r.off_perfil_cruda_n2, r.len_perfil_cruda_n2,
+                          r.off_einy_cruda_n2, r.len_einy_cruda_n2);
         }
-        std::array<double, MAX_PERFIL_EVENTO_LILYTH * 2> pi_loc{};
-        std::array<double, MAX_PERFIL_EVENTO_LILYTH * 2> u_loc{};
-        const std::size_t n_ef = std::min(n_buf + 1, pi_loc.size());
-        ark::metrologia::elw::coeficientes(m.d, n_ef, pi_loc.data());
-        for (std::size_t t = 0; t < n_buf && t < u_loc.size(); ++t) {
-            double s = 0.0;
-            for (std::size_t k = 0; k <= t && k < n_ef; ++k) s += pi_loc[k] * buf[t - k];
-            u_loc[t] = s;
+        if (medir_purgada()) {
+            copiar_rep_n2(true, hist_est_purgada_, hist_val_est_purgada_, nulo_purgada_.modelo_lineal,
+                          r.hist_prev_purgada_est, r.n_hist_prev_purgada,
+                          r.perfil_purgada_est, r.n_perfil_purgada,
+                          r.perfil_corrupto_z2_purgada,
+                          r.n_hist_prev_disp_purgada, r.n_huecos_puenteados_z1b_purgada, r.hist_prev_truncada_purgada,
+                          r.off_perfil_purgada_n2, r.len_perfil_purgada_n2,
+                          r.off_einy_purgada_n2, r.len_einy_purgada_n2);
         }
-        double u_pred = m.mu;
-        for (std::size_t i = 1; i <= m.p && i <= n_buf; ++i) {
-            u_pred += m.phi[i - 1] * (u_loc[n_buf - i] - m.mu);
-        }
-        double cola = 0.0;
-        for (std::size_t k = 1; k <= n_buf && k < n_ef; ++k) {
-            cola += pi_loc[k] * buf[n_buf - k];
-        }
-        return u_pred - cola;
     }
 
     void copiar_perfil_estacionario(Ranura& r) noexcept {
+        if (cfg_.usar_enmienda_nivel2) {
+            copiar_perfil_dinamico_n2(r);
+            return;
+        }
         const std::int64_t tc = std::max<std::int64_t>(0, std::min(r.t_cambio, r.t_apertura));
         const std::size_t l_raw = static_cast<std::size_t>(r.t_apertura - tc + 1);
         const std::size_t l = std::min<std::size_t>(l_raw, MAX_PERFIL_EVENTO_LILYTH);
