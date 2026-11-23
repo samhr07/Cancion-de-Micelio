@@ -1,0 +1,35 @@
+================================================================================
+ CAMPANA DE MUTACION NIVEL 4 (hilos=32, solo_compilar=0)
+  Directorio aislado: C:\Users\RYZEN\AppData\Local\Temp\ark_mut_nivel4_sellado
+================================================================================
+[MN4.0] compilacion limpia (/W4 0 avisos): testigo intacto (P0_NIVEL3_BASE)
+[MN4.0] TESTIGO PASA (0 fallas)
+        FALLAS NV4.1: 0
+        FALLAS NV4.2: 0
+        FALLAS NV4.3: 0
+        FALLAS NV4: 0
+[M_N4_1] compilacion limpia (/W4 0 avisos): filtro duro escala_origen == escala_real
+[M_N4_1] CAZADO (rc=1)
+        [FALLA] ok_j12 : p_det_j12>=0.42 && escala_cruzada_j12>0
+        FALLAS NV4.1: 1
+        [FALLA] ok_j12 : p_det_j12>=0.15 && escala_cruzada_j12>0
+        FALLAS NV4.2: 1
+        [FALLA] BATERIA NIVEL 4 COMPLETA
+        FALLAS NV4: 2
+[M_N4_2] compilacion limpia (/W4 0 avisos): exigencia de excedencia g_disparo >= g_real
+[M_N4_2] CAZADO (rc=1)
+        [FALLA] ok_esc : cal==24/24 && min_esc==3 && k_med_j[0..2]>0 && n_sem_eval>=23
+        [FALLA] ok_cal : |z_S|<=2.0 && rech<=3/24
+        [FALLA] ok_cov : p_det>=0.38 && surv_s3>=0.90 && cob_s3>=0.60 && solapes==0
+        [FALLA] ok_j12 : p_det_j12>=0.42 && escala_cruzada_j12>0
+        FALLAS NV4.1: 1
+        [FALLA] ok_esc : cal==16/16 && min_esc==3 && k_med_j[0..2]>0 && n_sem_eval>=14
+        [FALLA] ok_cal : |z_S|<=2.0 && rech<=2/16
+        [FALLA] ok_cov : p_det>=0.16 && cob_s3>=0.25 && solapes==0
+        [FALLA] ok_j12 : p_det_j12>=0.15 && escala_cruzada_j12>0
+        FALLAS NV4.2: 1
+        [FALLA] BATERIA NIVEL 4 COMPLETA
+        FALLAS NV4: 2
+--------------------------------------------------------------------------------
+RESUMEN MUTACIONES NIVEL 4: MN4.0=PASA | 2 de 2 mutantes cazados
+FALLAS MUTACIONES NV4: 0

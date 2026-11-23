@@ -1,0 +1,41 @@
+================================================================================
+ BATERIA SELLADA NIVEL 4 -- NO-OP DEMOSTRADO (P0_NIVEL3_BASE)
+  SEMILLA_CIEGA_NIVEL4 = 20261125ULL | hilos = 32 | modo = completo (NV4.1..NV4.3)
+================================================================================
+--------------------------------------------------------------------------------
+NV4.1 -- E2E AR(1) phi=0.80, 24 semillas, 3 escalas (tiempo=2.20 s, hilos=24)
+  cal=24/24 min_esc=3 | eval=24/24 k_med=[131,17,13] (tot=161)
+  S_medio=+0.000770 ee_S=0.041924 z_S=+0.018359 | rech=1/24
+  p_det=0.458698 (1205/2627) | surv_s3=0.987578 (159/161) | cob_s3=0.720497 (116/161) | parB=779 solapes=0
+  j12: p_det_j12=0.570370 (231/405) | escala_coincide_j12=153 | escala_cruzada_j12=78
+  [PASA] ok_esc : cal==24/24 && min_esc==3 && k_med_j[0..2]>0 && n_sem_eval>=23
+  [PASA] ok_cal : |z_S|<=2.0 && rech<=3/24
+  [PASA] ok_cov : p_det>=0.38 && surv_s3>=0.90 && cob_s3>=0.60 && solapes==0
+  [PASA] ok_j12 : p_det_j12>=0.42 && escala_cruzada_j12>0
+FALLAS NV4.1: 0
+--------------------------------------------------------------------------------
+NV4.2 -- E2E ARFIMA(1, d=+0.35, 0), 16 semillas, 3 escalas (tiempo=3.77 s, hilos=16)
+  cal=16/16 min_esc=3 | eval=15/16 k_med=[44,24,29] (tot=97)
+  S_medio=+0.025833 ee_S=0.042783 z_S=+0.603828 | rech=0/15
+  p_det=0.259207 (556/2145) | surv_s3=0.793814 (77/97) | cob_s3=0.505155 (49/97) | parB=506 solapes=0
+  j12: p_det_j12=0.322811 (317/982) | escala_coincide_j12=150 | escala_cruzada_j12=167
+  [PASA] ok_esc : cal==16/16 && min_esc==3 && k_med_j[0..2]>0 && n_sem_eval>=14
+  [PASA] ok_cal : |z_S|<=2.0 && rech<=2/16
+  [PASA] ok_cov : p_det>=0.16 && cob_s3>=0.25 && solapes==0
+  [PASA] ok_j12 : p_det_j12>=0.15 && escala_cruzada_j12>0
+FALLAS NV4.2: 0
+--------------------------------------------------------------------------------
+NV4.3 -- Contraste pareado P0..P3 + Regla 6 (tiempo=4.08 s, hilos=27)
+  cal=1 J=3 eventos=[16,8,3] (tot=27, N_MC=150 -> int=4050, int_j2=450)
+  P0  : p_det=0.534568 (2165/4050) | p_det_j2=0.566667 (255/450) | Eg_dif=-0.049286
+  P1a : p_det=0.443704 (1797/4050) | p_det_j2=0.204444 (92/450) | Eg_dif=+0.003560
+  P2  : p_det=0.240000 (972/4050) | p_det_j2=0.186667 (84/450) | Eg_dif=+0.105683
+  P3  : p_det=0.232099 (940/4050) | p_det_j2=0.175556 (79/450) | Eg_dif=+0.107399
+  Regla 6 defaults: usar_enmienda_nivel2=0, usar_enmienda_nivel3=0
+  [PASA] ok_p2 : p_det(P2)<=0.70*p_det(P0) && Eg_dif(P2)>Eg_dif(P0)+0.05
+  [PASA] ok_p1 : p_det_j2(P1a)<=0.75*p_det_j2(P0) && p_det_j2(P3)<=0.50*p_det_j2(P0)
+  [PASA] ok_r6 : !usar_enmienda_nivel2 && !usar_enmienda_nivel3 por omision
+FALLAS NV4.3: 0
+================================================================================
+[PASA] BATERIA NIVEL 4 COMPLETA
+FALLAS NV4: 0

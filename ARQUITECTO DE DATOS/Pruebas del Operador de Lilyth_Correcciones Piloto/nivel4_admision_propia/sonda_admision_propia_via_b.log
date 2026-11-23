@@ -1,0 +1,118 @@
+========================================================================================================
+FASE 4.0 -- SONDA EMPIRICA MULTIESCALA DE NIVEL 4 (escala_origen y g_disparo >= g_real en Via (b))
+  SEMILLA_SONDA_NIVEL4 = 2026112500ULL | hilos = 32
+========================================================================================================
+
+========================================================================================================
+BANCO 1: M1_AR1_3ESC (AR(1) phi=0.80, 24 sem, n_cal=12000, n_op=12000, b_max=8) | semillas=24 cal_ok=24 min_escalas=3 t_max_ef=[3,13]
+  Eventos reales medibles por escala_real: j=0: 109 | j=1: 23 | j=2: 26 (tot=158)
+  Incondicional E[(x_{t0-1}-mu)*signo] = -0.00858 (n=4361 intentos P0)
+  Matriz escala (propia antes de filtrar) (filas = escala_real 0,1,2 | cols = escala_nulo 0,1,2):
+    j_real=0 : [ 1388,   130,    66]  (tot= 1584, match= 87.63%)
+    j_real=1 : [   78,   298,   128]  (tot=  504, match= 59.13%)
+    j_real=2 : [  120,    79,   340]  (tot=  539, match= 63.08%)
+  Matriz escala (admitida P0)             (filas = escala_real 0,1,2 | cols = escala_nulo 0,1,2):
+    j_real=0 : [ 1320,     0,     0]  (tot= 1320, match=100.00%)
+    j_real=1 : [   78,   284,     0]  (tot=  362, match= 78.45%)
+    j_real=2 : [  120,    79,   323]  (tot=  522, match= 61.88%)
+
+  Politica           | eval |  S_medio    ee_S     z_S |  S<0 rech |  p_det survS3  cobS3 | Expre_s  Eg_dif  esc==
+  ------------------------------------------------------------------------------------------------------
+  P0_NIVEL3_BASE     | 24/24| +0.01812 0.03077  +0.589 | 10/24  2  | 0.4742 0.9810 0.7595 | +0.9620  -0.011  89.0%
+  P1a_ESCALA_ADM     | 24/24| +0.02401 0.03110  +0.772 | 10/24  2  | 0.4125 0.9557 0.6962 | +0.8348  -0.008 100.0%
+  P1b_ESCALA_V4_ADM  | 24/24| +0.02831 0.03110  +0.910 |  9/24  2  | 0.4167 0.9557 0.6899 | +0.8432  -0.007 100.0%
+  P2_EXCEDENCIA_G    | 23/24| -0.00693 0.05972  -0.116 | 11/23  1  | 0.2121 0.7532 0.3291 | +1.0610  +0.107  92.7%
+  P3_ESCALA_Y_G      | 22/24| -0.01349 0.06333  -0.213 | 10/22  1  | 0.1969 0.7278 0.3038 | +1.0381  +0.101 100.0%
+
+  Desglose por escala_real (j = 0, 1, 2):
+   [j_real=0]
+    P0_NIVEL3_BASE     : kmed= 109 kevl=  80 | pdet=0.4564 surv=0.9817 cob=0.7339 | S_ev=+0.0422 Ex=+0.9954 Eg= -0.008 esc==100.0%
+    P1a_ESCALA_ADM     : kmed= 109 kevl=  80 | pdet=0.4564 surv=0.9817 cob=0.7339 | S_ev=+0.0422 Ex=+0.9954 Eg= -0.008 esc==100.0%
+    P1b_ESCALA_V4_ADM  : kmed= 109 kevl=  80 | pdet=0.4564 surv=0.9817 cob=0.7339 | S_ev=+0.0422 Ex=+0.9954 Eg= -0.008 esc==100.0%
+    P2_EXCEDENCIA_G    : kmed= 109 kevl=  34 | pdet=0.2084 surv=0.7248 cob=0.3119 | S_ev=-0.0460 Ex=+1.2393 Eg= +0.108 esc==100.0%
+    P3_ESCALA_Y_G      : kmed= 109 kevl=  34 | pdet=0.2084 surv=0.7248 cob=0.3119 | S_ev=-0.0460 Ex=+1.2393 Eg= +0.108 esc==100.0%
+   [j_real=1]
+    P0_NIVEL3_BASE     : kmed=  23 kevl=  17 | pdet=0.4793 surv=0.9565 cob=0.7391 | S_ev=-0.1250 Ex=+0.9145 Eg= -0.029 esc== 74.1%
+    P1a_ESCALA_ADM     : kmed=  23 kevl=  15 | pdet=0.3645 surv=0.9130 cob=0.6522 | S_ev=-0.1042 Ex=+0.4426 Eg= +0.019 esc==100.0%
+    P1b_ESCALA_V4_ADM  : kmed=  23 kevl=  14 | pdet=0.3647 surv=0.9130 cob=0.6087 | S_ev=-0.0804 Ex=+0.5000 Eg= +0.021 esc==100.0%
+    P2_EXCEDENCIA_G    : kmed=  23 kevl=   8 | pdet=0.1922 surv=0.8261 cob=0.3478 | S_ev=+0.1406 Ex=+0.5770 Eg= +0.086 esc== 94.5%
+    P3_ESCALA_Y_G      : kmed=  23 kevl=  10 | pdet=0.1881 surv=0.8261 cob=0.4348 | S_ev=+0.0312 Ex=+0.5046 Eg= +0.089 esc==100.0%
+   [j_real=2]
+    P0_NIVEL3_BASE     : kmed=  26 kevl=  23 | pdet=0.5559 surv=1.0000 cob=0.8846 | S_ev=-0.0054 Ex=+0.8670 Eg= -0.008 esc== 56.9%
+    P1a_ESCALA_ADM     : kmed=  26 kevl=  15 | pdet=0.3071 surv=0.8846 cob=0.5769 | S_ev=-0.0625 Ex=+0.4227 Eg= -0.031 esc==100.0%
+    P1b_ESCALA_V4_ADM  : kmed=  26 kevl=  15 | pdet=0.3223 surv=0.8846 cob=0.5769 | S_ev=-0.0625 Ex=+0.4189 Eg= -0.031 esc==100.0%
+    P2_EXCEDENCIA_G    : kmed=  26 kevl=  10 | pdet=0.2517 surv=0.8077 cob=0.3846 | S_ev=+0.0000 Ex=+0.8342 Eg= +0.122 esc== 64.4%
+    P3_ESCALA_Y_G      : kmed=  26 kevl=   4 | pdet=0.1604 surv=0.6538 cob=0.1538 | S_ev=+0.1406 Ex=+0.6703 Eg= +0.082 esc==100.0%
+
+========================================================================================================
+BANCO 2: M2_ARFIMA_3ESC (ARFIMA d=+0.35 phi1=0.40 mu=50, 16 sem, n_cal=12000, n_op=8000, b_max=4) | semillas=16 cal_ok=16 min_escalas=3 t_max_ef=[3,33]
+  Eventos reales medibles por escala_real: j=0: 66 | j=1: 52 | j=2: 47 (tot=165)
+  Incondicional E[(x_{t0-1}-mu)*signo] = -0.03653 (n=5248 intentos P0)
+  Matriz escala (propia antes de filtrar) (filas = escala_real 0,1,2 | cols = escala_nulo 0,1,2):
+    j_real=0 : [  560,    73,    73]  (tot=  706, match= 79.32%)
+    j_real=1 : [  164,   185,    67]  (tot=  416, match= 44.47%)
+    j_real=2 : [  157,   142,   258]  (tot=  557, match= 46.32%)
+  Matriz escala (admitida P0)             (filas = escala_real 0,1,2 | cols = escala_nulo 0,1,2):
+    j_real=0 : [  513,     1,     0]  (tot=  514, match= 99.81%)
+    j_real=1 : [  163,   168,     1]  (tot=  332, match= 50.60%)
+    j_real=2 : [  157,   141,   220]  (tot=  518, match= 42.47%)
+
+  Politica           | eval |  S_medio    ee_S     z_S |  S<0 rech |  p_det survS3  cobS3 | Expre_s  Eg_dif  esc==
+  ------------------------------------------------------------------------------------------------------
+  P0_NIVEL3_BASE     | 15/16| +0.00292 0.04414  +0.066 |  6/15  0  | 0.2107 0.6909 0.3576 | +1.0662  -0.052  72.9%
+  P1a_ESCALA_ADM     | 15/16| +0.00888 0.05084  +0.175 |  6/15  0  | 0.1575 0.5939 0.2485 | +0.9608  +0.002 100.0%
+  P1b_ESCALA_V4_ADM  | 16/16| +0.02362 0.04996  +0.473 |  6/16  0  | 0.1602 0.6121 0.2606 | +1.0057  +0.003 100.0%
+  P2_EXCEDENCIA_G    | 11/16| +0.03693 0.09598  +0.385 |  3/11  1  | 0.0945 0.3939 0.0970 | +0.8384  +0.029  95.3%
+  P3_ESCALA_Y_G      | 10/16| +0.01875 0.10594  +0.177 |  3/10  1  | 0.0895 0.3818 0.0909 | +0.7641  +0.027 100.0%
+
+  Desglose por escala_real (j = 0, 1, 2):
+   [j_real=0]
+    P0_NIVEL3_BASE     : kmed=  66 kevl=  29 | pdet=0.2138 surv=0.7727 cob=0.4394 | S_ev=-0.0216 Ex=+1.2044 Eg= +0.003 esc== 99.7%
+    P1a_ESCALA_ADM     : kmed=  66 kevl=  29 | pdet=0.2129 surv=0.7727 cob=0.4394 | S_ev=-0.0216 Ex=+1.1979 Eg= +0.002 esc==100.0%
+    P1b_ESCALA_V4_ADM  : kmed=  66 kevl=  29 | pdet=0.2129 surv=0.7727 cob=0.4394 | S_ev=-0.0216 Ex=+1.1979 Eg= +0.002 esc==100.0%
+    P2_EXCEDENCIA_G    : kmed=  66 kevl=  11 | pdet=0.1114 surv=0.5152 cob=0.1667 | S_ev=+0.0398 Ex=+1.0608 Eg= +0.026 esc== 99.5%
+    P3_ESCALA_Y_G      : kmed=  66 kevl=  10 | pdet=0.1091 surv=0.5000 cob=0.1515 | S_ev=-0.0062 Ex=+1.0307 Eg= +0.025 esc==100.0%
+   [j_real=1]
+    P0_NIVEL3_BASE     : kmed=  52 kevl=  15 | pdet=0.1795 surv=0.5769 cob=0.2885 | S_ev=+0.0292 Ex=+1.0182 Eg= -0.078 esc== 51.5%
+    P1a_ESCALA_ADM     : kmed=  52 kevl=   7 | pdet=0.1053 surv=0.4038 cob=0.1346 | S_ev=+0.0357 Ex=+0.8329 Eg= +0.006 esc==100.0%
+    P1b_ESCALA_V4_ADM  : kmed=  52 kevl=   8 | pdet=0.1088 surv=0.4231 cob=0.1538 | S_ev=+0.0625 Ex=+0.9599 Eg= +0.007 esc==100.0%
+    P2_EXCEDENCIA_G    : kmed=  52 kevl=   3 | pdet=0.0778 surv=0.2885 cob=0.0577 | S_ev=+0.1042 Ex=+0.7109 Eg= +0.030 esc== 96.1%
+    P3_ESCALA_Y_G      : kmed=  52 kevl=   3 | pdet=0.0746 surv=0.2885 cob=0.0577 | S_ev=+0.1458 Ex=+0.6535 Eg= +0.024 esc==100.0%
+   [j_real=2]
+    P0_NIVEL3_BASE     : kmed=  47 kevl=  15 | pdet=0.2423 surv=0.7021 cob=0.3191 | S_ev=+0.0458 Ex=+0.8867 Eg= -0.119 esc== 48.6%
+    P1a_ESCALA_ADM     : kmed=  47 kevl=   5 | pdet=0.1269 surv=0.5532 cob=0.1064 | S_ev=+0.0625 Ex=+0.4816 Eg= -0.000 esc==100.0%
+    P1b_ESCALA_V4_ADM  : kmed=  47 kevl=   6 | pdet=0.1346 surv=0.5957 cob=0.1277 | S_ev=+0.0729 Ex=+0.6141 Eg= +0.003 esc==100.0%
+    P2_EXCEDENCIA_G    : kmed=  47 kevl=   2 | pdet=0.0823 surv=0.3404 cob=0.0426 | S_ev=+0.0625 Ex=+0.4446 Eg= +0.034 esc== 85.2%
+    P3_ESCALA_Y_G      : kmed=  47 kevl=   2 | pdet=0.0725 surv=0.3191 cob=0.0426 | S_ev=-0.1562 Ex=+0.2298 Eg= +0.036 esc==100.0%
+
+========================================================================================================
+BANCO 3: M3_DIAG_GRUESAS (AR(1) phi=0.80, n_cal=12000, n_op=120000, cal_ok=1, escalas=3, t_max_ef=5, N_mc=200)
+  Eventos reales medibles totales: j=0: 41 (sel=20) | j=1: 9 (sel=9) | j=2: 9 (sel=9)
+
+  --- j_real=0 (eventos=20, intents=4000, E_incond[x*s]=-0.0078, SD(y_anc_real)=0.2426) ---
+  P0 P(escala_nulo | j_real=0): j'=0: 1756 (100.0%) | j'=1:    0 (0.0%) | j'=2:    0 (0.0%)
+    P0_NIVEL3_BASE     : pdet=0.4390 (1756/4000) | S=-0.0735 (nu=20) | Ex=+1.0149 | Eg= -0.009 | SD_anc=0.4092 | esc==100.0%
+    P1a_ESCALA_ADM     : pdet=0.4390 (1756/4000) | S=-0.0735 (nu=20) | Ex=+1.0149 | Eg= -0.009 | SD_anc=0.4092 | esc==100.0%
+    P1b_ESCALA_V4_ADM  : pdet=0.4390 (1756/4000) | S=-0.0735 (nu=20) | Ex=+1.0149 | Eg= -0.009 | SD_anc=0.4092 | esc==100.0%
+    P2_EXCEDENCIA_G    : pdet=0.1993 ( 797/4000) | S=-0.0823 (nu=20) | Ex=+1.3220 | Eg= +0.102 | SD_anc=0.4137 | esc==100.0%
+    P3_ESCALA_Y_G      : pdet=0.1993 ( 797/4000) | S=-0.0823 (nu=20) | Ex=+1.3220 | Eg= +0.102 | SD_anc=0.4137 | esc==100.0%
+
+  --- j_real=1 (eventos=9, intents=1800, E_incond[x*s]=+0.0686, SD(y_anc_real)=0.3905) ---
+  P0 P(escala_nulo | j_real=1): j'=0:  279 (32.3%) | j'=1:  584 (67.5%) | j'=2:    2 (0.2%)
+    P0_NIVEL3_BASE     : pdet=0.4806 ( 865/1800) | S=-0.0399 (nu= 9) | Ex=+0.7767 | Eg= +0.032 | SD_anc=0.3628 | esc== 67.5%
+    P1a_ESCALA_ADM     : pdet=0.3244 ( 584/1800) | S=-0.0324 (nu= 9) | Ex=+0.5731 | Eg= +0.040 | SD_anc=0.3028 | esc==100.0%
+    P1b_ESCALA_V4_ADM  : pdet=0.3256 ( 586/1800) | S=-0.0334 (nu= 9) | Ex=+0.5818 | Eg= +0.040 | SD_anc=0.3024 | esc==100.0%
+    P2_EXCEDENCIA_G    : pdet=0.2922 ( 526/1800) | S=-0.0403 (nu= 9) | Ex=+0.9365 | Eg= +0.099 | SD_anc=0.3614 | esc== 71.5%
+    P3_ESCALA_Y_G      : pdet=0.2089 ( 376/1800) | S=-0.0303 (nu= 9) | Ex=+0.6621 | Eg= +0.105 | SD_anc=0.2954 | esc==100.0%
+
+  --- j_real=2 (eventos=9, intents=1800, E_incond[x*s]=-0.0302, SD(y_anc_real)=0.2047) ---
+  P0 P(escala_nulo | j_real=2): j'=0:  309 (29.3%) | j'=1:  311 (29.5%) | j'=2:  434 (41.2%)
+    P0_NIVEL3_BASE     : pdet=0.5856 (1054/1800) | S=+0.0530 (nu= 9) | Ex=+0.7268 | Eg= +0.009 | SD_anc=0.3258 | esc== 41.2%
+    P1a_ESCALA_ADM     : pdet=0.2411 ( 434/1800) | S=+0.0534 (nu= 9) | Ex=+0.0969 | Eg= +0.011 | SD_anc=0.2298 | esc==100.0%
+    P1b_ESCALA_V4_ADM  : pdet=0.2428 ( 437/1800) | S=+0.0530 (nu= 9) | Ex=+0.1169 | Eg= +0.010 | SD_anc=0.2293 | esc==100.0%
+    P2_EXCEDENCIA_G    : pdet=0.3928 ( 707/1800) | S=+0.0629 (nu= 9) | Ex=+0.9099 | Eg= +0.134 | SD_anc=0.3348 | esc== 35.9%
+    P3_ESCALA_Y_G      : pdet=0.1411 ( 254/1800) | S=+0.0661 (nu= 9) | Ex=+0.3169 | Eg= +0.133 | SD_anc=0.2216 | esc==100.0%
+
+========================================================================================================
+SONDA NIVEL 4 COMPLETADA (tiempo=19.52 s)
+========================================================================================================
