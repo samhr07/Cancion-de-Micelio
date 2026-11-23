@@ -1,0 +1,31 @@
+================================================================================
+NV3.3d (T3.7) -- BATERIA COMPLETA DE NO-REGRESION REGLA 6 Y 7 SELLOS SHA-256
+================================================================================
+[PASA] CN1.1      rc=0 warn=0 dt=5.58s | lineas=114/114 diffs=0
+[PASA] Nivel1     rc=0 warn=0 dt=28.20s | FALLAS DE CONDICIONES: 0
+[PASA] Fase1      rc=0 warn=0 dt=3.45s | FALLAS FASE 1: 0
+[PASA] Fase2      rc=0 warn=0 dt=4.64s | FALLAS FASE 2: 0
+[PASA] Fase3      rc=0 warn=0 dt=7.38s | FALLAS FASE 3: 0
+[PASA] Fase4_v2_1 rc=0 warn=0 dt=286.15s | 9/9 [PASA] | FALLAS FASE 4 ADENDA V2.1: 0 | 79/79 diffs=0 vs baseline lilyth-auditoria-cota
+[PARIDAD_BASELINE] Fase4_v2_2 rc=1 (preexistente) warn=0 dt=247.76s | CF4.P1 [PASA] | 8/9 [PASA] (CF4.P2b, P2c, P3, P4, P5, P6, P7) | FALLAS FASE 4 ADENDA V2.2: 1 unicamente por CF4.P2a preexistente (|dS|/ee=0.5685>0.25, err_Anc_RNG=3.55e-15; doc. Intervencion Comandante l.123) | 79/79 diffs=0 vs baseline lilyth-auditoria-cota
+[PASA] Nivel2     rc=0 warn=0 dt=5.66s | NV2.1-NV2.5 | FALLAS NIVEL 2: 0
+[PASA] T3.2       rc=0 warn=0 dt=5.01s | [C4 FLUJO] t_max_ef=6 cerradas=3 eval=1 iny=1 n_b=8 (m_min=8) intentos=8 u_pit=0.1875 | [C4 NIVEL] t_max_ef=64 cerradas=6 eval=1 iny=1 n_b=8 (m_min=8) intentos=15 u_pit=0.0000 | FALLAS T3.2: 0
+[PASA] T3.3       rc=0 warn=0 dt=6.15s | [C2] t_max_ef=6 | borde(sol=2 adm=0) | 20 pares separados(sol=0 prev=10 adm=31) | [C3 E2E] n3=1(eval=13 sol_b=0 prev_b=20 post_b=23) | n3=0(eval=12 sol_b=1 prev_b=1 post_b=26) | FALLAS T3.3: 0
+[PASA] T3.4       rc=0 warn=0 dt=6.15s | [C4 GanchoHijas] limpio(det=1 cort=0) | replica_contraria(det=0 cort=1) | [C5 E2E] n_eval=2 paradas_b=18 esc_coincide_b=35 sol_b=0 | FALLAS T3.4: 0
+
+--------------------------------------------------------------------------------
+VERIFICACION DE 7 SELLOS SHA-256 Y GIT MASTER
+--------------------------------------------------------------------------------
+[PASA] SHA256 EXPECTATIVAS_COTA_NIVEL1.md: 54aa457e9dc69ddec1a982f4904e2d71e354f4ae9ea2dada4aba77c7f52eafa3 (match=True)
+[PASA] SHA256 EXPECTATIVAS_FASE4.md: 49fe152d00248465489ca2c561647d61033197f2543e819f179bec25e4806ef1 (match=True)
+[PASA] SHA256 EXPECTATIVAS_FASE4_ADENDA_V2.md: 32ad43d217d9a792df5c80a23c1a968c1cdb5f9ed80f13814ce4479c5d332e1c (match=True)
+[PASA] SHA256 EXPECTATIVAS_FASE4_ADENDA_V2_1.md: f9b0aed3ca2f3117789e672d7770647bcba3f1c53c474a03fc3653d9245f682d (match=True)
+[PASA] SHA256 EXPECTATIVAS_FASE4_ADENDA_V2_2.md: 7c63f1dcbdfdd14e5ec11f65a1df08ef9cabf55b2b339b86ce39092bd1b21242 (match=True)
+[PASA] SHA256 EXPECTATIVAS_NIVEL2.md: 2387e846df90c7b87bb90d70cbd7d32b8d54ca85ea269386464a260fe6187d41 (match=True)
+[PASA] SHA256 EXPECTATIVAS_NIVEL3.md: 47fd5587cf6ded1682b1c4dd4887500f7a84678412e240f5a71dce18a90d9a94 (match=True)
+[PASA] git master=abf6ce41197888b9312999fc4686ca58c608edcd (match=True)
+[PASA] integridad.log UTF-8 LF: has_bom=False has_cr=False
+[PASA] noregresion.log UTF-8 LF: has_bom=False has_cr=False
+--------------------------------------------------------------------------------
+WARNINGS /W4: 0
+REGRESIONES DETECTADAS: 0

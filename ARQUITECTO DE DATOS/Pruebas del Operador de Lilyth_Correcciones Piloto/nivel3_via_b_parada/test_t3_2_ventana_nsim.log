@@ -1,0 +1,12 @@
+================================================================================
+ TEST T3.2: VENTANA DERIVADA t_max_ef, n_sim SIN LITERALES Y ARFIMA mu_serie
+================================================================================
+
+  [C1] FLUJO(n_sim=281, t_iny=[134,253]) NIVEL(w_pre=135, n_sim=282) w0(n_sim=23)
+  [C2a] t_max_ef=6 (T_MAX=128) | dist_borde=142(sol=2 adm=0) | dist_entre=158 n3=1(sol=0 adm=2) n3=0(sol=2 adm=0)
+  [C2b] passthrough ObservadorLilyth (sem=20263324): hallada=1 | n3=1(sol=0 adm=2) vs n3=0(sol=2 adm=0)
+  [C3] ARFIMA d=+0.35 mu_serie(49.746 -> 1049.746): det=(1,1) dif_anc=0.000e+00 dif_dy=3.553e-13 dif_tau=0.000e+00
+  [C4 FLUJO] t_max_ef=6 cerradas=3 eval=1 iny=1 n_b=8 (m_min=8) intentos=8 u_pit=0.1875
+  [C4 NIVEL] t_max_ef=64 cerradas=6 eval=1 iny=1 n_b=8 (m_min=8) intentos=15 u_pit=0.0000
+
+FALLAS T3.2: 0

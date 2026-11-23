@@ -26,6 +26,7 @@
 #include <random>
 #include <span>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 namespace ark::lilyth {
@@ -55,6 +56,36 @@ struct VentanaInyeccion {
 
 [[nodiscard]] constexpr bool ventanas_se_solapan(const VentanaInyeccion& a, const VentanaInyeccion& b) noexcept {
     return a.ini <= b.fin && b.ini <= a.fin;
+}
+
+// Dimensiones derivadas de una realizacion de via (b) bajo Enmienda Nivel 3 (sin literales 4/8/16):
+//   w_pre    = w_ancla + guarda + (integracion == NIVEL ? 1 : 0)
+//   w_sorteo = max(1, w_ancla)
+//   w_post   = l + t_max_ef
+//   n_sim    = w_pre + w_sorteo + w_post
+//   t_iny    ~ U[w_pre, w_pre + w_sorteo - 1]
+struct DimensionesSimulacionViaB {
+    std::size_t w_pre = 0;
+    std::size_t w_sorteo = 0;
+    std::size_t w_post = 0;
+    std::size_t n_sim = 0;
+    std::int64_t t_iny_min = 0;
+    std::int64_t t_iny_max = 0;
+};
+
+[[nodiscard]] constexpr DimensionesSimulacionViaB dimensiones_simulacion_via_b(
+    std::size_t w_ancla,
+    std::size_t guarda,
+    std::size_t l,
+    std::size_t t_max_ef,
+    ark::metrologia::Integracion integracion) noexcept {
+    const std::size_t w_pre = w_ancla + guarda + (integracion == ark::metrologia::Integracion::NIVEL ? 1u : 0u);
+    const std::size_t w_sorteo = w_ancla > 0 ? w_ancla : 1u;
+    const std::size_t w_post = l + t_max_ef;
+    const std::size_t n_sim = w_pre + w_sorteo + w_post;
+    const std::int64_t t_min = static_cast<std::int64_t>(w_pre);
+    const std::int64_t t_max = static_cast<std::int64_t>(w_pre + w_sorteo - 1u);
+    return DimensionesSimulacionViaB{w_pre, w_sorteo, w_post, n_sim, t_min, t_max};
 }
 
 // Evento nulo compacto capturado en una realizacion de (a) o (b), con la misma ficha que un evento real (seccion 3.1).
@@ -103,6 +134,10 @@ struct ReferenciaNuloEvento {
     std::size_t n_hist_prev_disp = 0;       // Nivel 2: historia contigua/puenteada disponible antes de t_cambio
     std::size_t n_huecos_puenteados_z1b = 0; // Nivel 2: micro-huecos puenteados en Z1b por Puente de Ito/causal
     bool hist_prev_truncada_en_corte = false; // Nivel 2: true si Z1b corto antes de completar n_hist_req
+    std::size_t con_ajena_previa_b = 0;         // Nivel 3: telemetria de aperturas previas en ancla (sin vetar)
+    std::size_t con_reapertura_posterior_b = 0; // Nivel 3: telemetria de reaperturas posteriores en ventana (sin vetar)
+    std::size_t paradas_tempranas_b = 0;        // Nivel 3: inyecciones con parada temprana V4 (t_ap < t0 + l - 1)
+    std::size_t escala_coincide_b = 0;          // Nivel 3/4: eventos admitidos en (b) con escala_origen == escala_real
     const char* motivo = "";
 };
 
@@ -217,6 +252,8 @@ struct ResultadoInyeccionesRealizacion {
     std::size_t sin_factor_purga = 0;      // Code: barras de la rama purgada con fase inmadura (quedan sin purgar)
     std::size_t con_ajena_previa = 0;      // Code: inyecciones con una apertura en la historia del ancla (contaminan: solape)
     std::size_t con_reapertura_posterior = 0;   // Code: inyecciones con aperturas despues del perfil (no contaminan la medida)
+    std::size_t paradas_tempranas = 0;          // Nivel 3: inyecciones donde V4 corto la cola e_iny tras apertura temprana
+    std::size_t escala_coincide = 0;            // Nivel 3/4: admitidas con escala_origen == escala_real (si escala_real >= 0)
     std::vector<EventoNuloLilyth<T_MAX>> eventos_admitidos{};
     std::vector<std::size_t> indice_inyeccion{};   // Code: de que inyeccion (indice en tiempos_iny) es cada evento admitido
 };
@@ -360,6 +397,42 @@ inline void llevar_a_crudo(ark::metrologia::Integracion integracion, bool en_pur
         }
     }
 }
+
+template <std::size_t B_MAX>
+struct PasoCrudoNulo {
+    ark::metrologia::Integracion integracion = ark::metrologia::Integracion::FLUJO;
+    bool en_purgado = false;
+    const ContextoPurgaNulo<B_MAX>* ctx = nullptr;
+    std::size_t inicio = 0;
+    std::size_t vuelta = 0;
+    EspejoPurgaNulo<B_MAX> esp{};
+    double nivel = 0.0;
+
+    PasoCrudoNulo(ark::metrologia::Integracion integ, bool purgado, const ContextoPurgaNulo<B_MAX>& c,
+                  double x0, std::size_t ini, std::size_t vlt) noexcept
+        : integracion(integ), en_purgado(purgado), ctx(&c), inicio(ini), vuelta(vlt),
+          esp(c.espejo_calibrado), nivel(std::isfinite(x0) ? x0 : 0.0) {}
+
+    double paso(std::size_t t, double est_t, std::size_t& fase_out, std::int64_t& dia_out, std::size_t& sin_factor) noexcept {
+        const std::size_t f = ctx->purga_activa ? ctx->fase(inicio + t) : 0;
+        const std::int64_t d = ctx->purga_activa ? ctx->dia(inicio + t, vuelta) : 0;
+        fase_out = f;
+        dia_out = d;
+        const bool hay_y = !(integracion == ark::metrologia::Integracion::NIVEL && t == 0);
+        double y = hay_y ? est_t : NaN;
+        if (hay_y && ctx->purga_activa && en_purgado) {
+            const double fa = esp.factor(f, d);
+            if (std::isfinite(fa) && fa > 0.0) y = est_t / fa;
+            else ++sin_factor;
+        }
+        if (ctx->purga_activa) { bool v = false; (void)esp.paso(y, f, d, v); }
+        if (integracion == ark::metrologia::Integracion::NIVEL) {
+            if (hay_y) nivel += y;
+            return nivel;
+        }
+        return y;
+    }
+};
 
 // Codifica tau_rest con los censurados en T_max como el mayor valor (T_max + 1, seccion 3.5).
 [[nodiscard]] inline double codificar_tau(double tau_rest, std::size_t t_max_ef) noexcept {
@@ -910,7 +983,14 @@ inline std::vector<EventoNuloLilyth<T_MAX>> correr_poblacion_via_a(
 //     igual que los eventos reales cortados (evaluar_nulos_representacion solo usa RESTITUIDA y CENSURADA_HORIZONTE en los dos lados).
 //   - D7: la serie entra en el espacio crudo con las fases de la calibracion (llevar_a_crudo); NIVEL parte de x0, no de 100.
 //   - `aplicar_guarda` = false solo para el control S2 (mide lo que pasaria sin la guarda con el MISMO instrumento).
-template <std::size_t T_MAX, std::size_t B_PURGA, class Obs, class Lil>
+struct SinHijasPaso {
+    void preparar(std::mt19937_64&, std::vector<double>&, std::size_t, std::size_t) const noexcept {}
+    template <class SalidaLil, class Lil>
+    void en_paso(std::size_t, const SalidaLil&, const Lil&, std::mt19937_64&,
+                 std::vector<double>&, std::vector<double>&, std::size_t, std::size_t) const noexcept {}
+};
+
+template <std::size_t T_MAX, std::size_t B_PURGA, class Obs, class Lil, class GanchoHijas = SinHijasPaso>
 inline ResultadoInyeccionesRealizacion<T_MAX> ejecutar_inyecciones_en_realizacion(
     const Obs& delta_original,
     const Lil& lil_plantilla,
@@ -931,7 +1011,10 @@ inline ResultadoInyeccionesRealizacion<T_MAX> ejecutar_inyecciones_en_realizacio
     std::span<const std::int64_t> tiempos_iny,
     std::size_t n_sim,
     std::mt19937_64& rng,
-    bool aplicar_guarda = true) {
+    bool aplicar_guarda = true,
+    bool usar_enmienda_nivel3 = false,
+    int escala_real = -1,
+    GanchoHijas gancho_hijas = SinHijasPaso{}) {
     ResultadoInyeccionesRealizacion<T_MAX> res{};
     res.candidatas = tiempos_iny.size();
     const std::size_t l = perfil_est.size();
@@ -939,99 +1022,18 @@ inline ResultadoInyeccionesRealizacion<T_MAX> ejecutar_inyecciones_en_realizacio
     if (!sin_memoria && (!m_lin.valido || e_iny.size() != l)) return res;
     if (sin_memoria && segs_calma.empty()) return res;
 
-    // 1. Ventanas de exclusion [t_iny - (W_ancla + guarda), t_iny + l + T_MAX] y solapes entre inyecciones.
+    // 1. Ventanas de exclusion y solapes entre inyecciones (Nivel 3 usa t_max_ef; modo base conserva T_MAX bit a bit).
+    const std::size_t t_max_ventana = usar_enmienda_nivel3 ? t_max_ef : T_MAX;
     std::vector<VentanaInyeccion> ventanas(tiempos_iny.size());
     std::vector<bool> solapada(tiempos_iny.size(), false);
     for (std::size_t i = 0; i < tiempos_iny.size(); ++i) {
-        ventanas[i] = construir_ventana_inyeccion(tiempos_iny[i], l, w_ancla, guarda, T_MAX);
+        ventanas[i] = construir_ventana_inyeccion(tiempos_iny[i], l, w_ancla, guarda, t_max_ventana);
     }
     for (std::size_t i = 0; i < tiempos_iny.size(); ++i) {
         for (std::size_t j = i + 1; j < tiempos_iny.size(); ++j) {
             if (ventanas_se_solapan(ventanas[i], ventanas[j])) { solapada[i] = true; solapada[j] = true; }
         }
     }
-
-    // 2. Parte estacionaria con la inyeccion.
-    std::vector<double> x_est(n_sim, 0.0);
-    if (sin_memoria) {
-        construir_estacionaria_nula(false, codigo_sustituto, segs_calma, m_lin, n_sim, rng, x_est);
-        for (std::size_t i = 0; i < tiempos_iny.size(); ++i) {
-            if (tiempos_iny[i] < 0) continue;
-            const std::size_t t0 = static_cast<std::size_t>(tiempos_iny[i]);
-            for (std::size_t k = 0; k < l && (t0 + k) < n_sim; ++k) x_est[t0 + k] = perfil_est[k];
-        }
-    } else {
-        const std::size_t burn = m_lin.burn_in;
-        const std::size_t total = burn + n_sim;
-        std::vector<double> eps(total, 0.0);
-        if (!m_lin.residuos.empty()) {
-            std::uniform_int_distribution<std::size_t> dist(0, m_lin.residuos.size() - 1);
-            for (std::size_t t = 0; t < total; ++t) eps[t] = m_lin.residuos[dist(rng)] - m_lin.media_residuos;
-        } else {
-            std::normal_distribution<double> dist(0.0, std::sqrt(m_lin.sigma2_innov));
-            for (std::size_t t = 0; t < total; ++t) eps[t] = dist(rng);
-        }
-        const bool inyectar_en_innovaciones = true;
-        if (inyectar_en_innovaciones) {
-            for (std::size_t i = 0; i < tiempos_iny.size(); ++i) {
-                if (tiempos_iny[i] < 0) continue;
-                const std::size_t t0 = static_cast<std::size_t>(tiempos_iny[i]);
-                for (std::size_t k = 0; k < l && (t0 + k) < n_sim; ++k) eps[burn + t0 + k] = e_iny[k];
-            }
-        }
-        std::vector<double> u(total, 0.0);
-        for (std::size_t t = 0; t < total; ++t) {
-            double acc = eps[t];
-            const std::size_t i_max = std::min(m_lin.p, t);
-            for (std::size_t i = 1; i <= i_max; ++i) acc += m_lin.phi[i - 1] * u[t - i];
-            u[t] = acc;
-        }
-        if (m_lin.modo_usado == ModoNuloLineal::ARFIMA_WHITTLE && m_lin.d != 0.0) {
-            std::vector<double> pi_inv(total, 0.0);
-            ark::metrologia::elw::coeficientes(-m_lin.d, total, pi_inv.data());
-            const bool usar_n2_mu = m_lin.enmienda_nivel2 && std::isfinite(m_lin.mu_serie);
-            for (std::size_t t = 0; t < n_sim; ++t) {
-                const std::size_t idx = burn + t;
-                double s = 0.0;
-                if (usar_n2_mu) {
-                    for (std::size_t k = 0; k <= idx; ++k) s += pi_inv[k] * (m_lin.mu + u[idx - k]);
-                    x_est[t] = m_lin.mu_serie + s;
-                } else {
-                    for (std::size_t k = 0; k <= idx; ++k) s += pi_inv[k] * u[idx - k];
-                    x_est[t] = m_lin.mu + s;
-                }
-            }
-        } else {
-            for (std::size_t t = 0; t < n_sim; ++t) x_est[t] = m_lin.mu + u[burn + t];
-        }
-        if (!inyectar_en_innovaciones) {
-            // Mutante M08 (P8): superpone el perfil sobre la serie fija sin propagarlo por el filtro lineal
-            for (std::size_t i = 0; i < tiempos_iny.size(); ++i) {
-                if (tiempos_iny[i] < 0) continue;
-                const std::size_t t0 = static_cast<std::size_t>(tiempos_iny[i]);
-                for (std::size_t k = 0; k < l && (t0 + k) < n_sim; ++k) x_est[t0 + k] = perfil_est[k];
-            }
-        }
-    }
-
-    // 3. Al espacio crudo con las fases de la calibracion (D7).
-    std::vector<double> x_sim;
-    std::vector<std::size_t> fases;
-    std::vector<std::int64_t> dias;
-    std::size_t sin_factor = 0;
-    std::size_t inicio = 0;
-    if (ctx.purga_activa && !ctx.fases.empty()) {
-        std::uniform_int_distribution<std::size_t> d_ini(0, ctx.fases.size() - 1);
-        inicio = d_ini(rng);
-    }
-    llevar_a_crudo<B_PURGA>(integracion, rama_purgada, ctx, x_est, x0_nivel, inicio, 0, x_sim, fases, dias, sin_factor);
-    res.sin_factor_purga = sin_factor;
-
-    // 4. Copia limpia del operador delta y de ObservadorLilyth sobre la realizacion; se registran todas las ranuras.
-    Obs d_local = delta_original;
-    d_local.reiniciar_flujo();
-    Lil lil_local = lil_plantilla;
-    lil_local.reiniciar_flujo_conservando_purga();
 
     struct Cierre {
         std::int64_t t_apertura = -1;
@@ -1043,30 +1045,258 @@ inline ResultadoInyeccionesRealizacion<T_MAX> ejecutar_inyecciones_en_realizacio
     };
     std::vector<Cierre> cierres;
     std::vector<std::int64_t> aperturas_todas;
-    for (std::size_t t = 0; t < n_sim; ++t) {
-        const auto s = d_local.paso(x_sim[t], NaN, true, fases[t], dias[t]);
-        const auto o = lil_local.paso(s, x_sim[t], true, NaN, fases[t], dias[t]);
-        if (o.abrio_ranura) aperturas_todas.push_back(o.t);
-        for (std::size_t c = 0; c < o.ranuras_cerradas; ++c) {
-            const auto& rc = lil_local.cerrada(c);
+    std::vector<double> x_sim;
+
+    constexpr bool con_gancho_hijas = !std::is_same_v<std::decay_t<GanchoHijas>, SinHijasPaso>;
+    const bool camino_en_linea = usar_enmienda_nivel3 || con_gancho_hijas;
+    const bool parada_temprana_v4 = usar_enmienda_nivel3;
+
+    if (!camino_en_linea) {
+        // 2. Parte estacionaria con la inyeccion.
+        std::vector<double> x_est(n_sim, 0.0);
+        if (sin_memoria) {
+            construir_estacionaria_nula(false, codigo_sustituto, segs_calma, m_lin, n_sim, rng, x_est);
+            for (std::size_t i = 0; i < tiempos_iny.size(); ++i) {
+                if (tiempos_iny[i] < 0) continue;
+                const std::size_t t0 = static_cast<std::size_t>(tiempos_iny[i]);
+                for (std::size_t k = 0; k < l && (t0 + k) < n_sim; ++k) x_est[t0 + k] = perfil_est[k];
+            }
+        } else {
+            const std::size_t burn = m_lin.burn_in;
+            const std::size_t total = burn + n_sim;
+            std::vector<double> eps(total, 0.0);
+            if (!m_lin.residuos.empty()) {
+                std::uniform_int_distribution<std::size_t> dist(0, m_lin.residuos.size() - 1);
+                for (std::size_t t = 0; t < total; ++t) eps[t] = m_lin.residuos[dist(rng)] - m_lin.media_residuos;
+            } else {
+                std::normal_distribution<double> dist(0.0, std::sqrt(m_lin.sigma2_innov));
+                for (std::size_t t = 0; t < total; ++t) eps[t] = dist(rng);
+            }
+            const bool inyectar_en_innovaciones = true;
+            if (inyectar_en_innovaciones) {
+                for (std::size_t i = 0; i < tiempos_iny.size(); ++i) {
+                    if (tiempos_iny[i] < 0) continue;
+                    const std::size_t t0 = static_cast<std::size_t>(tiempos_iny[i]);
+                    for (std::size_t k = 0; k < l && (t0 + k) < n_sim; ++k) eps[burn + t0 + k] = e_iny[k];
+                }
+            }
+            std::vector<double> u(total, 0.0);
+            for (std::size_t t = 0; t < total; ++t) {
+                double acc = eps[t];
+                const std::size_t i_max = std::min(m_lin.p, t);
+                for (std::size_t i = 1; i <= i_max; ++i) acc += m_lin.phi[i - 1] * u[t - i];
+                u[t] = acc;
+            }
+            if (m_lin.modo_usado == ModoNuloLineal::ARFIMA_WHITTLE && m_lin.d != 0.0) {
+                std::vector<double> pi_inv(total, 0.0);
+                ark::metrologia::elw::coeficientes(-m_lin.d, total, pi_inv.data());
+                const bool usar_mu_serie = (m_lin.enmienda_nivel2 || usar_enmienda_nivel3) && std::isfinite(m_lin.mu_serie);
+                for (std::size_t t = 0; t < n_sim; ++t) {
+                    const std::size_t idx = burn + t;
+                    double s = 0.0;
+                    if (usar_mu_serie) {
+                        for (std::size_t k = 0; k <= idx; ++k) s += pi_inv[k] * (m_lin.mu + u[idx - k]);
+                        x_est[t] = m_lin.mu_serie + s;
+                    } else {
+                        for (std::size_t k = 0; k <= idx; ++k) s += pi_inv[k] * u[idx - k];
+                        x_est[t] = m_lin.mu + s;
+                    }
+                }
+            } else {
+                for (std::size_t t = 0; t < n_sim; ++t) x_est[t] = m_lin.mu + u[burn + t];
+            }
+            if (!inyectar_en_innovaciones) {
+                // Mutante M08 (P8): superpone el perfil sobre la serie fija sin propagarlo por el filtro lineal
+                for (std::size_t i = 0; i < tiempos_iny.size(); ++i) {
+                    if (tiempos_iny[i] < 0) continue;
+                    const std::size_t t0 = static_cast<std::size_t>(tiempos_iny[i]);
+                    for (std::size_t k = 0; k < l && (t0 + k) < n_sim; ++k) x_est[t0 + k] = perfil_est[k];
+                }
+            }
+        }
+
+        // 3. Al espacio crudo con las fases de la calibracion (D7).
+        std::vector<std::size_t> fases;
+        std::vector<std::int64_t> dias;
+        std::size_t sin_factor = 0;
+        std::size_t inicio = 0;
+        if (ctx.purga_activa && !ctx.fases.empty()) {
+            std::uniform_int_distribution<std::size_t> d_ini(0, ctx.fases.size() - 1);
+            inicio = d_ini(rng);
+        }
+        llevar_a_crudo<B_PURGA>(integracion, rama_purgada, ctx, x_est, x0_nivel, inicio, 0, x_sim, fases, dias, sin_factor);
+        res.sin_factor_purga = sin_factor;
+
+        // 4. Copia limpia del operador delta y de ObservadorLilyth sobre la realizacion; se registran todas las ranuras.
+        Obs d_local = delta_original;
+        d_local.reiniciar_flujo();
+        Lil lil_local = lil_plantilla;
+        lil_local.reiniciar_flujo_conservando_purga();
+
+        for (std::size_t t = 0; t < n_sim; ++t) {
+            const auto s = d_local.paso(x_sim[t], NaN, true, fases[t], dias[t]);
+            const auto o = lil_local.paso(s, x_sim[t], true, NaN, fases[t], dias[t]);
+            if (o.abrio_ranura) aperturas_todas.push_back(o.t);
+            for (std::size_t c = 0; c < o.ranuras_cerradas; ++c) {
+                const auto& rc = lil_local.cerrada(c);
+                Cierre ci{};
+                ci.t_apertura = rc.t_apertura;
+                ci.t_cierre = o.t;
+                ci.signo = rc.signo;
+                const auto& rama = rama_purgada ? rc.purgada : rc.cruda;
+                ci.desenlace = static_cast<std::uint8_t>(rama.desenlace);
+                ci.extraible = extraer_evento_nulo<T_MAX>(rc, rama_purgada, ci.ev);
+                cierres.push_back(ci);
+            }
+        }
+        // Ranuras aun abiertas al final: siguen vivas hasta n_sim.
+        for (const auto& r : lil_local.ranuras()) {
+            if (!r.ocupada) continue;
             Cierre ci{};
-            ci.t_apertura = rc.t_apertura;
-            ci.t_cierre = o.t;
-            ci.signo = rc.signo;
-            const auto& rama = rama_purgada ? rc.purgada : rc.cruda;
-            ci.desenlace = static_cast<std::uint8_t>(rama.desenlace);
-            ci.extraible = extraer_evento_nulo<T_MAX>(rc, rama_purgada, ci.ev);
+            ci.t_apertura = r.t_apertura;
+            ci.t_cierre = static_cast<std::int64_t>(n_sim);
+            ci.signo = r.signo;
             cierres.push_back(ci);
         }
-    }
-    // Ranuras aun abiertas al final: siguen vivas hasta n_sim.
-    for (const auto& r : lil_local.ranuras()) {
-        if (!r.ocupada) continue;
-        Cierre ci{};
-        ci.t_apertura = r.t_apertura;
-        ci.t_cierre = static_cast<std::int64_t>(n_sim);
-        ci.signo = r.signo;
-        cierres.push_back(ci);
+    } else {
+        // Nivel 3: camino causal en linea para parada temprana V4_OPCION_B_PARADA_TEMP y GanchoHijas sin copia de futuro.
+        std::vector<double> x_est(n_sim, 0.0), x_est_nulo;
+        std::size_t burn = 0, total = n_sim;
+        std::vector<double> eps_nulo, eps, u, pi_inv;
+        bool es_arfima = false, usar_mu_serie = false;
+
+        if (sin_memoria) {
+            construir_estacionaria_nula(false, codigo_sustituto, segs_calma, m_lin, n_sim, rng, x_est_nulo);
+            x_est = x_est_nulo;
+            for (std::size_t i = 0; i < tiempos_iny.size(); ++i) {
+                if (tiempos_iny[i] < 0) continue;
+                const std::size_t t0 = static_cast<std::size_t>(tiempos_iny[i]);
+                for (std::size_t k = 0; k < l && (t0 + k) < n_sim; ++k) x_est[t0 + k] = perfil_est[k];
+            }
+        } else {
+            burn = m_lin.burn_in;
+            total = burn + n_sim;
+            eps_nulo.assign(total, 0.0);
+            if (!m_lin.residuos.empty()) {
+                std::uniform_int_distribution<std::size_t> dist(0, m_lin.residuos.size() - 1);
+                for (std::size_t t = 0; t < total; ++t) eps_nulo[t] = m_lin.residuos[dist(rng)] - m_lin.media_residuos;
+            } else {
+                std::normal_distribution<double> dist(0.0, std::sqrt(m_lin.sigma2_innov));
+                for (std::size_t t = 0; t < total; ++t) eps_nulo[t] = dist(rng);
+            }
+            gancho_hijas.preparar(rng, eps_nulo, burn, n_sim);
+            eps = eps_nulo;
+            for (std::size_t i = 0; i < tiempos_iny.size(); ++i) {
+                if (tiempos_iny[i] < 0) continue;
+                const std::size_t t0 = static_cast<std::size_t>(tiempos_iny[i]);
+                for (std::size_t k = 0; k < l && (t0 + k) < n_sim; ++k) eps[burn + t0 + k] = e_iny[k];
+            }
+            u.assign(total, 0.0);
+            for (std::size_t t = 0; t < burn; ++t) {
+                double acc = eps[t];
+                const std::size_t i_max = std::min(m_lin.p, t);
+                for (std::size_t i = 1; i <= i_max; ++i) acc += m_lin.phi[i - 1] * u[t - i];
+                u[t] = acc;
+            }
+            es_arfima = (m_lin.modo_usado == ModoNuloLineal::ARFIMA_WHITTLE && m_lin.d != 0.0);
+            usar_mu_serie = (m_lin.enmienda_nivel2 || usar_enmienda_nivel3) && std::isfinite(m_lin.mu_serie);
+            if (es_arfima) {
+                pi_inv.assign(total, 0.0);
+                ark::metrologia::elw::coeficientes(-m_lin.d, total, pi_inv.data());
+            }
+        }
+
+        std::size_t sin_factor = 0;
+        std::size_t inicio = 0;
+        if (ctx.purga_activa && !ctx.fases.empty()) {
+            std::uniform_int_distribution<std::size_t> d_ini(0, ctx.fases.size() - 1);
+            inicio = d_ini(rng);
+        }
+        PasoCrudoNulo<B_PURGA> pc(integracion, rama_purgada, ctx, x0_nivel, inicio, 0);
+        x_sim.assign(n_sim, 0.0);
+
+        Obs d_local = delta_original;
+        d_local.reiniciar_flujo();
+        Lil lil_local = lil_plantilla;
+        lil_local.reiniciar_flujo_conservando_purga();
+        std::vector<bool> parada_i(tiempos_iny.size(), false);
+
+        for (std::size_t t = 0; t < n_sim; ++t) {
+            if (!sin_memoria) {
+                const std::size_t idx = burn + t;
+                double acc = eps[idx];
+                const std::size_t i_max = std::min(m_lin.p, idx);
+                for (std::size_t i = 1; i <= i_max; ++i) acc += m_lin.phi[i - 1] * u[idx - i];
+                u[idx] = acc;
+                if (es_arfima) {
+                    double s_arf = 0.0;
+                    if (usar_mu_serie) {
+                        for (std::size_t k = 0; k <= idx; ++k) s_arf += pi_inv[k] * (m_lin.mu + u[idx - k]);
+                        x_est[t] = m_lin.mu_serie + s_arf;
+                    } else {
+                        for (std::size_t k = 0; k <= idx; ++k) s_arf += pi_inv[k] * u[idx - k];
+                        x_est[t] = m_lin.mu + s_arf;
+                    }
+                } else {
+                    x_est[t] = m_lin.mu + u[idx];
+                }
+            }
+
+            std::size_t fase_t = 0;
+            std::int64_t dia_t = 0;
+            const double xt = pc.paso(t, x_est[t], fase_t, dia_t, sin_factor);
+            x_sim[t] = xt;
+
+            const auto s = d_local.paso(xt, NaN, true, fase_t, dia_t);
+            const auto o = lil_local.paso(s, xt, true, NaN, fase_t, dia_t);
+            if (o.abrio_ranura) aperturas_todas.push_back(o.t);
+            for (std::size_t c = 0; c < o.ranuras_cerradas; ++c) {
+                const auto& rc = lil_local.cerrada(c);
+                Cierre ci{};
+                ci.t_apertura = rc.t_apertura;
+                ci.t_cierre = o.t;
+                ci.signo = rc.signo;
+                const auto& rama = rama_purgada ? rc.purgada : rc.cruda;
+                ci.desenlace = static_cast<std::uint8_t>(rama.desenlace);
+                ci.extraible = extraer_evento_nulo<T_MAX>(rc, rama_purgada, ci.ev);
+                cierres.push_back(ci);
+            }
+
+            if (parada_temprana_v4 && o.abrio_ranura && o.indice_ranura_abierta < lil_local.ranuras().size()) {
+                const auto& ran_ab = lil_local.ranuras()[o.indice_ranura_abierta];
+                if (ran_ab.ocupada && ran_ab.t_apertura == o.t && ran_ab.signo == signo_real) {
+                    for (std::size_t ii = 0; ii < tiempos_iny.size(); ++ii) {
+                        if (parada_i[ii] || tiempos_iny[ii] < 0) continue;
+                        const std::int64_t t0_i = tiempos_iny[ii];
+                        const std::int64_t t_fin_i = t0_i + static_cast<std::int64_t>(l) - 1;
+                        if (o.t >= t0_i && o.t < t_fin_i) {
+                            parada_i[ii] = true;
+                            ++res.paradas_tempranas;
+                            const std::size_t tr_ini = static_cast<std::size_t>(o.t) + 1u;
+                            const std::size_t tr_fin = std::min<std::size_t>(static_cast<std::size_t>(t0_i) + l, n_sim);
+                            for (std::size_t tr = tr_ini; tr < tr_fin; ++tr) {
+                                if (sin_memoria) x_est[tr] = x_est_nulo[tr];
+                                else eps[burn + tr] = eps_nulo[burn + tr];
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (!sin_memoria) {
+                gancho_hijas.en_paso(t, o, lil_local, rng, eps, eps_nulo, burn, n_sim);
+            }
+        }
+        res.sin_factor_purga = sin_factor;
+        // Ranuras aun abiertas al final: siguen vivas hasta n_sim.
+        for (const auto& r : lil_local.ranuras()) {
+            if (!r.ocupada) continue;
+            Cierre ci{};
+            ci.t_apertura = r.t_apertura;
+            ci.t_cierre = static_cast<std::int64_t>(n_sim);
+            ci.signo = r.signo;
+            cierres.push_back(ci);
+        }
     }
 
     // 5. Ranura propia de cada inyeccion: la primera abierta en [t_iny, t_iny + l] con el signo del evento real.
@@ -1094,7 +1324,8 @@ inline ResultadoInyeccionesRealizacion<T_MAX> ejecutar_inyecciones_en_realizacio
         }
         res.con_ajena_previa += hay_previa;
         res.con_reapertura_posterior += hay_posterior;
-        if (hay_previa || (hay_posterior && !solo_contamina_lo_previo)) solapada[i] = true;
+        const bool vetar_por_ajena = !usar_enmienda_nivel3;
+        if (vetar_por_ajena && (hay_previa || (hay_posterior && !solo_contamina_lo_previo))) solapada[i] = true;
         if (solapada[i] && aplicar_guarda) {
             ++res.solapes;
             continue;
@@ -1105,6 +1336,7 @@ inline ResultadoInyeccionesRealizacion<T_MAX> ejecutar_inyecciones_en_realizacio
             const DestinoInyeccion dest = destino_inyeccion(propia->extraible, propia->desenlace);
             if (dest == DestinoInyeccion::ADMITIDA && propia->extraible) {
                 ++res.detectadas;
+                if (escala_real >= 0 && propia->ev.escala_origen == escala_real) ++res.escala_coincide;
                 res.eventos_admitidos.push_back(propia->ev);
                 res.indice_inyeccion.push_back(i);
             } else if (dest == DestinoInyeccion::CORTADA) {
@@ -1156,7 +1388,7 @@ inline ResultadoInyeccionesRealizacion<T_MAX> ejecutar_inyecciones_en_realizacio
 }
 
 // Ejecuta el bucle secuencial de la via (b) para un evento real k (seccion 3.3 y control S3).
-template <std::size_t T_MAX, std::size_t B_PURGA, class Obs, class Lil>
+template <std::size_t T_MAX, std::size_t B_PURGA, class Obs, class Lil, class GanchoHijas = SinHijasPaso>
 inline void ejecutar_via_b_evento(
     const Obs& delta_original,
     const Lil& lil_plantilla,
@@ -1179,7 +1411,10 @@ inline void ejecutar_via_b_evento(
     ReferenciaNuloEvento& ref,
     std::vector<EventoNuloLilyth<T_MAX>>& nulos_b_out,
     std::size_t& cont_solapes_global,
-    std::span<const double> e_iny_precalc = {}) {
+    std::span<const double> e_iny_precalc = {},
+    bool usar_enmienda_nivel3 = false,
+    int escala_real = -1,
+    GanchoHijas gancho_hijas = SinHijasPaso{}) {
     nulos_b_out.clear();
     ref.nulo_por_inyeccion = true;
     const std::size_t l = perfil_est.size();
@@ -1210,13 +1445,23 @@ inline void ejecutar_via_b_evento(
         }
     }
 
-    const std::size_t margen_pre = w_ancla + guarda + 8;
-    const std::size_t margen_post = l + t_max_ef + 8;
-    const std::size_t n_sim = margen_pre + margen_post + 16;
+    std::size_t n_sim = 0;
+    std::int64_t t_iny_min = 0;
+    std::int64_t t_iny_max = 0;
+    if (usar_enmienda_nivel3) {
+        const auto dim = dimensiones_simulacion_via_b(w_ancla, guarda, l, t_max_ef, integracion);
+        n_sim = dim.n_sim;
+        t_iny_min = dim.t_iny_min;
+        t_iny_max = dim.t_iny_max;
+    } else {
+        const std::size_t margen_pre = w_ancla + guarda + 8;
+        const std::size_t margen_post = l + t_max_ef + 8;
+        n_sim = margen_pre + margen_post + 16;
+        t_iny_min = static_cast<std::int64_t>(w_ancla + guarda + 4);
+        t_iny_max = static_cast<std::int64_t>(n_sim - margen_post);
+    }
     std::mt19937_64 rng(splitmix64(semilla_evento ^ 0x6C62272E07BB0142ULL));
-    std::uniform_int_distribution<std::int64_t> dist_t(
-        static_cast<std::int64_t>(w_ancla + guarda + 4),
-        static_cast<std::int64_t>(n_sim - margen_post));
+    std::uniform_int_distribution<std::int64_t> dist_t(t_iny_min, t_iny_max);
 
     const bool fijar_p_det_en_m_min = true;
     const bool respetar_tope_parada = true;
@@ -1228,7 +1473,7 @@ inline void ejecutar_via_b_evento(
         const std::array<std::int64_t, 1> t_arr{t_iny};
         auto r_lote = ejecutar_inyecciones_en_realizacion<T_MAX, B_PURGA>(
             delta_original, lil_plantilla, integracion, rama_purgada, sin_memoria, codigo_sustituto, segs_calma, m_lin, ctx, x0_nivel,
-            perfil_est, e_iny, signo_real, w_ancla, guarda, t_max_ef, t_arr, n_sim, rng);
+            perfil_est, e_iny, signo_real, w_ancla, guarda, t_max_ef, t_arr, n_sim, rng, true, usar_enmienda_nivel3, escala_real, gancho_hijas);
 
         ++ref.intentos_b;
         ref.solapes_b += r_lote.solapes;
@@ -1236,6 +1481,10 @@ inline void ejecutar_via_b_evento(
         ref.no_medidas_b += r_lote.no_medidas;
         cont_solapes_global += r_lote.solapes;
         ref.no_detectados_b += r_lote.no_detectadas;
+        ref.con_ajena_previa_b += r_lote.con_ajena_previa;
+        ref.con_reapertura_posterior_b += r_lote.con_reapertura_posterior;
+        ref.paradas_tempranas_b += r_lote.paradas_tempranas;
+        ref.escala_coincide_b += r_lote.escala_coincide;
         for (const auto& ev : r_lote.eventos_admitidos) {
             nulos_b_out.push_back(ev);
             ++ref.n_nulos_b;

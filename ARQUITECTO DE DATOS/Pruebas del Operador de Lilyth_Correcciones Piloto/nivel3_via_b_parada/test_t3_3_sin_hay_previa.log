@@ -1,0 +1,9 @@
+================================================================================
+ TEST T3.3: RETIRADA DE hay_previa EN INYECCION SIMPLE Y SOLAPE SOLO ENTRE i!=j
+================================================================================
+
+  [C1 80 iny] n3=0(prev=22 sol=22 det=58) | n3=1(prev=22 sol=0 det=63)
+  [C2] t_max_ef=6 | borde(sol=2 adm=0) | 20 pares separados(sol=0 prev=10 adm=31)
+  [C3 E2E] n3=1(eval=13 sol_b=0 prev_b=20 post_b=23) | n3=0(eval=12 sol_b=1 prev_b=1 post_b=26)
+
+FALLAS T3.3: 0

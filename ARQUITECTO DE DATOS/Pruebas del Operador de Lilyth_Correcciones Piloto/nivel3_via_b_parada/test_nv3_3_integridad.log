@@ -1,0 +1,15 @@
+================================================================================
+NV3.3 (T3.7) -- Integridad Estructural (S2_N3, ARFIMA+V4, K10 l>256, K1, R6)
+  SEMILLA_CIEGA_NIVEL3 = 20261124ULL
+================================================================================
+
+[NV3.3a] t_max_ef=18 (<T_MAX=128) n_sim(fl=281,nv=282) | borde(sol=2 adm=0) | entre n3=1(sol=0 adm=2) n3=0(sol=2 adm=0) | pass(n3=1 sol=0 adm=2, n3=0 sol=2)
+  [PASA] NV3.3a     : S2_N3 exacto en borde e intermedio, n_sim derivado en FLUJO/NIVEL y passthrough
+[NV3.3b] ARFIMA+V4(par=1,1 dif_anc=2.27e-13 dif_dy=1.42e-14 max|dif_eta|=1.07e-14 max|dif_xsim|=2.27e-13) | NIVEL+Purga(dif_pc=0.0e+00 par=1 sf=0)
+  [PASA] NV3.3b     : ARFIMA mu_serie + V4 invariante <= 1e-10 y coherencia NIVEL+PURGADA+V4
+[NV3.3c] K1(diffs=0 news=0 ap=1 esp_inc=0) | K10(news=0 des=2 pf=320 ei=320 nulB=8/8 parB=8 solB=0 sizeof=11248)
+  [PASA] NV3.3c     : K1 bit a bit + K10 l=320 > 256 por via (b) con reservas_en_paso==0
+  [PASA] NV3.3d_cfg : usar_enmienda_nivel2/3 == false por omision y arena_cap == 0
+
+--------------------------------------------------------------------------------
+FALLAS NV3.3: 0

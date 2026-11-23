@@ -1,0 +1,18 @@
+====================================================================================================
+ NIVEL 3 SELLADO: CAZA DE MUTANTES (MN3.0 + M_N3_1, M_N3_2a, M_N3_2b | 0 warnings /W4)
+====================================================================================================
+MN3.0    testigo: sin cambio (Nivel 3 sellado)                            TESTIGO PASA (0 fallas)
+         -> NV3.1: PASA (z_S=-0.862926, parB=1799, solB=0)
+         -> NV3.2: PASA (z_S=+0.088024, S<0=11/24, parB=1086, solB=0)
+         -> NV3.3: PASA ([NV3.3a] t_max_ef=18 (<T_MAX=128) n_sim(fl=281,nv=282) | borde(sol=2 adm=0) | entre n3=1(sol=0 adm=2) n3=0(sol=2 adm=0) | pass(n3=1 sol=0 adm=2, n3=0 sol=2))
+M_N3_1   desactivar parada temprana V4 en nulo_lilyth.hpp                 CAZADO (NV3.1): NV3.1 (z_S=-4.186521, parB=0, solB=0; ok_s   : |z_S| <= 2.0; ok_rec : tasa_rech in [0.0, 0.10]; ok_pdt : p_det_global >= 0.40 && paradas_tempranas_b_total > 0; NV3.1 (subfallas=3))
+         -> NV3.1[REQ]: killed=True | z_S=-4.186521, parB=0, solB=0 | fallas=[ok_s   : |z_S| <= 2.0; ok_rec : tasa_rech in [0.0, 0.10]; ok_pdt : p_det_global >= 0.40 && paradas_tempranas_b_total > 0; NV3.1 (subfallas=3)]
+         -> NV3.2[REP]: PASA | z_S=-0.723982, S<0=10/24, parB=0, solB=0 | [PASA]
+M_N3_2a  reactivar veto hay_previa en nulo_lilyth.hpp                     CAZADO (NV3.1+NV3.2): NV3.1 (z_S=-0.808598, parB=1826, solB=347; ok_sim : solapes_b_total == 0 && con_ajena_previa_b_total > 0; NV3.1 (subfallas=1)) || NV3.2 (z_S=-0.306871, S<0=11/24, parB=1265, solB=1872; ok_act  : cortadas_b_total > 0 && reap_post_b > 0 && solapes_b == 0 && ajena_prev_b > 0; NV3.2 (subfallas=1))
+         -> NV3.1[REQ]: killed=True | z_S=-0.808598, parB=1826, solB=347 | fallas=[ok_sim : solapes_b_total == 0 && con_ajena_previa_b_total > 0; NV3.1 (subfallas=1)]
+         -> NV3.2[REQ]: killed=True | z_S=-0.306871, S<0=11/24, parB=1265, solB=1872 | fallas=[ok_act  : cortadas_b_total > 0 && reap_post_b > 0 && solapes_b == 0 && ajena_prev_b > 0; NV3.2 (subfallas=1)]
+M_N3_2b  usar T_MAX fijo en lugar de t_max_ef en construir_ventana_inyeccion CAZADO (NV3.3): NV3.3 ([NV3.3a] t_max_ef=18 (<T_MAX=128) n_sim(fl=281,nv=282) | borde(sol=2 adm=0) | entre n3=1(sol=2 adm=0) n3=0(sol=2 adm=0) | pass(n3=1 sol=0 adm=0, n3=0 sol=0); NV3.3a     : S2_N3 exacto en borde e intermedio, n_sim derivado en FLUJO/NIVEL y passthrough)
+         -> NV3.3[REQ]: killed=True | [NV3.3a] t_max_ef=18 (<T_MAX=128) n_sim(fl=281,nv=282) | borde(sol=2 adm=0) | entre n3=1(sol=2 adm=0) n3=0(sol=2 adm=0) | pass(n3=1 sol=0 adm=0, n3=0 sol=0) | fallas=[NV3.3a     : S2_N3 exacto en borde e intermedio, n_sim derivado en FLUJO/NIVEL y passthrough]
+----------------------------------------------------------------------------------------------------
+RESULTADO NIVEL 3 MUTANTES: 3 de 3 mutantes cazados | Testigo MN3.0: PASA (4 de 4 controles)
+====================================================================================================

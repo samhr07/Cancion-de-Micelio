@@ -986,7 +986,8 @@ public:
         std::size_t n_sim,
         std::uint64_t semilla,
         bool sin_memoria = false,
-        bool aplicar_guarda = true) {
+        bool aplicar_guarda = true,
+        int escala_real = -1) {
         const auto& fn = rama_purgada ? nulo_purgada_ : nulo_cruda_;
         std::vector<double> e_iny(sin_memoria ? 0 : perfil_est.size(), 0.0);
         if (!sin_memoria) innovaciones(fn.modelo_lineal, hist_prev_est.data(), hist_prev_est.size(),
@@ -995,7 +996,8 @@ public:
         auto res = detalle_nulo::ejecutar_inyecciones_en_realizacion<T_MAX, Rasgos::b_max>(
             delta_calibrado_, *this, integracion_, rama_purgada, sin_memoria, cfg_.nulo_sin_memoria, fn.segmentos_calma,
             fn.modelo_lineal, ctx_purga_, x0_nivel_, perfil_est, e_iny,
-            signo_real, w_ancla, guarda, cfg_.t_max_efectivo, tiempos_iny, n_sim, rng, aplicar_guarda);
+            signo_real, w_ancla, guarda, cfg_.t_max_efectivo, tiempos_iny, n_sim, rng, aplicar_guarda,
+            cfg_.usar_enmienda_nivel3, escala_real);
         cont_.solapes += res.solapes;
         return res;
     }
@@ -1091,7 +1093,7 @@ private:
             detalle_nulo::ejecutar_via_b_evento<T_MAX, Rasgos::b_max>(
                 delta_calibrado_, *this, integracion_, es_purgada, sin_memoria, cfg_.nulo_sin_memoria, fn.segmentos_calma,
                 fn.modelo_lineal, ctx_purga_, x0_nivel_, hp, pf, r.signo, r.w_ancla, r.guarda_ancla, umbral, cfg_.t_max_efectivo,
-                cfg_.semilla_nulo ^ (sal * (idx + 1)), ref, ev_b, cont_.solapes, einy_n2);
+                cfg_.semilla_nulo ^ (sal * (idx + 1)), ref, ev_b, cont_.solapes, einy_n2, cfg_.usar_enmienda_nivel3, r.escala_origen);
             // Code (2026-11-16): con DERIVADO, si la via (b) no llega al objetivo y la excedencia de la via (a) ya llegaba a m_min y no es
             // menor, se queda la via (a): DERIVADO solo agrega nulos, nunca deja sin evaluar un evento que M_MIN evalua.
             if (!cfg_.forzar_via_b && ev_b.size() < umbral && esp.size() >= fn.m_min && esp.size() >= ev_b.size()) {

@@ -1,0 +1,11 @@
+================================================================================
+ TEST T3.4: PARADA TEMPRANA V4_OPCION_B_PARADA_TEMP, PasoCrudoNulo Y GanchoHijas
+================================================================================
+
+  [C1 l=20] t_max_ef=16 | V4(paradas=37 adm=37 med=3.00 esc=37) | Base(paradas=0 adm=35 med=17.00)
+  [C2 ARFIMA+V4] paradas=(1,1) det=(1,1) dif_anc=2.274e-13 dif_dy=4.263e-14 max|dif_eta|=1.379e-14
+  [C3 NIVEL+Purga] max_dif_pc=0.000e+00 sf=(0,0) | paradas=1 det=1 sf_sim=0
+  [C4 GanchoHijas] limpio(det=1 cort=0) | replica_contraria(det=0 cort=1)
+  [C5 E2E] n_eval=2 paradas_b=18 esc_coincide_b=35 sol_b=0
+
+FALLAS T3.4: 0
